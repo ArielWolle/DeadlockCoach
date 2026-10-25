@@ -1,4 +1,5 @@
 //! Vision: resolution-independent HUD regions and icon template matching.
+pub mod ocr;
 use image::{imageops::{crop_imm, resize, FilterType}, GrayImage, RgbaImage};
 use std::path::Path;
 
