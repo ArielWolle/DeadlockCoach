@@ -29,3 +29,16 @@ function Get-Icons($rows, $dir, $prop) {
 Get-Icons $slim "$icons\items" "image"
 Get-Icons $hs "$icons\heroes" "portrait"
 "items: $($slim.Count)  heroes: $($hs.Count)"
+
+# --- Icon sets used by the Scanner (crates/vision/src/scan.rs) ---
+# shop/: item shop art (matches inventory slots), h_card/ + h_crit/: hero cards for the top bar
+# (normal and critical-health state).
+$allItems = Invoke-RestMethod "$api/items" | ? { $_.type -eq "upgrade" -and $_.shopable -and $_.shop_image }
+New-Item -ItemType Directory -Force "$icons\shop","$icons\h_card","$icons\h_crit" | Out-Null
+foreach ($i in $allItems) { $o = "$icons\shop\$($i.class_name).png"; if (-not (Test-Path $o)) { try { Invoke-WebRequest $i.shop_image -OutFile $o -UseBasicParsing } catch {} } }
+foreach ($h in ($heroes | ? { $_.player_selectable -and $_.images })) {
+  foreach ($p in @(@("h_card","icon_hero_card"),@("h_crit","hero_card_critical"))) {
+    $u = $h.images.($p[1]); $o = "$icons\$($p[0])\$($h.class_name).png"
+    if ($u -and -not (Test-Path $o)) { try { Invoke-WebRequest $u -OutFile $o -UseBasicParsing } catch {} }
+  }
+}

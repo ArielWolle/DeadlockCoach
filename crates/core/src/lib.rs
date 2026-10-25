@@ -44,6 +44,13 @@ pub struct GameSnapshot {
     pub hero: Option<String>,
     pub items: Vec<String>,
     pub enemy_items: Vec<String>,
+    /// Hero class names (e.g. "hero_inferno") from the top bar; empty until confident.
+    pub ally_heroes: Vec<String>,
+    pub enemy_heroes: Vec<String>,
+    /// Team net worth totals from the top bar.
+    pub ally_networth: Option<u32>,
+    pub enemy_networth: Option<u32>,
+    pub hp: Option<u32>,
 }
 
 #[cfg(test)]

@@ -1,1 +1,562 @@
-[]
+﻿[
+    {
+        "when_enemy_has":  "hero_inferno",
+        "suggest":  "Plated Armor",
+        "suggest_class":  "upgrade_deflecting_armor",
+        "label":  "Infernus",
+        "reason":  "Wins 2.2 points more against Infernus."
+    },
+    {
+        "when_enemy_has":  "hero_inferno",
+        "suggest":  "Disarming Hex",
+        "suggest_class":  "upgrade_greater_withering_whip",
+        "label":  "Infernus",
+        "reason":  "Wins 1.7 points more against Infernus."
+    },
+    {
+        "when_enemy_has":  "hero_inferno",
+        "suggest":  "Cursed Relic",
+        "suggest_class":  "upgrade_glitch",
+        "label":  "Infernus",
+        "reason":  "Wins 1.7 points more against Infernus."
+    },
+    {
+        "when_enemy_has":  "hero_hornet",
+        "suggest":  "Hollow Point",
+        "suggest_class":  "upgrade_hollow_point_rounds",
+        "label":  "Vindicta",
+        "reason":  "Wins 1.3 points more against Vindicta."
+    },
+    {
+        "when_enemy_has":  "hero_hornet",
+        "suggest":  "Express Shot",
+        "suggest_class":  "upgrade_express_shot",
+        "label":  "Vindicta",
+        "reason":  "Wins 1.1 points more against Vindicta."
+    },
+    {
+        "when_enemy_has":  "hero_hornet",
+        "suggest":  "Glass Cannon",
+        "suggest_class":  "upgrade_glass_cannon",
+        "label":  "Vindicta",
+        "reason":  "Wins 1.0 points more against Vindicta."
+    },
+    {
+        "when_enemy_has":  "hero_forge",
+        "suggest":  "Fury Trance",
+        "suggest_class":  "upgrade_fury_trance",
+        "label":  "McGinnis",
+        "reason":  "Wins 2.6 points more against McGinnis."
+    },
+    {
+        "when_enemy_has":  "hero_forge",
+        "suggest":  "Cultist Sacrifice",
+        "suggest_class":  "upgrade_non_player_bonus_sacrifice",
+        "label":  "McGinnis",
+        "reason":  "Wins 2.3 points more against McGinnis."
+    },
+    {
+        "when_enemy_has":  "hero_forge",
+        "suggest":  "Return Fire",
+        "suggest_class":  "upgrade_return_fire",
+        "label":  "McGinnis",
+        "reason":  "Wins 2.2 points more against McGinnis."
+    },
+    {
+        "when_enemy_has":  "hero_chrono",
+        "suggest":  "Mystic Shot",
+        "suggest_class":  "upgrade_crackshot",
+        "label":  "Paradox",
+        "reason":  "Wins 4.5 points more against Paradox."
+    },
+    {
+        "when_enemy_has":  "hero_chrono",
+        "suggest":  "Stalker",
+        "suggest_class":  "upgrade_weapon_backstabber",
+        "label":  "Paradox",
+        "reason":  "Wins 4.4 points more against Paradox."
+    },
+    {
+        "when_enemy_has":  "hero_chrono",
+        "suggest":  "Melee Charge",
+        "suggest_class":  "upgrade_melee_charge",
+        "label":  "Paradox",
+        "reason":  "Wins 4.3 points more against Paradox."
+    },
+    {
+        "when_enemy_has":  "hero_astro",
+        "suggest":  "Metal Skin",
+        "suggest_class":  "upgrade_metal_skin",
+        "label":  "Holliday",
+        "reason":  "Wins 3.1 points more against Holliday."
+    },
+    {
+        "when_enemy_has":  "hero_astro",
+        "suggest":  "Knockdown",
+        "suggest_class":  "upgrade_target_stun",
+        "label":  "Holliday",
+        "reason":  "Wins 3.1 points more against Holliday."
+    },
+    {
+        "when_enemy_has":  "hero_astro",
+        "suggest":  "Recharging Rush",
+        "suggest_class":  "upgrade_rechargingbullets",
+        "label":  "Holliday",
+        "reason":  "Wins 3.1 points more against Holliday."
+    },
+    {
+        "when_enemy_has":  "hero_bebop",
+        "suggest":  "Echo Shard",
+        "suggest_class":  "upgrade_ability_power_shard",
+        "label":  "Bebop",
+        "reason":  "Wins 3.4 points more against Bebop."
+    },
+    {
+        "when_enemy_has":  "hero_bebop",
+        "suggest":  "Slowing Hex",
+        "suggest_class":  "upgrade_containment",
+        "label":  "Bebop",
+        "reason":  "Wins 2.9 points more against Bebop."
+    },
+    {
+        "when_enemy_has":  "hero_bebop",
+        "suggest":  "Knockdown",
+        "suggest_class":  "upgrade_target_stun",
+        "label":  "Bebop",
+        "reason":  "Wins 2.8 points more against Bebop."
+    },
+    {
+        "when_enemy_has":  "hero_nano",
+        "suggest":  "Lifestrike",
+        "suggest_class":  "upgrade_boxing_glove",
+        "label":  "Calico",
+        "reason":  "Wins 2.1 points more against Calico."
+    },
+    {
+        "when_enemy_has":  "hero_nano",
+        "suggest":  "Slowing Bullets",
+        "suggest_class":  "upgrade_slowing_bullets",
+        "label":  "Calico",
+        "reason":  "Wins 2.1 points more against Calico."
+    },
+    {
+        "when_enemy_has":  "hero_nano",
+        "suggest":  "Weapon Shielding",
+        "suggest_class":  "upgrade_weapon_shielding",
+        "label":  "Calico",
+        "reason":  "Wins 1.9 points more against Calico."
+    },
+    {
+        "when_enemy_has":  "hero_orion",
+        "suggest":  "Active Reload",
+        "suggest_class":  "upgrade_active_reload",
+        "label":  "Grey Talon",
+        "reason":  "Wins 3.3 points more against Grey Talon."
+    },
+    {
+        "when_enemy_has":  "hero_orion",
+        "suggest":  "Slowing Hex",
+        "suggest_class":  "upgrade_containment",
+        "label":  "Grey Talon",
+        "reason":  "Wins 3.3 points more against Grey Talon."
+    },
+    {
+        "when_enemy_has":  "hero_orion",
+        "suggest":  "Knockdown",
+        "suggest_class":  "upgrade_target_stun",
+        "label":  "Grey Talon",
+        "reason":  "Wins 3.2 points more against Grey Talon."
+    },
+    {
+        "when_enemy_has":  "hero_shiv",
+        "suggest":  "Fury Trance",
+        "suggest_class":  "upgrade_fury_trance",
+        "label":  "Shiv",
+        "reason":  "Wins 6.0 points more against Shiv."
+    },
+    {
+        "when_enemy_has":  "hero_shiv",
+        "suggest":  "Active Reload",
+        "suggest_class":  "upgrade_active_reload",
+        "label":  "Shiv",
+        "reason":  "Wins 5.9 points more against Shiv."
+    },
+    {
+        "when_enemy_has":  "hero_shiv",
+        "suggest":  "Bullet Resist Shredder",
+        "suggest_class":  "upgrade_bullet_resist_shredder",
+        "label":  "Shiv",
+        "reason":  "Wins 5.9 points more against Shiv."
+    },
+    {
+        "when_enemy_has":  "hero_warden",
+        "suggest":  "Armor Piercer",
+        "suggest_class":  "upgrade_aprounds",
+        "label":  "Warden",
+        "reason":  "Wins 4.2 points more against Warden."
+    },
+    {
+        "when_enemy_has":  "hero_warden",
+        "suggest":  "Silence Wave",
+        "suggest_class":  "upgrade_targeted_silence",
+        "label":  "Warden",
+        "reason":  "Wins 4.1 points more against Warden."
+    },
+    {
+        "when_enemy_has":  "hero_warden",
+        "suggest":  "Return Fire",
+        "suggest_class":  "upgrade_return_fire",
+        "label":  "Warden",
+        "reason":  "Wins 4.0 points more against Warden."
+    },
+    {
+        "when_enemy_has":  "hero_yamato",
+        "suggest":  "Torment Pulse",
+        "suggest_class":  "upgrade_tech_damage_pulse",
+        "label":  "Yamato",
+        "reason":  "Wins 2.6 points more against Yamato."
+    },
+    {
+        "when_enemy_has":  "hero_yamato",
+        "suggest":  "Lifestrike",
+        "suggest_class":  "upgrade_boxing_glove",
+        "label":  "Yamato",
+        "reason":  "Wins 2.5 points more against Yamato."
+    },
+    {
+        "when_enemy_has":  "hero_yamato",
+        "suggest":  "Restorative Locket",
+        "suggest_class":  "upgrade_restorative_locket",
+        "label":  "Yamato",
+        "reason":  "Wins 2.5 points more against Yamato."
+    },
+    {
+        "when_enemy_has":  "hero_lash",
+        "suggest":  "Refresher",
+        "suggest_class":  "upgrade_ability_refresher",
+        "label":  "Lash",
+        "reason":  "Wins 1.1 points more against Lash."
+    },
+    {
+        "when_enemy_has":  "hero_viscous",
+        "suggest":  "Long Range",
+        "suggest_class":  "upgrade_long_range",
+        "label":  "Viscous",
+        "reason":  "Wins 4.5 points more against Viscous."
+    },
+    {
+        "when_enemy_has":  "hero_viscous",
+        "suggest":  "Sharpshooter",
+        "suggest_class":  "upgrade_sharpshooter",
+        "label":  "Viscous",
+        "reason":  "Wins 4.4 points more against Viscous."
+    },
+    {
+        "when_enemy_has":  "hero_viscous",
+        "suggest":  "Battle Vest",
+        "suggest_class":  "upgrade_regenerating_bullet_shield",
+        "label":  "Viscous",
+        "reason":  "Wins 4.3 points more against Viscous."
+    },
+    {
+        "when_enemy_has":  "hero_synth",
+        "suggest":  "Majestic Leap",
+        "suggest_class":  "upgrade_rocket_booster",
+        "label":  "Pocket",
+        "reason":  "Wins 6.7 points more against Pocket."
+    },
+    {
+        "when_enemy_has":  "hero_synth",
+        "suggest":  "Cultist Sacrifice",
+        "suggest_class":  "upgrade_non_player_bonus_sacrifice",
+        "label":  "Pocket",
+        "reason":  "Wins 5.9 points more against Pocket."
+    },
+    {
+        "when_enemy_has":  "hero_synth",
+        "suggest":  "Long Range",
+        "suggest_class":  "upgrade_long_range",
+        "label":  "Pocket",
+        "reason":  "Wins 5.4 points more against Pocket."
+    },
+    {
+        "when_enemy_has":  "hero_mirage",
+        "suggest":  "Disarming Hex",
+        "suggest_class":  "upgrade_greater_withering_whip",
+        "label":  "Mirage",
+        "reason":  "Wins 6.0 points more against Mirage."
+    },
+    {
+        "when_enemy_has":  "hero_mirage",
+        "suggest":  "Suppressor",
+        "suggest_class":  "upgrade_suppressor",
+        "label":  "Mirage",
+        "reason":  "Wins 5.8 points more against Mirage."
+    },
+    {
+        "when_enemy_has":  "hero_mirage",
+        "suggest":  "Slowing Hex",
+        "suggest_class":  "upgrade_containment",
+        "label":  "Mirage",
+        "reason":  "Wins 5.7 points more against Mirage."
+    },
+    {
+        "when_enemy_has":  "hero_viper",
+        "suggest":  "Intensifying Magazine",
+        "suggest_class":  "upgrade_intensifying_clip",
+        "label":  "Vyper",
+        "reason":  "Wins 3.8 points more against Vyper."
+    },
+    {
+        "when_enemy_has":  "hero_viper",
+        "suggest":  "Split Shot",
+        "suggest_class":  "upgrade_split_shot",
+        "label":  "Vyper",
+        "reason":  "Wins 3.3 points more against Vyper."
+    },
+    {
+        "when_enemy_has":  "hero_viper",
+        "suggest":  "Healing Nova",
+        "suggest_class":  "upgrade_health_nova",
+        "label":  "Vyper",
+        "reason":  "Wins 3.2 points more against Vyper."
+    },
+    {
+        "when_enemy_has":  "hero_magician",
+        "suggest":  "Long Range",
+        "suggest_class":  "upgrade_long_range",
+        "label":  "Sinclair",
+        "reason":  "Wins 4.6 points more against Sinclair."
+    },
+    {
+        "when_enemy_has":  "hero_magician",
+        "suggest":  "Fury Trance",
+        "suggest_class":  "upgrade_fury_trance",
+        "label":  "Sinclair",
+        "reason":  "Wins 4.5 points more against Sinclair."
+    },
+    {
+        "when_enemy_has":  "hero_magician",
+        "suggest":  "Veil Walker",
+        "suggest_class":  "upgrade_veil_walker",
+        "label":  "Sinclair",
+        "reason":  "Wins 4.5 points more against Sinclair."
+    },
+    {
+        "when_enemy_has":  "hero_vampirebat",
+        "suggest":  "Spirit Shredder",
+        "suggest_class":  "upgrade_tech_defense_shredders",
+        "label":  "Mina",
+        "reason":  "Wins 4.5 points more against Mina."
+    },
+    {
+        "when_enemy_has":  "hero_vampirebat",
+        "suggest":  "Quicksilver Reload",
+        "suggest_class":  "upgrade_quick_silver",
+        "label":  "Mina",
+        "reason":  "Wins 4.4 points more against Mina."
+    },
+    {
+        "when_enemy_has":  "hero_vampirebat",
+        "suggest":  "Stamina Mastery",
+        "suggest_class":  "upgrade_superior_stamina",
+        "label":  "Mina",
+        "reason":  "Wins 4.4 points more against Mina."
+    },
+    {
+        "when_enemy_has":  "hero_priest",
+        "suggest":  "Vampiric Burst",
+        "suggest_class":  "upgrade_surging_power",
+        "label":  "Venator",
+        "reason":  "Wins 4.3 points more against Venator."
+    },
+    {
+        "when_enemy_has":  "hero_priest",
+        "suggest":  "Ballistic Enchantment",
+        "suggest_class":  "upgrade_bulletshredimbue",
+        "label":  "Venator",
+        "reason":  "Wins 4.3 points more against Venator."
+    },
+    {
+        "when_enemy_has":  "hero_priest",
+        "suggest":  "Disarming Hex",
+        "suggest_class":  "upgrade_greater_withering_whip",
+        "label":  "Venator",
+        "reason":  "Wins 4.0 points more against Venator."
+    },
+    {
+        "when_enemy_has":  "hero_doorman",
+        "suggest":  "Vortex Web",
+        "suggest_class":  "upgrade_aoe_root",
+        "label":  "The Doorman",
+        "reason":  "Wins 4.6 points more against The Doorman."
+    },
+    {
+        "when_enemy_has":  "hero_doorman",
+        "suggest":  "Majestic Leap",
+        "suggest_class":  "upgrade_rocket_booster",
+        "label":  "The Doorman",
+        "reason":  "Wins 4.5 points more against The Doorman."
+    },
+    {
+        "when_enemy_has":  "hero_doorman",
+        "suggest":  "Veil Walker",
+        "suggest_class":  "upgrade_veil_walker",
+        "label":  "The Doorman",
+        "reason":  "Wins 4.3 points more against The Doorman."
+    },
+    {
+        "when_enemy_has":  "hero_punkgoat",
+        "suggest":  "Decay",
+        "suggest_class":  "upgrade_rupture",
+        "label":  "Billy",
+        "reason":  "Wins 2.9 points more against Billy."
+    },
+    {
+        "when_enemy_has":  "hero_punkgoat",
+        "suggest":  "Cultist Sacrifice",
+        "suggest_class":  "upgrade_non_player_bonus_sacrifice",
+        "label":  "Billy",
+        "reason":  "Wins 2.7 points more against Billy."
+    },
+    {
+        "when_enemy_has":  "hero_punkgoat",
+        "suggest":  "Intensifying Magazine",
+        "suggest_class":  "upgrade_intensifying_clip",
+        "label":  "Billy",
+        "reason":  "Wins 2.7 points more against Billy."
+    },
+    {
+        "when_enemy_has":  "hero_fencer",
+        "suggest":  "Decay",
+        "suggest_class":  "upgrade_rupture",
+        "label":  "Apollo",
+        "reason":  "Wins 1.5 points more against Apollo."
+    },
+    {
+        "when_enemy_has":  "hero_fencer",
+        "suggest":  "Magic Carpet",
+        "suggest_class":  "upgrade_magic_carpet",
+        "label":  "Apollo",
+        "reason":  "Wins 1.1 points more against Apollo."
+    },
+    {
+        "when_enemy_has":  "hero_fencer",
+        "suggest":  "Crushing Fists",
+        "suggest_class":  "upgrade_crushing_fists",
+        "label":  "Apollo",
+        "reason":  "Wins 1.0 points more against Apollo."
+    },
+    {
+        "when_enemy_has":  "hero_deadpack",
+        "suggest":  "Metal Skin",
+        "suggest_class":  "upgrade_metal_skin",
+        "label":  "Deadman Danny",
+        "reason":  "Wins 3.8 points more against Deadman Danny."
+    },
+    {
+        "when_enemy_has":  "hero_deadpack",
+        "suggest":  "Cheat Death",
+        "suggest_class":  "upgrade_cheat_death",
+        "label":  "Deadman Danny",
+        "reason":  "Wins 3.7 points more against Deadman Danny."
+    },
+    {
+        "when_enemy_has":  "hero_deadpack",
+        "suggest":  "Plated Armor",
+        "suggest_class":  "upgrade_deflecting_armor",
+        "label":  "Deadman Danny",
+        "reason":  "Wins 3.6 points more against Deadman Danny."
+    },
+    {
+        "when_enemy_has":  "hero_familiar",
+        "suggest":  "Healing Nova",
+        "suggest_class":  "upgrade_health_nova",
+        "label":  "Rem",
+        "reason":  "Wins 5.1 points more against Rem."
+    },
+    {
+        "when_enemy_has":  "hero_familiar",
+        "suggest":  "Guardian Ward",
+        "suggest_class":  "upgrade_guardian_ward",
+        "label":  "Rem",
+        "reason":  "Wins 4.5 points more against Rem."
+    },
+    {
+        "when_enemy_has":  "hero_familiar",
+        "suggest":  "Arcane Surge",
+        "suggest_class":  "upgrade_arcane_surge",
+        "label":  "Rem",
+        "reason":  "Wins 3.9 points more against Rem."
+    },
+    {
+        "when_enemy_has":  "hero_werewolf",
+        "suggest":  "Slowing Bullets",
+        "suggest_class":  "upgrade_slowing_bullets",
+        "label":  "Silver",
+        "reason":  "Wins 5.0 points more against Silver."
+    },
+    {
+        "when_enemy_has":  "hero_werewolf",
+        "suggest":  "Weighted Shots",
+        "suggest_class":  "upgrade_weighted_shots",
+        "label":  "Silver",
+        "reason":  "Wins 4.8 points more against Silver."
+    },
+    {
+        "when_enemy_has":  "hero_werewolf",
+        "suggest":  "Heroic Aura",
+        "suggest_class":  "upgrade_dps_aura",
+        "label":  "Silver",
+        "reason":  "Wins 4.7 points more against Silver."
+    },
+    {
+        "when_enemy_has":  "hero_unicorn",
+        "suggest":  "Infuser",
+        "suggest_class":  "upgrade_infuser",
+        "label":  "Celeste",
+        "reason":  "Wins 1.8 points more against Celeste."
+    },
+    {
+        "when_enemy_has":  "hero_unicorn",
+        "suggest":  "Torment Pulse",
+        "suggest_class":  "upgrade_tech_damage_pulse",
+        "label":  "Celeste",
+        "reason":  "Wins 1.8 points more against Celeste."
+    },
+    {
+        "when_enemy_has":  "hero_unicorn",
+        "suggest":  "Witchmail",
+        "suggest_class":  "upgrade_absorbing_armor",
+        "label":  "Celeste",
+        "reason":  "Wins 1.8 points more against Celeste."
+    },
+    {
+        "when_enemy_has":  "hero_chessmaster",
+        "suggest":  "Restorative Locket",
+        "suggest_class":  "upgrade_restorative_locket",
+        "label":  "Solomon",
+        "reason":  "Wins 5.2 points more against Solomon."
+    },
+    {
+        "when_enemy_has":  "hero_chessmaster",
+        "suggest":  "Alchemical Fire",
+        "suggest_class":  "upgrade_thermal_detonator",
+        "label":  "Solomon",
+        "reason":  "Wins 5.1 points more against Solomon."
+    },
+    {
+        "when_enemy_has":  "hero_chessmaster",
+        "suggest":  "Return Fire",
+        "suggest_class":  "upgrade_return_fire",
+        "label":  "Solomon",
+        "reason":  "Wins 5.0 points more against Solomon."
+    },
+    {
+        "when_enemy_has":  "hero_nurse",
+        "suggest":  "Scourge",
+        "suggest_class":  "upgrade_discord",
+        "label":  "Nurse Harrow",
+        "reason":  "Wins 0.8 points more against Nurse Harrow."
+    }
+]

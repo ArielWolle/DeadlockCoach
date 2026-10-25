@@ -10,3 +10,4 @@ rten = "0.26"
 
 
 coach-core = { path = "../core" }
+serde_json.workspace = true

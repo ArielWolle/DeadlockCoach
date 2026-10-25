@@ -3,23 +3,17 @@
 //!   coach-brain --live <agent_addr>                 live: frames -> OCR -> engine -> voice
 //! COACH_TOKEN for network use. Run from the repo root (models in data/models).
 use coach_core::GameSnapshot;
-use coach_vision::{ocr::Reader, parse, Region};
+use coach_vision::scan::Scanner;
 
 fn load_engine() -> coach_engine::Engine {
     let timings = std::env::var("COACH_TIMINGS").map(|p| std::fs::read_to_string(p).unwrap())
         .unwrap_or_else(|_| include_str!("../../../data/timings.json").to_string());
-    coach_engine::Engine::new(coach_engine::rules_from_timings(&timings).expect("timings"))
-}
-
-fn read_snapshot(rd: &Reader, tracker: &mut parse::Tracker, jpeg: &[u8]) -> GameSnapshot {
-    let Ok(img) = image::load_from_memory(jpeg) else { return GameSnapshot::default() };
-    let crop = |r: Region| {
-        let (w, h) = (img.width() as f32, img.height() as f32);
-        img.crop_imm((r.x * w) as u32, (r.y * h) as u32, (r.w * w) as u32, (r.h * h) as u32)
-    };
-    let clock = rd.read(&crop(Region { x: 0.47, y: 0.01, w: 0.06, h: 0.035 })).ok().and_then(|s| parse::parse_clock(&s));
-    let souls = rd.read(&crop(Region { x: 0.04, y: 0.80, w: 0.09, h: 0.06 })).ok().and_then(|s| parse::parse_souls(&s));
-    tracker.accept(clock, souls)
+    let mut rules = coach_engine::rules_from_timings(&timings).expect("timings");
+    let cfg = std::fs::read_to_string("data/rules.json").ok().and_then(|s| serde_json::from_str(s.trim_start_matches('\u{feff}')).ok()).unwrap_or_default();
+    rules.extend(coach_engine::default_rules(cfg));
+    let counters = std::fs::read_to_string("data/counters.json").unwrap_or_else(|_| "[]".into()).trim_start_matches('\u{feff}').to_string();
+    rules.push(coach_engine::counter_rule_from_json(&counters).expect("counters.json"));
+    coach_engine::Engine::new(rules)
 }
 
 #[tokio::main]
@@ -31,14 +25,19 @@ async fn main() {
 
     if let Some(i) = args.iter().position(|a| a == "--live") {
         let addr = args.get(i + 1).expect("--live <addr>").clone();
-        let rd = Reader::load(std::path::Path::new("data/models")).expect("models (run from repo root)");
+        let mut scanner = Scanner::load(std::path::Path::new(".")).expect("assets (run from repo root)");
+        std::fs::create_dir_all("sessions").ok();
+        let log_path = format!("sessions/{}.jsonl", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0));
         let piper = piper.expect("piper");
-        let mut tracker = parse::Tracker::default();
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
         loop {
             let res = coach_transport::connect(&addr, &token, &mut rx, |_meta, jpeg| {
-                let snap = read_snapshot(&rd, &mut tracker, &jpeg);
-                println!("snapshot: clock={:?} souls={:?}", snap.game_clock_secs, snap.souls);
+                let snap = scanner.scan(&jpeg);
+                println!("snapshot: clock={:?} souls={:?} items={} allies={} enemies={} nw={:?}/{:?}", snap.game_clock_secs, snap.souls, snap.items.len(), snap.ally_heroes.len(), snap.enemy_heroes.len(), snap.ally_networth, snap.enemy_networth);
+                if let Ok(line) = serde_json::to_string(&snap) {
+                    use std::io::Write;
+                    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&log_path) { let _ = writeln!(f, "{line}"); }
+                }
                 for cue in engine.step(&snap) {
                     println!("CUE: {}", cue.text);
                     if let Ok(wav) = piper.synth(&cue.text) { let _ = tx.send(wav); }
