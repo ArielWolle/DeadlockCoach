@@ -34,6 +34,7 @@ pub struct FrameMeta {
 /// Structured result of reading one screenshot. Fields are optional because
 /// any HUD element may fail to parse on a given frame.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct GameSnapshot {
     pub game_clock_secs: Option<u32>,
     pub souls: Option<u32>,

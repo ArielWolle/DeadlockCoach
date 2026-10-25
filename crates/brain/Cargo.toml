@@ -1,0 +1,12 @@
+[package]
+name = "coach-brain"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+coach-core = { path = "../core" }
+coach-engine = { path = "../engine" }
+coach-audio = { path = "../audio" }
+coach-transport = { path = "../transport" }
+serde_json.workspace = true
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }

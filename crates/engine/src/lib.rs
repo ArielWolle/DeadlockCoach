@@ -51,6 +51,12 @@ impl Rule for TimerRule {
     }
 }
 
+/// Parse data/timings.json into timer rules.
+pub fn rules_from_timings(json: &str) -> Result<Vec<Box<dyn Rule>>, String> {
+    let defs: Vec<TimerDef> = serde_json::from_str(json).map_err(|e| e.to_string())?;
+    Ok(defs.into_iter().map(|d| Box::new(TimerRule(d)) as Box<dyn Rule>).collect())
+}
+
 pub struct Engine {
     rules: Vec<Box<dyn Rule>>,
     last_said: HashMap<String, u32>,
@@ -96,6 +102,13 @@ mod tests {
         let mut e = eng();
         e.step(&at(575));
         assert_eq!(e.step(&at(880))[0].text, "Test boss in 20 seconds");
+    }
+
+    #[test]
+    fn shipped_timings_parse() {
+        let r = rules_from_timings(include_str!("../../../data/timings.json")).unwrap();
+        let mut e = Engine::new(r);
+        assert_eq!(e.step(&at(580))[0].text, "Soul Urn in 20 seconds");
     }
 
     #[test]
