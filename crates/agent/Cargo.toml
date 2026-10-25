@@ -1,0 +1,14 @@
+[package]
+name = "coach-agent"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "coach-agent"
+path = "src/main.rs"
+
+[dependencies]
+coach-core = { path = "../core" }
+coach-capture = { path = "../capture" }
+coach-transport = { path = "../transport" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }

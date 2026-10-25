@@ -22,8 +22,39 @@ fn get_role() -> Role {
     resolve_role()
 }
 
+/// Brain: connect to the Agent forever (reconnecting) and emit frames to the UI.
+/// Env: DEADLOCK_AGENT_ADDR (default 192.168.2.17:7878), COACH_TOKEN.
+fn spawn_brain_link(app: tauri::AppHandle) {
+    use base64::Engine;
+    use tauri::Emitter;
+    tauri::async_runtime::spawn(async move {
+        let addr = std::env::var("DEADLOCK_AGENT_ADDR").unwrap_or_else(|_| "192.168.2.17:7878".into());
+        let token = std::env::var("COACH_TOKEN").unwrap_or_default();
+        loop {
+            let a = app.clone();
+            let _ = a.emit("link", format!("connecting to {addr}"));
+            let res = coach_transport::connect(&addr, &token, |meta, jpeg| {
+                let b64 = base64::engine::general_purpose::STANDARD.encode(&jpeg);
+                let _ = a.emit("frame", serde_json::json!({
+                    "meta": meta,
+                    "src": format!("data:image/jpeg;base64,{b64}"),
+                }));
+            })
+            .await;
+            let _ = app.emit("link", format!("disconnected: {res:?}; retrying"));
+            tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+        }
+    });
+}
+
 fn main() {
     tauri::Builder::default()
+        .setup(|app| {
+            if resolve_role() == Role::Brain {
+                spawn_brain_link(app.handle().clone());
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![get_role])
         .run(tauri::generate_context!())
         .expect("error while running DeadlockCoach");

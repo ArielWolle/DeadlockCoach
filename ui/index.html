@@ -11,6 +11,18 @@
 <body>
   <h1>Deadlock Coach</h1>
   <p>Running as: <span class="pill" id="role">...</span></p>
+  <p id="link">link: idle</p>
+  <p id="meta"></p>
+  <img id="frame" style="max-width:100%" />
+  <script>
+    const ev = window.__TAURI__.event;
+    ev.listen("link", e => document.getElementById("link").textContent = "link: " + e.payload);
+    ev.listen("frame", e => {
+      document.getElementById("frame").src = e.payload.src;
+      const m = e.payload.meta;
+      document.getElementById("meta").textContent = `${m.width}x${m.height} @${m.dpi_scale}x, t=${m.timestamp_ms}`;
+    });
+  </script>
   <script>
     window.__TAURI__.core.invoke("get_role").then(r => {
       document.getElementById("role").textContent = r;
