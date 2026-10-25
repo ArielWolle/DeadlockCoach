@@ -1,0 +1,20 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Deadlock Coach</title>
+  <style>
+    body { font-family: system-ui, sans-serif; background: #14161a; color: #e6e6e6; margin: 2rem; }
+    .pill { display: inline-block; padding: .2rem .7rem; border-radius: 1rem; background: #2d6cdf; }
+  </style>
+</head>
+<body>
+  <h1>Deadlock Coach</h1>
+  <p>Running as: <span class="pill" id="role">...</span></p>
+  <script>
+    window.__TAURI__.core.invoke("get_role").then(r => {
+      document.getElementById("role").textContent = r;
+    });
+  </script>
+</body>
+</html>
