@@ -1,12 +1,13 @@
-//! Agent <-> Brain transport: WebSocket, token auth, framed screenshots.
+//! Agent <-> Brain transport: WebSocket, token auth.
 //!
-//! Wire format of a frame message (binary): u32 BE meta_len | meta JSON | JPEG bytes.
+//! Agent -> Brain binary: frame = u32 BE meta_len | meta JSON | JPEG bytes.
+//! Brain -> Agent binary: WAV audio to play.
 //! First message from the client must be text `AUTH <token>`; server answers `OK`.
 use coach_core::FrameMeta;
 use futures_util::{SinkExt, StreamExt};
 use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, mpsc};
 use tokio_tungstenite::tungstenite::Message;
 
 pub const DEFAULT_PORT: u16 = 7878;
@@ -26,12 +27,22 @@ pub fn decode_frame(data: &[u8]) -> Option<(FrameMeta, Vec<u8>)> {
     Some((meta, data.get(4 + len..)?.to_vec()))
 }
 
-/// Agent side: accept Brain connections, push every broadcast frame to each.
-pub async fn serve(addr: &str, token: String, frames: broadcast::Sender<Arc<Vec<u8>>>) -> std::io::Result<()> {
+/// Agent side: accept Brain connections, push every broadcast frame to each,
+/// and hand incoming audio (WAV bytes) to `on_audio`.
+pub async fn serve<A>(
+    addr: &str,
+    token: String,
+    frames: broadcast::Sender<Arc<Vec<u8>>>,
+    on_audio: A,
+) -> std::io::Result<()>
+where
+    A: Fn(Vec<u8>) + Send + Sync + 'static,
+{
+    let on_audio = Arc::new(on_audio);
     let listener = TcpListener::bind(addr).await?;
     loop {
         let (stream, peer) = listener.accept().await?;
-        let (token, mut rx) = (token.clone(), frames.subscribe());
+        let (token, mut rx, on_audio) = (token.clone(), frames.subscribe(), on_audio.clone());
         tokio::spawn(async move {
             let Ok(mut ws) = tokio_tungstenite::accept_async(stream).await else { return };
             let ok = matches!(ws.next().await, Some(Ok(Message::Text(t))) if t.trim() == format!("AUTH {token}"));
@@ -43,13 +54,18 @@ pub async fn serve(addr: &str, token: String, frames: broadcast::Sender<Arc<Vec<
             let _ = ws.send(Message::Text("OK".into())).await;
             eprintln!("brain connected: {peer}");
             loop {
-                match rx.recv().await {
-                    Ok(f) => {
-                        if ws.send(Message::Binary((*f).clone())).await.is_err() { break; }
-                    }
-                    // Brain is slow: drop old frames rather than queue.
-                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
-                    Err(_) => break,
+                tokio::select! {
+                    f = rx.recv() => match f {
+                        Ok(f) => { if ws.send(Message::Binary((*f).clone())).await.is_err() { break; } }
+                        // Brain is slow: drop old frames rather than queue.
+                        Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                        Err(_) => break,
+                    },
+                    m = ws.next() => match m {
+                        Some(Ok(Message::Binary(b))) => on_audio(b),
+                        Some(Ok(_)) => {}
+                        _ => break,
+                    },
                 }
             }
             eprintln!("brain disconnected: {peer}");
@@ -57,9 +73,15 @@ pub async fn serve(addr: &str, token: String, frames: broadcast::Sender<Arc<Vec<
     }
 }
 
-/// Brain side: connect, authenticate, and call `on_frame` for each frame.
-/// Returns when the connection ends; caller decides whether to retry.
-pub async fn connect<F: FnMut(FrameMeta, Vec<u8>)>(addr: &str, token: &str, mut on_frame: F) -> Result<(), String> {
+/// Brain side: connect, authenticate, call `on_frame` for each frame, and
+/// forward anything received on `audio_out` to the Agent. Returns when the
+/// connection ends; caller decides whether to retry.
+pub async fn connect<F: FnMut(FrameMeta, Vec<u8>)>(
+    addr: &str,
+    token: &str,
+    audio_out: &mut mpsc::UnboundedReceiver<Vec<u8>>,
+    mut on_frame: F,
+) -> Result<(), String> {
     let stream = TcpStream::connect(addr).await.map_err(|e| e.to_string())?;
     let (mut ws, _) = tokio_tungstenite::client_async(format!("ws://{addr}/"), stream)
         .await
@@ -69,11 +91,19 @@ pub async fn connect<F: FnMut(FrameMeta, Vec<u8>)>(addr: &str, token: &str, mut 
         Some(Ok(Message::Text(t))) if t == "OK" => {}
         _ => return Err("authentication rejected".into()),
     }
-    while let Some(msg) = ws.next().await {
-        if let Message::Binary(b) = msg.map_err(|e| e.to_string())? {
-            if let Some((meta, jpeg)) = decode_frame(&b) {
-                on_frame(meta, jpeg);
-            }
+    loop {
+        tokio::select! {
+            msg = ws.next() => match msg {
+                Some(m) => {
+                    if let Message::Binary(b) = m.map_err(|e| e.to_string())? {
+                        if let Some((meta, jpeg)) = decode_frame(&b) { on_frame(meta, jpeg); }
+                    }
+                }
+                None => break,
+            },
+            Some(wav) = audio_out.recv() => {
+                ws.send(Message::Binary(wav)).await.map_err(|e| e.to_string())?;
+            },
         }
     }
     Ok(())

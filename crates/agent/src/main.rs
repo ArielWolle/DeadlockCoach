@@ -23,6 +23,13 @@ async fn main() {
             }
         }
     });
+    // One worker thread plays queued audio sequentially (no overlapping cues).
+    let (atx, arx) = std::sync::mpsc::channel::<Vec<u8>>();
+    std::thread::spawn(move || {
+        for wav in arx {
+            if let Err(e) = coach_audio::play_wav(wav) { eprintln!("playback failed: {e}"); }
+        }
+    });
     eprintln!("agent listening on {bind}, interval {secs}s");
-    coach_transport::serve(&bind, token, tx).await.expect("server failed");
+    coach_transport::serve(&bind, token, tx, move |wav| { let _ = atx.send(wav); }).await.expect("server failed");
 }

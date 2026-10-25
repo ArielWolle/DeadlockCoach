@@ -24,7 +24,18 @@ fn get_role() -> Role {
 
 /// Brain: connect to the Agent forever (reconnecting) and emit frames to the UI.
 /// Env: DEADLOCK_AGENT_ADDR (default 192.168.2.17:7878), COACH_TOKEN.
-fn spawn_brain_link(app: tauri::AppHandle) {
+struct AudioTx(tokio::sync::mpsc::UnboundedSender<Vec<u8>>);
+
+/// Speak `text` on the gaming PC: synthesize with Piper here, send WAV to the Agent.
+#[tauri::command]
+async fn say(text: String, state: tauri::State<'_, AudioTx>) -> Result<(), String> {
+    let wav = tauri::async_runtime::spawn_blocking(move || coach_audio::Piper::from_env()?.synth(&text))
+        .await
+        .map_err(|e| e.to_string())??;
+    state.0.send(wav).map_err(|e| e.to_string())
+}
+
+fn spawn_brain_link(app: tauri::AppHandle, mut audio_rx: tokio::sync::mpsc::UnboundedReceiver<Vec<u8>>) {
     use base64::Engine;
     use tauri::Emitter;
     tauri::async_runtime::spawn(async move {
@@ -33,7 +44,7 @@ fn spawn_brain_link(app: tauri::AppHandle) {
         loop {
             let a = app.clone();
             let _ = a.emit("link", format!("connecting to {addr}"));
-            let res = coach_transport::connect(&addr, &token, |meta, jpeg| {
+            let res = coach_transport::connect(&addr, &token, &mut audio_rx, |meta, jpeg| {
                 let b64 = base64::engine::general_purpose::STANDARD.encode(&jpeg);
                 let _ = a.emit("frame", serde_json::json!({
                     "meta": meta,
@@ -50,12 +61,14 @@ fn spawn_brain_link(app: tauri::AppHandle) {
 fn main() {
     tauri::Builder::default()
         .setup(|app| {
+            let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+            tauri::Manager::manage(app, AudioTx(tx));
             if resolve_role() == Role::Brain {
-                spawn_brain_link(app.handle().clone());
+                spawn_brain_link(app.handle().clone(), rx);
             }
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![get_role])
+        .invoke_handler(tauri::generate_handler![get_role, say])
         .run(tauri::generate_context!())
         .expect("error while running DeadlockCoach");
 }

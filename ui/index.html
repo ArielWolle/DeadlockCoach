@@ -13,6 +13,7 @@
   <p>Running as: <span class="pill" id="role">...</span></p>
   <p id="link">link: idle</p>
   <p id="meta"></p>
+  <p><input id="txt" value="Mid boss spawns in 30 seconds" size="40"> <button onclick="window.__TAURI__.core.invoke('say',{text:document.getElementById('txt').value}).catch(e=>alert(e))">Speak on gaming PC</button></p>
   <img id="frame" style="max-width:100%" />
   <script>
     const ev = window.__TAURI__.event;

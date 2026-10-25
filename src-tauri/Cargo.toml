@@ -14,4 +14,6 @@ serde_json.workspace = true
 coach-core = { path = "../crates/core" }
 coach-transport = { path = "../crates/transport" }
 base64 = "0.22"
-tokio = { version = "1", features = ["time"] }
+tokio = { version = "1", features = ["time", "sync"] }
+coach-audio = { path = "../crates/audio" }
+

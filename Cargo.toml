@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/core", "crates/capture", "crates/transport", "crates/agent", "src-tauri"]
+members = ["crates/core", "crates/capture", "crates/transport", "crates/agent", "crates/audio", "src-tauri"]
 
 [workspace.package]
 version = "0.1.0"
@@ -10,3 +10,4 @@ authors = ["arielwolle <arielwolle@gmail.com>"]
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+

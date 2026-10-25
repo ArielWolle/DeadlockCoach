@@ -12,3 +12,4 @@ coach-core = { path = "../core" }
 coach-capture = { path = "../capture" }
 coach-transport = { path = "../transport" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
+coach-audio = { path = "../audio" }
