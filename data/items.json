@@ -1,0 +1,1732 @@
+﻿[
+    {
+        "id":  1548066885,
+        "class_name":  "upgrade_clip_size",
+        "name":  "Extended Magazine",
+        "tier":  1,
+        "slot":  "weapon",
+        "cost":  800,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_weapon/clip_size.png"
+    },
+    {
+        "id":  1009965641,
+        "class_name":  "upgrade_non_player_bonus",
+        "name":  "Monster Rounds",
+        "tier":  1,
+        "slot":  "weapon",
+        "cost":  800,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_weapon/reaper_rounds.png"
+    },
+    {
+        "id":  709540378,
+        "class_name":  "upgrade_non_player_bonus_sacrifice",
+        "name":  "Cultist Sacrifice",
+        "tier":  3,
+        "slot":  "weapon",
+        "cost":  3200,
+        "active":  true,
+        "image":  null
+    },
+    {
+        "id":  811521119,
+        "class_name":  "upgrade_chain_lightning",
+        "name":  "Tesla Bullets",
+        "tier":  3,
+        "slot":  "weapon",
+        "cost":  3200,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_weapon/electrified_bullets.png"
+    },
+    {
+        "id":  710436191,
+        "class_name":  "upgrade_capacitor",
+        "name":  "Capacitor",
+        "tier":  4,
+        "slot":  "weapon",
+        "cost":  6400,
+        "active":  true,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_weapon/electrified_bullets.png"
+    },
+    {
+        "id":  2678489038,
+        "class_name":  "upgrade_hollow_point_rounds",
+        "name":  "Hollow Point",
+        "tier":  3,
+        "slot":  "weapon",
+        "cost":  3200,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_weapon/hollow_point.png"
+    },
+    {
+        "id":  2064029594,
+        "class_name":  "upgrade_pristine_emblem",
+        "name":  "Opening Rounds",
+        "tier":  2,
+        "slot":  "weapon",
+        "cost":  1600,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_weapon/pristine_emblem.png"
+    },
+    {
+        "id":  3077079169,
+        "class_name":  "upgrade_high_velocity_mag",
+        "name":  "High-Velocity Rounds",
+        "tier":  1,
+        "slot":  "weapon",
+        "cost":  800,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_weapon/high_velocity_mag.png"
+    },
+    {
+        "id":  1437614329,
+        "class_name":  "upgrade_lifestrike_gauntlets",
+        "name":  "Melee Lifesteal",
+        "tier":  1,
+        "slot":  "vitality",
+        "cost":  800,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_weapon/lifestrike_gauntlets.png"
+    },
+    {
+        "id":  4204808176,
+        "class_name":  "upgrade_melee_rebuttal",
+        "name":  "Rebuttal",
+        "tier":  1,
+        "slot":  "vitality",
+        "cost":  800,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/icons/hud/modifiers/icon_parry.svg"
+    },
+    {
+        "id":  1414025773,
+        "class_name":  "upgrade_counterspell",
+        "name":  "Counterspell",
+        "tier":  3,
+        "slot":  "vitality",
+        "cost":  3200,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/icons/hud/modifiers/icon_parry.svg"
+    },
+    {
+        "id":  3791587546,
+        "class_name":  "upgrade_weighted_shots",
+        "name":  "Weighted Shots",
+        "tier":  3,
+        "slot":  "weapon",
+        "cost":  3200,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_weapon/close_range.png"
+    },
+    {
+        "id":  1342610602,
+        "class_name":  "upgrade_close_range",
+        "name":  "Close Quarters",
+        "tier":  1,
+        "slot":  "weapon",
+        "cost":  800,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_weapon/close_range.png"
+    },
+    {
+        "id":  3331811235,
+        "class_name":  "upgrade_long_range",
+        "name":  "Long Range",
+        "tier":  2,
+        "slot":  "weapon",
+        "cost":  1600,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_weapon/long_range.png"
+    },
+    {
+        "id":  393974127,
+        "class_name":  "upgrade_slowing_bullets",
+        "name":  "Slowing Bullets",
+        "tier":  2,
+        "slot":  "weapon",
+        "cost":  1600,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_weapon/slowing_bullets.png"
+    },
+    {
+        "id":  2037039379,
+        "class_name":  "upgrade_inhibitor",
+        "name":  "Inhibitor",
+        "tier":  4,
+        "slot":  "vitality",
+        "cost":  6400,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_weapon/inhibitor.png"
+    },
+    {
+        "id":  1144549437,
+        "class_name":  "upgrade_tech_defense_shredders",
+        "name":  "Spirit Shredder",
+        "tier":  2,
+        "slot":  "weapon",
+        "cost":  1600,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_weapon/tech_resist_shredder.png"
+    },
+    {
+        "id":  2108215830,
+        "class_name":  "upgrade_dps_aura",
+        "name":  "Heroic Aura",
+        "tier":  3,
+        "slot":  "weapon",
+        "cost":  3200,
+        "active":  true,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_weapon/bullet_damage_aura.png"
+    },
+    {
+        "id":  619484391,
+        "class_name":  "upgrade_targeted_silence",
+        "name":  "Silence Wave",
+        "tier":  3,
+        "slot":  "spirit",
+        "cost":  3200,
+        "active":  true,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_weapon/targeted_silence.png"
+    },
+    {
+        "id":  1113837674,
+        "class_name":  "upgrade_proc_silence",
+        "name":  "Silencer",
+        "tier":  4,
+        "slot":  "weapon",
+        "cost":  6400,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_weapon/emp_bullets.png"
+    },
+    {
+        "id":  1414319208,
+        "class_name":  "upgrade_berserker",
+        "name":  "Berserker",
+        "tier":  3,
+        "slot":  "weapon",
+        "cost":  3200,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_weapon/berserker.png"
+    },
+    {
+        "id":  339443430,
+        "class_name":  "upgrade_fervor",
+        "name":  "Frenzy",
+        "tier":  4,
+        "slot":  "weapon",
+        "cost":  6400,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_weapon/fervor.png"
+    },
+    {
+        "id":  1282141666,
+        "class_name":  "upgrade_siphon_bullets",
+        "name":  "Siphon Bullets",
+        "tier":  4,
+        "slot":  "vitality",
+        "cost":  6400,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_weapon/siphon_bullets.png"
+    },
+    {
+        "id":  2010028405,
+        "class_name":  "upgrade_headshot_booster",
+        "name":  "Headshot Booster",
+        "tier":  1,
+        "slot":  "weapon",
+        "cost":  800,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_weapon/headshot_booster.png"
+    },
+    {
+        "id":  1770441818,
+        "class_name":  "upgrade_headshot_booster2",
+        "name":  "Weakening Headshot",
+        "tier":  2,
+        "slot":  "weapon",
+        "cost":  1600,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_weapon/headshot_booster.png"
+    },
+    {
+        "id":  2152872419,
+        "class_name":  "upgrade_sharpshooter",
+        "name":  "Sharpshooter",
+        "tier":  3,
+        "slot":  "weapon",
+        "cost":  3200,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_weapon/longshot.png"
+    },
+    {
+        "id":  4053935515,
+        "class_name":  "upgrade_headhunter",
+        "name":  "Headhunter",
+        "tier":  3,
+        "slot":  "weapon",
+        "cost":  3200,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_weapon/headhunter.png"
+    },
+    {
+        "id":  4075861416,
+        "class_name":  "upgrade_spellslinger_headshots",
+        "name":  "Spirit Rend",
+        "tier":  3,
+        "slot":  "weapon",
+        "cost":  3200,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_weapon/spellslinger_headshots.png"
+    },
+    {
+        "id":  3884003354,
+        "class_name":  "upgrade_banshee_slugs",
+        "name":  "Crippling Headshot",
+        "tier":  4,
+        "slot":  "weapon",
+        "cost":  6400,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_weapon/banshee_slugs.png"
+    },
+    {
+        "id":  395867183,
+        "class_name":  "upgrade_crackshot",
+        "name":  "Mystic Shot",
+        "tier":  2,
+        "slot":  "weapon",
+        "cost":  1600,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_weapon/explosive_bullets.png"
+    },
+    {
+        "id":  1396247347,
+        "class_name":  "upgrade_critshot",
+        "name":  "Lucky Shot",
+        "tier":  4,
+        "slot":  "weapon",
+        "cost":  6400,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_weapon/crit_damage.png"
+    },
+    {
+        "id":  2095565695,
+        "class_name":  "upgrade_close_quarter_combat",
+        "name":  "Point Blank",
+        "tier":  3,
+        "slot":  "weapon",
+        "cost":  3200,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_weapon/point_blank.png"
+    },
+    {
+        "id":  3696726732,
+        "class_name":  "upgrade_toxic_bullets",
+        "name":  "Toxic Bullets",
+        "tier":  3,
+        "slot":  "weapon",
+        "cost":  3200,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_weapon/toxic_bullets.png"
+    },
+    {
+        "id":  2480592370,
+        "class_name":  "upgrade_ricochet",
+        "name":  "Ricochet",
+        "tier":  4,
+        "slot":  "weapon",
+        "cost":  6400,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_weapon/ricochet.png"
+    },
+    {
+        "id":  3633614685,
+        "class_name":  "upgrade_health",
+        "name":  "Extra Health",
+        "tier":  1,
+        "slot":  "vitality",
+        "cost":  800,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_armor/health.png"
+    },
+    {
+        "id":  499683006,
+        "class_name":  "upgrade_vampire",
+        "name":  "Bullet Lifesteal",
+        "tier":  2,
+        "slot":  "vitality",
+        "cost":  1600,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_armor/health_stealing_bullets.png"
+    },
+    {
+        "id":  1047818222,
+        "class_name":  "upgrade_debuff_reducer",
+        "name":  "Debuff Reducer",
+        "tier":  2,
+        "slot":  "vitality",
+        "cost":  1600,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_armor/debuff_reducer.png"
+    },
+    {
+        "id":  3731635960,
+        "class_name":  "upgrade_reduce_debuff_duration",
+        "name":  "Dispel Magic",
+        "tier":  3,
+        "slot":  "vitality",
+        "cost":  3200,
+        "active":  true,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_armor/debuff_remover.png"
+    },
+    {
+        "id":  2163598980,
+        "class_name":  "upgrade_tech_purge",
+        "name":  "Spirit Resilience",
+        "tier":  3,
+        "slot":  "vitality",
+        "cost":  3200,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_armor/tech_purge.png"
+    },
+    {
+        "id":  3140772621,
+        "class_name":  "upgrade_improved_bullet_armor",
+        "name":  "Bullet Resilience",
+        "tier":  3,
+        "slot":  "vitality",
+        "cost":  3200,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_armor/improved_bullet_armor.png"
+    },
+    {
+        "id":  1378931225,
+        "class_name":  "upgrade_metal_skin",
+        "name":  "Metal Skin",
+        "tier":  3,
+        "slot":  "vitality",
+        "cost":  3200,
+        "active":  true,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_armor/metal_skin.png"
+    },
+    {
+        "id":  2566692615,
+        "class_name":  "upgrade_healing_booster",
+        "name":  "Healing Booster",
+        "tier":  2,
+        "slot":  "vitality",
+        "cost":  1600,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_armor/healing_booster.png"
+    },
+    {
+        "id":  3585132399,
+        "class_name":  "upgrade_chonky",
+        "name":  "Fortitude",
+        "tier":  3,
+        "slot":  "vitality",
+        "cost":  3200,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_armor/revitalizer.png"
+    },
+    {
+        "id":  865846625,
+        "class_name":  "upgrade_damage_recycler",
+        "name":  "Leech",
+        "tier":  4,
+        "slot":  "vitality",
+        "cost":  6400,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_armor/leech.png"
+    },
+    {
+        "id":  3399065363,
+        "class_name":  "upgrade_sprint_booster",
+        "name":  "Sprint Boots",
+        "tier":  1,
+        "slot":  "vitality",
+        "cost":  800,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_armor/sprint_booster.png"
+    },
+    {
+        "id":  3074274290,
+        "class_name":  "upgrade_trophy_collector",
+        "name":  "Trophy Collector",
+        "tier":  2,
+        "slot":  "vitality",
+        "cost":  1600,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_armor/sprint_booster.png"
+    },
+    {
+        "id":  2447176615,
+        "class_name":  "upgrade_cardio_calibrator",
+        "name":  "Enduring Speed",
+        "tier":  2,
+        "slot":  "vitality",
+        "cost":  1600,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_armor/cardio_calibrator.png"
+    },
+    {
+        "id":  334300056,
+        "class_name":  "upgrade_superior_stamina",
+        "name":  "Stamina Mastery",
+        "tier":  3,
+        "slot":  "vitality",
+        "cost":  3200,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_armor/superior_stamina.png"
+    },
+    {
+        "id":  668299740,
+        "class_name":  "upgrade_rapid_rounds",
+        "name":  "Rapid Rounds",
+        "tier":  1,
+        "slot":  "weapon",
+        "cost":  800,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_weapon/rapid_rounds.png"
+    },
+    {
+        "id":  4139877411,
+        "class_name":  "upgrade_improved_stamina",
+        "name":  "Extra Stamina",
+        "tier":  1,
+        "slot":  "vitality",
+        "cost":  800,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_armor/improved_stamina.png"
+    },
+    {
+        "id":  2481177645,
+        "class_name":  "upgrade_bullet_armor_reduction_aura",
+        "name":  "Hunter\u0027s Aura",
+        "tier":  3,
+        "slot":  "weapon",
+        "cost":  3200,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_armor/bullet_armor_reduction_aura.png"
+    },
+    {
+        "id":  1672893796,
+        "class_name":  "upgrade_grit",
+        "name":  "Grit",
+        "tier":  1,
+        "slot":  "vitality",
+        "cost":  800,
+        "active":  true,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_armor/bullet_shield.png"
+    },
+    {
+        "id":  805079544,
+        "class_name":  "upgrade_weapon_shielding",
+        "name":  "Weapon Shielding",
+        "tier":  2,
+        "slot":  "vitality",
+        "cost":  1600,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_armor/bullet_shield.png"
+    },
+    {
+        "id":  112198670,
+        "class_name":  "upgrade_spirit_bubble",
+        "name":  "Spirit Shielding",
+        "tier":  2,
+        "slot":  "vitality",
+        "cost":  1600,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_armor/bullet_shield.png"
+    },
+    {
+        "id":  1235347618,
+        "class_name":  "upgrade_regenerating_bullet_shield",
+        "name":  "Battle Vest",
+        "tier":  2,
+        "slot":  "vitality",
+        "cost":  1600,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_armor/bullet_shield.png"
+    },
+    {
+        "id":  3970837787,
+        "class_name":  "upgrade_magic_shield",
+        "name":  "Enchanter\u0027s Emblem",
+        "tier":  2,
+        "slot":  "vitality",
+        "cost":  1600,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_tech/tech_shield_pulse.png"
+    },
+    {
+        "id":  968099481,
+        "class_name":  "upgrade_improved_spirit",
+        "name":  "Extra Spirit",
+        "tier":  1,
+        "slot":  "spirit",
+        "cost":  800,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_tech/tech_damage.png"
+    },
+    {
+        "id":  1439347412,
+        "class_name":  "upgrade_mystic_regeneration",
+        "name":  "Mystic Regeneration",
+        "tier":  1,
+        "slot":  "spirit",
+        "cost":  800,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_armor/endurance.png"
+    },
+    {
+        "id":  7409189,
+        "class_name":  "upgrade_soaring_spirit",
+        "name":  "Improved Spirit",
+        "tier":  2,
+        "slot":  "spirit",
+        "cost":  1600,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_tech/soaring_spirit.png"
+    },
+    {
+        "id":  2226497419,
+        "class_name":  "upgrade_tech_overflow",
+        "name":  "Spiritual Overflow",
+        "tier":  4,
+        "slot":  "weapon",
+        "cost":  6400,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_weapon/magic_overflow.png"
+    },
+    {
+        "id":  3361075077,
+        "class_name":  "upgrade_return_fire",
+        "name":  "Return Fire",
+        "tier":  2,
+        "slot":  "vitality",
+        "cost":  1600,
+        "active":  true,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_tech/return_fire.png"
+    },
+    {
+        "id":  1193964439,
+        "class_name":  "upgrade_tech_range",
+        "name":  "Greater Expansion",
+        "tier":  3,
+        "slot":  "spirit",
+        "cost":  3200,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_tech/spiritual_dominion.png"
+    },
+    {
+        "id":  754480263,
+        "class_name":  "upgrade_magic_reach",
+        "name":  "Mystic Expansion",
+        "tier":  1,
+        "slot":  "spirit",
+        "cost":  800,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_tech/tech_range.png"
+    },
+    {
+        "id":  3776945997,
+        "class_name":  "upgrade_extra_charge",
+        "name":  "Extra Charge",
+        "tier":  1,
+        "slot":  "spirit",
+        "cost":  800,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_tech/extra_charge.png"
+    },
+    {
+        "id":  876563814,
+        "class_name":  "upgrade_health_stealing_magic",
+        "name":  "Spirit Lifesteal",
+        "tier":  2,
+        "slot":  "vitality",
+        "cost":  1600,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_tech/health_stealing_tech.png"
+    },
+    {
+        "id":  2971868509,
+        "class_name":  "upgrade_bullet_resist_shredder",
+        "name":  "Bullet Resist Shredder",
+        "tier":  2,
+        "slot":  "spirit",
+        "cost":  1600,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_tech/bullet_resist_shredder.png"
+    },
+    {
+        "id":  3577481646,
+        "class_name":  "upgrade_mystic_reverb",
+        "name":  "Mystic Reverb",
+        "tier":  4,
+        "slot":  "spirit",
+        "cost":  6400,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_tech/magic_reverb.png"
+    },
+    {
+        "id":  1998374645,
+        "class_name":  "upgrade_magic_burst",
+        "name":  "Mystic Burst",
+        "tier":  1,
+        "slot":  "spirit",
+        "cost":  800,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_tech/magic_burst.png"
+    },
+    {
+        "id":  2121044373,
+        "class_name":  "upgrade_magic_shock",
+        "name":  "Tankbuster",
+        "tier":  3,
+        "slot":  "spirit",
+        "cost":  3200,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_tech/magic_shock.png"
+    },
+    {
+        "id":  2081037738,
+        "class_name":  "upgrade_magic_vulnerability",
+        "name":  "Mystic Vulnerability",
+        "tier":  2,
+        "slot":  "spirit",
+        "cost":  1600,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_tech/tech_vulnerability.png"
+    },
+    {
+        "id":  2603935618,
+        "class_name":  "upgrade_healbane",
+        "name":  "Healbane",
+        "tier":  2,
+        "slot":  "vitality",
+        "cost":  1600,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_tech/healbane.png"
+    },
+    {
+        "id":  1102081447,
+        "class_name":  "upgrade_magic_slow",
+        "name":  "Mystic Slow",
+        "tier":  2,
+        "slot":  "spirit",
+        "cost":  1600,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_tech/slowing_tech.png"
+    },
+    {
+        "id":  3005970438,
+        "class_name":  "upgrade_escalating_exposure",
+        "name":  "Escalating Exposure",
+        "tier":  4,
+        "slot":  "spirit",
+        "cost":  6400,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_tech/escalating_exposure.png"
+    },
+    {
+        "id":  787198704,
+        "class_name":  "upgrade_rapid_recharge",
+        "name":  "Rapid Recharge",
+        "tier":  3,
+        "slot":  "spirit",
+        "cost":  3200,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_tech/rapid_recharge.png"
+    },
+    {
+        "id":  424779525,
+        "class_name":  "upgrade_omnicharge_pendant",
+        "name":  "Omnicharge Signet",
+        "tier":  5,
+        "slot":  "spirit",
+        "cost":  9999,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_tech/rapid_recharge.png"
+    },
+    {
+        "id":  380806748,
+        "class_name":  "upgrade_magic_tempo",
+        "name":  "Compress Cooldown",
+        "tier":  2,
+        "slot":  "spirit",
+        "cost":  1600,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_utility/advanced_recharge.png"
+    },
+    {
+        "id":  3261353684,
+        "class_name":  "upgrade_cooldown_reduction",
+        "name":  "Superior Cooldown",
+        "tier":  3,
+        "slot":  "spirit",
+        "cost":  3200,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_tech/spiritual_flow.png"
+    },
+    {
+        "id":  915014646,
+        "class_name":  "upgrade_transcendent_cooldown",
+        "name":  "Transcendent Cooldown",
+        "tier":  4,
+        "slot":  "spirit",
+        "cost":  6400,
+        "active":  false,
+        "image":  null
+    },
+    {
+        "id":  1813726886,
+        "class_name":  "upgrade_containment",
+        "name":  "Slowing Hex",
+        "tier":  2,
+        "slot":  "spirit",
+        "cost":  1600,
+        "active":  true,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_tech/immobilize.png"
+    },
+    {
+        "id":  1219329868,
+        "class_name":  "upgrade_spirit_sap",
+        "name":  "Spirit Sap",
+        "tier":  2,
+        "slot":  "spirit",
+        "cost":  1600,
+        "active":  true,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_tech/focused_silence.png"
+    },
+    {
+        "id":  2142980412,
+        "class_name":  "upgrade_focus_lens",
+        "name":  "Focus Lens",
+        "tier":  4,
+        "slot":  "spirit",
+        "cost":  6400,
+        "active":  true,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_tech/focused_silence.png"
+    },
+    {
+        "id":  2922054143,
+        "class_name":  "upgrade_withering_whip",
+        "name":  "Rusted Barrel",
+        "tier":  1,
+        "slot":  "spirit",
+        "cost":  800,
+        "active":  true,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_tech/slowing_tech.png"
+    },
+    {
+        "id":  2061878743,
+        "class_name":  "upgrade_greater_withering_whip",
+        "name":  "Disarming Hex",
+        "tier":  3,
+        "slot":  "spirit",
+        "cost":  3200,
+        "active":  true,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_tech/disarm.png"
+    },
+    {
+        "id":  1804594021,
+        "class_name":  "upgrade_rescue_beam",
+        "name":  "Rescue Beam",
+        "tier":  3,
+        "slot":  "vitality",
+        "cost":  3200,
+        "active":  true,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_tech/medic_beam.png"
+    },
+    {
+        "id":  3144988365,
+        "class_name":  "upgrade_rupture",
+        "name":  "Decay",
+        "tier":  3,
+        "slot":  "spirit",
+        "cost":  3200,
+        "active":  true,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_tech/rupture.png"
+    },
+    {
+        "id":  2417568017,
+        "class_name":  "upgrade_discord",
+        "name":  "Scourge",
+        "tier":  4,
+        "slot":  "spirit",
+        "cost":  6400,
+        "active":  true,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_tech/rupture.png"
+    },
+    {
+        "id":  1254091416,
+        "class_name":  "upgrade_target_stun",
+        "name":  "Knockdown",
+        "tier":  3,
+        "slot":  "spirit",
+        "cost":  3200,
+        "active":  true,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_tech/knockdown.png"
+    },
+    {
+        "id":  1371725689,
+        "class_name":  "upgrade_phantom_strike",
+        "name":  "Phantom Strike",
+        "tier":  4,
+        "slot":  "vitality",
+        "cost":  6400,
+        "active":  true,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_armor/phantom_strike.png"
+    },
+    {
+        "id":  3270001687,
+        "class_name":  "upgrade_warp_stone",
+        "name":  "Warp Stone",
+        "tier":  3,
+        "slot":  "vitality",
+        "cost":  3200,
+        "active":  true,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_weapon/warp_stone.png"
+    },
+    {
+        "id":  1152158042,
+        "class_name":  "upgrade_aoe_root",
+        "name":  "Vortex Web",
+        "tier":  4,
+        "slot":  "spirit",
+        "cost":  6400,
+        "active":  true,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_tech/area_immobilize.png"
+    },
+    {
+        "id":  677738769,
+        "class_name":  "upgrade_ability_refresher",
+        "name":  "Refresher",
+        "tier":  4,
+        "slot":  "spirit",
+        "cost":  6400,
+        "active":  true,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_tech/refresher_module.png"
+    },
+    {
+        "id":  630839635,
+        "class_name":  "upgrade_ability_power_shard",
+        "name":  "Echo Shard",
+        "tier":  4,
+        "slot":  "spirit",
+        "cost":  6400,
+        "active":  true,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_tech/echo_shard.png"
+    },
+    {
+        "id":  395944548,
+        "class_name":  "upgrade_tech_damage_pulse",
+        "name":  "Torment Pulse",
+        "tier":  3,
+        "slot":  "spirit",
+        "cost":  3200,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_tech/torment_aura.png"
+    },
+    {
+        "id":  3361811174,
+        "class_name":  "upgrade_cheat_death",
+        "name":  "Cheat Death",
+        "tier":  4,
+        "slot":  "vitality",
+        "cost":  6400,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_tech/torment_aura.png"
+    },
+    {
+        "id":  1798666702,
+        "class_name":  "upgrade_cloaking_device_active",
+        "name":  "Shadow Weave",
+        "tier":  3,
+        "slot":  "weapon",
+        "cost":  3200,
+        "active":  true,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_utility/cloaking_device.png"
+    },
+    {
+        "id":  600033864,
+        "class_name":  "upgrade_rocket_booster",
+        "name":  "Majestic Leap",
+        "tier":  3,
+        "slot":  "vitality",
+        "cost":  3200,
+        "active":  true,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/abilities/lash/lash_death_slam.png"
+    },
+    {
+        "id":  2956256701,
+        "class_name":  "upgrade_health_nova",
+        "name":  "Healing Nova",
+        "tier":  3,
+        "slot":  "vitality",
+        "cost":  3200,
+        "active":  true,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_utility/health_nova.png"
+    },
+    {
+        "id":  2059712766,
+        "class_name":  "upgrade_restorative_locket",
+        "name":  "Restorative Locket",
+        "tier":  2,
+        "slot":  "vitality",
+        "cost":  1600,
+        "active":  true,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_armor/restorative_locket.png"
+    },
+    {
+        "id":  1710079648,
+        "class_name":  "upgrade_health_stimpak",
+        "name":  "Healing Rite",
+        "tier":  1,
+        "slot":  "vitality",
+        "cost":  800,
+        "active":  true,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_armor/stimpak.png"
+    },
+    {
+        "id":  4121584236,
+        "class_name":  "upgrade_shrink_ray",
+        "name":  "Shrink Ray",
+        "tier":  5,
+        "slot":  "spirit",
+        "cost":  9999,
+        "active":  true,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_armor/stimpak.png"
+    },
+    {
+        "id":  1797283378,
+        "class_name":  "upgrade_infuser",
+        "name":  "Infuser",
+        "tier":  4,
+        "slot":  "vitality",
+        "cost":  6400,
+        "active":  true,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_tech/infuser.png"
+    },
+    {
+        "id":  857669956,
+        "class_name":  "upgrade_guardian_ward",
+        "name":  "Guardian Ward",
+        "tier":  2,
+        "slot":  "vitality",
+        "cost":  1600,
+        "active":  true,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_armor/savior.png"
+    },
+    {
+        "id":  1662311306,
+        "class_name":  "upgrade_divine_barrier",
+        "name":  "Divine Barrier",
+        "tier":  4,
+        "slot":  "vitality",
+        "cost":  6400,
+        "active":  true,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_armor/savior.png"
+    },
+    {
+        "id":  1932939246,
+        "class_name":  "upgrade_thermal_detonator",
+        "name":  "Alchemical Fire",
+        "tier":  3,
+        "slot":  "weapon",
+        "cost":  3200,
+        "active":  true,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_weapon/thermal_detonator.png"
+    },
+    {
+        "id":  989206714,
+        "class_name":  "upgrade_blood_tribute",
+        "name":  "Blood Tribute",
+        "tier":  3,
+        "slot":  "weapon",
+        "cost":  3200,
+        "active":  true,
+        "image":  null
+    },
+    {
+        "id":  3403085434,
+        "class_name":  "upgrade_fleetfoot_boots",
+        "name":  "Fleetfoot",
+        "tier":  2,
+        "slot":  "weapon",
+        "cost":  1600,
+        "active":  true,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_weapon/fleetfoot_boots.png"
+    },
+    {
+        "id":  3977876567,
+        "class_name":  "upgrade_kinetic_sash",
+        "name":  "Kinetic Dash",
+        "tier":  2,
+        "slot":  "weapon",
+        "cost":  1600,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_weapon/kinetic_sash.png"
+    },
+    {
+        "id":  1150006784,
+        "class_name":  "upgrade_arcane_surge",
+        "name":  "Arcane Surge",
+        "tier":  2,
+        "slot":  "spirit",
+        "cost":  1600,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_tech/arcane_surge.png"
+    },
+    {
+        "id":  3357231760,
+        "class_name":  "upgrade_unstoppable",
+        "name":  "Unstoppable",
+        "tier":  4,
+        "slot":  "vitality",
+        "cost":  6400,
+        "active":  true,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_armor/unstoppable.png"
+    },
+    {
+        "id":  2407781327,
+        "class_name":  "upgrade_colossus",
+        "name":  "Colossus",
+        "tier":  4,
+        "slot":  "vitality",
+        "cost":  6400,
+        "active":  true,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_armor/colossus.png"
+    },
+    {
+        "id":  1976391348,
+        "class_name":  "upgrade_cold_front",
+        "name":  "Cold Front",
+        "tier":  2,
+        "slot":  "spirit",
+        "cost":  1600,
+        "active":  true,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_utility/ice_blast.png"
+    },
+    {
+        "id":  3812615317,
+        "class_name":  "upgrade_arctic_blast",
+        "name":  "Arctic Blast",
+        "tier":  4,
+        "slot":  "spirit",
+        "cost":  6400,
+        "active":  true,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_utility/ice_blast.png"
+    },
+    {
+        "id":  2533252781,
+        "class_name":  "upgrade_self_bubble",
+        "name":  "Ethereal Shift",
+        "tier":  4,
+        "slot":  "spirit",
+        "cost":  6400,
+        "active":  true,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_tech/shifting_shroud.png"
+    },
+    {
+        "id":  2617435668,
+        "class_name":  "upgrade_glitch",
+        "name":  "Cursed Relic",
+        "tier":  4,
+        "slot":  "spirit",
+        "cost":  6400,
+        "active":  true,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_tech/glitch.png"
+    },
+    {
+        "id":  2951612397,
+        "class_name":  "upgrade_arcane_extension",
+        "name":  "Duration Extender",
+        "tier":  2,
+        "slot":  "spirit",
+        "cost":  1600,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_tech/duration_extender.png"
+    },
+    {
+        "id":  2717651715,
+        "class_name":  "upgrade_imbued_duration_extender",
+        "name":  "Superior Duration",
+        "tier":  3,
+        "slot":  "spirit",
+        "cost":  3200,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_tech/arcane_persistance.png"
+    },
+    {
+        "id":  365620721,
+        "class_name":  "upgrade_glass_cannon",
+        "name":  "Glass Cannon",
+        "tier":  4,
+        "slot":  "weapon",
+        "cost":  6400,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_weapon/glass_cannon.png"
+    },
+    {
+        "id":  1409190604,
+        "class_name":  "upgrade_fury_trance",
+        "name":  "Fury Trance",
+        "tier":  3,
+        "slot":  "vitality",
+        "cost":  3200,
+        "active":  true,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_weapon/vampiric_burst.png"
+    },
+    {
+        "id":  1055679805,
+        "class_name":  "upgrade_surging_power",
+        "name":  "Vampiric Burst",
+        "tier":  4,
+        "slot":  "vitality",
+        "cost":  6400,
+        "active":  true,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_weapon/vampiric_burst.png"
+    },
+    {
+        "id":  1252627263,
+        "class_name":  "upgrade_boxing_glove",
+        "name":  "Lifestrike",
+        "tier":  3,
+        "slot":  "vitality",
+        "cost":  3200,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_armor/boxing_glove.png"
+    },
+    {
+        "id":  465043967,
+        "class_name":  "upgrade_acolytes_glove",
+        "name":  "Spirit Strike",
+        "tier":  1,
+        "slot":  "spirit",
+        "cost":  800,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_tech/acolytes_glove.png"
+    },
+    {
+        "id":  3190916303,
+        "class_name":  "upgrade_spirit_snatch",
+        "name":  "Spirit Snatch",
+        "tier":  3,
+        "slot":  "spirit",
+        "cost":  3200,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_tech/spirit_snatch.png"
+    },
+    {
+        "id":  26002154,
+        "class_name":  "upgrade_melee_charge",
+        "name":  "Melee Charge",
+        "tier":  2,
+        "slot":  "weapon",
+        "cost":  1600,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_weapon/melee_charge.png"
+    },
+    {
+        "id":  800008313,
+        "class_name":  "upgrade_crushing_fists",
+        "name":  "Crushing Fists",
+        "tier":  4,
+        "slot":  "weapon",
+        "cost":  6400,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_weapon/melee_charge.png"
+    },
+    {
+        "id":  2820116164,
+        "class_name":  "upgrade_diviners_kevlar",
+        "name":  "Diviner\u0027s Kevlar",
+        "tier":  4,
+        "slot":  "vitality",
+        "cost":  6400,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_armor/bullet_shield.png"
+    },
+    {
+        "id":  2947183272,
+        "class_name":  "upgrade_resonant_healing",
+        "name":  "Radiant Regeneration",
+        "tier":  3,
+        "slot":  "spirit",
+        "cost":  3200,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_tech/boundless_spirit.png"
+    },
+    {
+        "id":  2519598785,
+        "class_name":  "upgrade_boundless_spirit",
+        "name":  "Boundless Spirit",
+        "tier":  4,
+        "slot":  "spirit",
+        "cost":  6400,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_tech/boundless_spirit.png"
+    },
+    {
+        "id":  2739107182,
+        "class_name":  "upgrade_burst_fire",
+        "name":  "Burst Fire",
+        "tier":  3,
+        "slot":  "weapon",
+        "cost":  3200,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_weapon/fire_rate_plus_plus.png"
+    },
+    {
+        "id":  2829638276,
+        "class_name":  "upgrade_endurance",
+        "name":  "Extra Regen",
+        "tier":  1,
+        "slot":  "vitality",
+        "cost":  800,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_armor/endurance.png"
+    },
+    {
+        "id":  1292979587,
+        "class_name":  "upgrade_magic_storm",
+        "name":  "Surge of Power",
+        "tier":  3,
+        "slot":  "spirit",
+        "cost":  3200,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_tech/magic_storm.png"
+    },
+    {
+        "id":  1925087134,
+        "class_name":  "upgrade_suppressor",
+        "name":  "Suppressor",
+        "tier":  2,
+        "slot":  "spirit",
+        "cost":  1600,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_armor/weapon_jammer.png"
+    },
+    {
+        "id":  84321454,
+        "class_name":  "upgrade_quick_silver",
+        "name":  "Quicksilver Reload",
+        "tier":  2,
+        "slot":  "spirit",
+        "cost":  1600,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_weapon/fire_rate_plus.png"
+    },
+    {
+        "id":  3919289022,
+        "class_name":  "upgrade_ethereal_bullets",
+        "name":  "Mercurial Magnum",
+        "tier":  4,
+        "slot":  "spirit",
+        "cost":  6400,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_weapon/fire_rate_plus.png"
+    },
+    {
+        "id":  2407033488,
+        "class_name":  "upgrade_intensifying_clip",
+        "name":  "Intensifying Magazine",
+        "tier":  2,
+        "slot":  "weapon",
+        "cost":  1600,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_weapon/auto_reloader.png"
+    },
+    {
+        "id":  2463960640,
+        "class_name":  "upgrade_reinforcing_casings",
+        "name":  "Escalating Resilience",
+        "tier":  3,
+        "slot":  "weapon",
+        "cost":  3200,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_armor/bullet_armor_plus.png"
+    },
+    {
+        "id":  4104549924,
+        "class_name":  "upgrade_blitz_bullets",
+        "name":  "Swift Striker",
+        "tier":  2,
+        "slot":  "weapon",
+        "cost":  1600,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_weapon/fire_rate_plus.png"
+    },
+    {
+        "id":  865958998,
+        "class_name":  "upgrade_veil_walker",
+        "name":  "Veil Walker",
+        "tier":  3,
+        "slot":  "vitality",
+        "cost":  3200,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_utility/veil_walker.png"
+    },
+    {
+        "id":  1644605047,
+        "class_name":  "upgrade_vex_barrier",
+        "name":  "Reactive Barrier",
+        "tier":  2,
+        "slot":  "vitality",
+        "cost":  1600,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_armor/last_stand.png"
+    },
+    {
+        "id":  951866250,
+        "class_name":  "upgrade_auto_cleanse",
+        "name":  "Indomitable",
+        "tier":  4,
+        "slot":  "vitality",
+        "cost":  6400,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/items/vitality/indomitable.png"
+    },
+    {
+        "id":  3862866912,
+        "class_name":  "upgrade_medic_bullets",
+        "name":  "Restorative Shot",
+        "tier":  1,
+        "slot":  "weapon",
+        "cost":  800,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_weapon/medic_bullets.png"
+    },
+    {
+        "id":  2356412290,
+        "class_name":  "upgrade_titan_round",
+        "name":  "Titanic Magazine",
+        "tier":  2,
+        "slot":  "weapon",
+        "cost":  1600,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_weapon/titanic_magazine.png"
+    },
+    {
+        "id":  3647584222,
+        "class_name":  "upgrade_split_shot",
+        "name":  "Split Shot",
+        "tier":  2,
+        "slot":  "weapon",
+        "cost":  1600,
+        "active":  true,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_weapon/titanic_magazine.png"
+    },
+    {
+        "id":  381961617,
+        "class_name":  "upgrade_active_reload",
+        "name":  "Active Reload",
+        "tier":  2,
+        "slot":  "weapon",
+        "cost":  1600,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_utility/deployable_bullet_shield.png"
+    },
+    {
+        "id":  2800629741,
+        "class_name":  "upgrade_magic_carpet",
+        "name":  "Magic Carpet",
+        "tier":  4,
+        "slot":  "spirit",
+        "cost":  6400,
+        "active":  true,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/abilities/kelvin/ice_path.png"
+    },
+    {
+        "id":  343572757,
+        "class_name":  "upgrade_spirit_burn",
+        "name":  "Spirit Burn",
+        "tier":  4,
+        "slot":  "spirit",
+        "cost":  6400,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_tech/escalating_exposure.png"
+    },
+    {
+        "id":  493591231,
+        "class_name":  "upgrade_ultimate_burst",
+        "name":  "Lightning Scroll",
+        "tier":  4,
+        "slot":  "spirit",
+        "cost":  6400,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_weapon/adrenaline_rush.png"
+    },
+    {
+        "id":  3028234315,
+        "class_name":  "upgrade_absorbing_armor",
+        "name":  "Witchmail",
+        "tier":  4,
+        "slot":  "vitality",
+        "cost":  6400,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_tech/arcane_medallion.png"
+    },
+    {
+        "id":  1427630806,
+        "class_name":  "upgrade_healbuff",
+        "name":  "Healing Tempo",
+        "tier":  4,
+        "slot":  "vitality",
+        "cost":  6400,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/aura_icon.png"
+    },
+    {
+        "id":  673001892,
+        "class_name":  "upgrade_aprounds",
+        "name":  "Armor Piercer",
+        "tier":  4,
+        "slot":  "weapon",
+        "cost":  6400,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_weapon/armor_breaking_bullets.png"
+    },
+    {
+        "id":  3269957497,
+        "class_name":  "upgrade_infinite_rounds",
+        "name":  "Infinite Rounds",
+        "tier":  5,
+        "slot":  "weapon",
+        "cost":  9999,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_weapon/armor_breaking_bullets.png"
+    },
+    {
+        "id":  3491236900,
+        "class_name":  "upgrade_deflecting_armor",
+        "name":  "Plated Armor",
+        "tier":  4,
+        "slot":  "vitality",
+        "cost":  6400,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_tech/arcane_medallion.png"
+    },
+    {
+        "id":  1955841979,
+        "class_name":  "upgrade_spellbreaker",
+        "name":  "Spellbreaker",
+        "tier":  4,
+        "slot":  "vitality",
+        "cost":  6400,
+        "active":  false,
+        "image":  null
+    },
+    {
+        "id":  1250307611,
+        "class_name":  "upgrade_juggernaut",
+        "name":  "Juggernaut",
+        "tier":  4,
+        "slot":  "vitality",
+        "cost":  6400,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/items/vitality/juggernaut.png"
+    },
+    {
+        "id":  2221211450,
+        "class_name":  "upgrade_enchanted_holsters",
+        "name":  "Spellslinger",
+        "tier":  4,
+        "slot":  "weapon",
+        "cost":  6400,
+        "active":  false,
+        "image":  null
+    },
+    {
+        "id":  98582110,
+        "class_name":  "upgrade_weapon_backstabber",
+        "name":  "Stalker",
+        "tier":  2,
+        "slot":  "weapon",
+        "cost":  1600,
+        "active":  false,
+        "image":  null
+    },
+    {
+        "id":  690458959,
+        "class_name":  "upgrade_express_shot",
+        "name":  "Express Shot",
+        "tier":  3,
+        "slot":  "weapon",
+        "cost":  3200,
+        "active":  false,
+        "image":  null
+    },
+    {
+        "id":  1736094134,
+        "class_name":  "upgrade_icarus_wings",
+        "name":  "Seraphim Wings",
+        "tier":  5,
+        "slot":  "vitality",
+        "cost":  9999,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_utility/sprint_booster.png"
+    },
+    {
+        "id":  2054088113,
+        "class_name":  "upgrade_mystical_piano",
+        "name":  "Mystical Piano",
+        "tier":  5,
+        "slot":  "spirit",
+        "cost":  9999,
+        "active":  true,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_tech/knockdown.png"
+    },
+    {
+        "id":  3949773228,
+        "class_name":  "upgrade_nullification_aura",
+        "name":  "Nullification Burst",
+        "tier":  5,
+        "slot":  "vitality",
+        "cost":  9999,
+        "active":  true,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_armor/bullet_armor_reduction_aura.png"
+    },
+    {
+        "id":  3729138568,
+        "class_name":  "upgrade_celestial_guidance",
+        "name":  "Celestial Blessing",
+        "tier":  5,
+        "slot":  "vitality",
+        "cost":  9999,
+        "active":  true,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_armor/debuff_reducer.png"
+    },
+    {
+        "id":  230297145,
+        "class_name":  "upgrade_eternal_gift",
+        "name":  "Eternal Gift",
+        "tier":  5,
+        "slot":  "vitality",
+        "cost":  9999,
+        "active":  false,
+        "image":  null
+    },
+    {
+        "id":  4050602737,
+        "class_name":  "upgrade_patrons_blessing",
+        "name":  "Mystic Conduit",
+        "tier":  5,
+        "slot":  "spirit",
+        "cost":  9999,
+        "active":  false,
+        "image":  null
+    },
+    {
+        "id":  3568217437,
+        "class_name":  "upgrade_eldritch_shot",
+        "name":  "Haunting Shot",
+        "tier":  5,
+        "slot":  "weapon",
+        "cost":  9999,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_weapon/explosive_bullets.png"
+    },
+    {
+        "id":  3523480953,
+        "class_name":  "upgrade_cloak_of_opportunity",
+        "name":  "Cloak of Opportunity",
+        "tier":  5,
+        "slot":  "vitality",
+        "cost":  9999,
+        "active":  false,
+        "image":  null
+    },
+    {
+        "id":  64550694,
+        "class_name":  "upgrade_runed_gauntlets",
+        "name":  "Runed Gauntlets",
+        "tier":  5,
+        "slot":  "weapon",
+        "cost":  9999,
+        "active":  false,
+        "image":  null
+    },
+    {
+        "id":  1825399334,
+        "class_name":  "upgrade_electric_slippers",
+        "name":  "Electric Slippers",
+        "tier":  5,
+        "slot":  "vitality",
+        "cost":  9999,
+        "active":  false,
+        "image":  null
+    },
+    {
+        "id":  1132564516,
+        "class_name":  "upgrade_prism_blast",
+        "name":  "Prism Blast",
+        "tier":  5,
+        "slot":  "spirit",
+        "cost":  9999,
+        "active":  true,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_tech/shifting_shroud.png"
+    },
+    {
+        "id":  1558545403,
+        "class_name":  "upgrade_unstable_concoction",
+        "name":  "Unstable Concoction",
+        "tier":  5,
+        "slot":  "spirit",
+        "cost":  9999,
+        "active":  true,
+        "image":  null
+    },
+    {
+        "id":  2068250483,
+        "class_name":  "upgrade_shivas_bracelet",
+        "name":  "Frostbite Charm",
+        "tier":  5,
+        "slot":  "spirit",
+        "cost":  9999,
+        "active":  false,
+        "image":  null
+    },
+    {
+        "id":  2319629810,
+        "class_name":  "upgrade_shadow_strike",
+        "name":  "Shadow Strike",
+        "tier":  5,
+        "slot":  "vitality",
+        "cost":  9999,
+        "active":  false,
+        "image":  null
+    },
+    {
+        "id":  3294954488,
+        "class_name":  "upgrade_bulletshredimbue",
+        "name":  "Ballistic Enchantment",
+        "tier":  3,
+        "slot":  "weapon",
+        "cost":  3200,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_weapon/fire_rate_plus.png"
+    },
+    {
+        "id":  1763073141,
+        "class_name":  "upgrade_rechargingbullets",
+        "name":  "Recharging Rush",
+        "tier":  2,
+        "slot":  "weapon",
+        "cost":  1600,
+        "active":  false,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_tech/arcane_medallion.png"
+    },
+    {
+        "id":  2462046703,
+        "class_name":  "upgrade_goose_egg",
+        "name":  "Golden Goose Egg",
+        "tier":  1,
+        "slot":  "spirit",
+        "cost":  800,
+        "active":  true,
+        "image":  "https://assets-bucket.deadlock-api.com/assets-api-res/images/upgrades/mods_tech/tech_damage.png"
+    }
+]
