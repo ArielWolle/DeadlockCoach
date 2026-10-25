@@ -618,6 +618,8 @@ dependencies = [
  "coach-core",
  "coach-engine",
  "coach-transport",
+ "coach-vision",
+ "image",
  "serde_json",
  "tokio",
 ]
@@ -663,6 +665,7 @@ dependencies = [
 name = "coach-vision"
 version = "0.1.0"
 dependencies = [
+ "coach-core",
  "image",
  "ocrs",
  "rten",

@@ -9,3 +9,4 @@ ocrs = "0.13"
 rten = "0.26"
 
 
+coach-core = { path = "../core" }

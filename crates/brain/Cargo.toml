@@ -10,3 +10,5 @@ coach-audio = { path = "../audio" }
 coach-transport = { path = "../transport" }
 serde_json.workspace = true
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+coach-vision = { path = "../vision" }
+image = { version = "0.25", default-features = false, features = ["jpeg"] }
