@@ -14,7 +14,7 @@ scp $exe "${Target}:DeadlockCoach/coach-agent.exe"
 
 $remote = @"
 `$exe = Join-Path `$env:USERPROFILE 'DeadlockCoach\coach-agent.exe'
-`$cmd = "```$env:COACH_TOKEN='$Token'; & '`$exe'"
+`$cmd = "```$env:COACH_TOKEN='$Token'; & '`$exe' *> '`$env:USERPROFILE\DeadlockCoach\agent.log'"
 `$a = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-WindowStyle Hidden -NoProfile -Command `$cmd"
 `$t = New-ScheduledTaskTrigger -AtLogOn -User `$env:USERNAME
 `$p = New-ScheduledTaskPrincipal -UserId `$env:USERNAME -LogonType Interactive

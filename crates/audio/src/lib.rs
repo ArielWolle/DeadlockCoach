@@ -1,9 +1,23 @@
 //! Audio: WAV playback on the Agent (default output device) and Piper TTS on the Brain.
 use std::{io::Cursor, path::PathBuf, process::{Command, Stdio}, io::Write};
 
-/// Play WAV bytes on the default output device; blocks until finished.
+/// Names of all output devices.
+pub fn list_devices() -> Vec<String> {
+    use rodio::cpal::traits::{DeviceTrait, HostTrait};
+    let host = rodio::cpal::default_host();
+    let def = host.default_output_device().and_then(|d| d.name().ok()).unwrap_or_default();
+    host.output_devices().map(|it| it.filter_map(|d| d.name().ok()).map(|n| if n == def { format!("{n} (default)") } else { n }).collect()).unwrap_or_default()
+}
+
+/// Play WAV bytes; device chosen by COACH_AUDIO_DEVICE (name substring) else default.
 pub fn play_wav(wav: Vec<u8>) -> Result<(), String> {
-    let (_stream, handle) = rodio::OutputStream::try_default().map_err(|e| e.to_string())?;
+    use rodio::cpal::traits::{DeviceTrait, HostTrait};
+    let want = std::env::var("COACH_AUDIO_DEVICE").ok().map(|s| s.to_lowercase());
+    let dev = want.and_then(|w| rodio::cpal::default_host().output_devices().ok()?.find(|d| d.name().map(|n| n.to_lowercase().contains(&w)).unwrap_or(false)));
+    let (_stream, handle) = match dev {
+        Some(d) => rodio::OutputStream::try_from_device(&d),
+        None => rodio::OutputStream::try_default(),
+    }.map_err(|e| e.to_string())?;
     let sink = rodio::Sink::try_new(&handle).map_err(|e| e.to_string())?;
     let src = rodio::Decoder::new(Cursor::new(wav)).map_err(|e| e.to_string())?;
     sink.append(src);

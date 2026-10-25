@@ -5,6 +5,10 @@ use tokio::sync::broadcast;
 
 #[tokio::main]
 async fn main() {
+    if std::env::args().any(|a| a == "--devices") {
+        for d in coach_audio::list_devices() { println!("{d}"); }
+        return;
+    }
     let token = std::env::var("COACH_TOKEN").expect("set COACH_TOKEN");
     let bind = std::env::var("COACH_BIND").unwrap_or_else(|_| format!("0.0.0.0:{}", coach_transport::DEFAULT_PORT));
     let secs: u64 = std::env::var("COACH_INTERVAL_SECS").ok().and_then(|s| s.parse().ok()).unwrap_or(5);
@@ -27,7 +31,7 @@ async fn main() {
     let (atx, arx) = std::sync::mpsc::channel::<Vec<u8>>();
     std::thread::spawn(move || {
         for wav in arx {
-            if let Err(e) = coach_audio::play_wav(wav) { eprintln!("playback failed: {e}"); }
+            if let Err(e) = coach_audio::play_wav(wav) { eprintln!("playback failed: {e}"); } else { eprintln!("played cue"); }
         }
     });
     eprintln!("agent listening on {bind}, interval {secs}s");
