@@ -51,6 +51,34 @@ impl Rule for TimerRule {
     }
 }
 
+/// "If the enemy has `when_enemy_has`, suggest `suggest`." Data-driven (data/counters.json).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CounterDef {
+    pub when_enemy_has: String,
+    pub suggest: String,
+    pub reason: String,
+}
+
+pub struct CounterRule(pub Vec<CounterDef>);
+
+impl Rule for CounterRule {
+    fn evaluate(&self, snap: &GameSnapshot) -> Vec<Cue> {
+        self.0.iter()
+            .filter(|c| snap.enemy_items.iter().any(|i| i == &c.when_enemy_has) && !snap.items.iter().any(|i| i == &c.suggest))
+            .map(|c| Cue {
+                key: format!("counter:{}:{}", c.when_enemy_has, c.suggest),
+                text: format!("Enemy has {}. Consider {}. {}", c.when_enemy_has, c.suggest, c.reason),
+                priority: Priority::Normal,
+                cooldown_secs: 180,
+            })
+            .collect()
+    }
+}
+
+pub fn counter_rule_from_json(json: &str) -> Result<Box<dyn Rule>, String> {
+    Ok(Box::new(CounterRule(serde_json::from_str(json).map_err(|e| e.to_string())?)))
+}
+
 /// Parse data/timings.json into timer rules.
 pub fn rules_from_timings(json: &str) -> Result<Vec<Box<dyn Rule>>, String> {
     let defs: Vec<TimerDef> = serde_json::from_str(json).map_err(|e| e.to_string())?;
@@ -109,6 +137,17 @@ mod tests {
         let r = rules_from_timings(include_str!("../../../data/timings.json")).unwrap();
         let mut e = Engine::new(r);
         assert_eq!(e.step(&at(580))[0].text, "Soul Urn in 20 seconds");
+    }
+
+    #[test]
+    fn counter_rule_fires_once_and_skips_owned() {
+        let r = counter_rule_from_json(r#"[{"when_enemy_has":"A","suggest":"B","reason":"test."}]"#).unwrap();
+        let mut e = Engine::new(vec![r]);
+        let mut s = at(100); s.enemy_items = vec!["A".into()];
+        assert_eq!(e.step(&s)[0].text, "Enemy has A. Consider B. test.");
+        assert!(e.step(&s).is_empty());
+        let mut s2 = at(1000); s2.enemy_items = vec!["A".into()]; s2.items = vec!["B".into()];
+        assert!(e.step(&s2).is_empty());
     }
 
     #[test]
