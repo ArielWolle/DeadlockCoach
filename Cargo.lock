@@ -628,6 +628,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "coach-engine"
+version = "0.1.0"
+dependencies = [
+ "coach-core",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "coach-transport"
 version = "0.1.0"
 dependencies = [

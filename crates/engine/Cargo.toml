@@ -1,0 +1,9 @@
+[package]
+name = "coach-engine"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+coach-core = { path = "../core" }
+serde.workspace = true
+serde_json.workspace = true
