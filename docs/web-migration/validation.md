@@ -13,8 +13,9 @@
   with the bundled OCR backend disabled (matching, graph execution and the JSONL CLI).
 - `cargo build --locked --release -p coach-agent -p coach-brain -p deadlock-coach`: native
   Agent, Brain and Tauri application all build on Windows after the refactor.
-- `npm run test:unit`: **8 tests passed** using Node's test runner: settings/JSONL validation,
-  crop geometry, conservative border detection, bounded history and overlay transforms.
+- `npm run test:unit`: **11 tests passed** using Node's test runner: settings/JSONL validation,
+  crop geometry, conservative border detection, bounded history, overlay transforms and
+  verified-asset cache recovery/offline/corruption rejection.
 - `npm run build`: TypeScript, production Vite build, asset allow-list, manifest integrity and
   static publication checks. App tested under `/DeadlockCoach/`.
 - Playwright: **26 tests passed** across the full run and affected-test reruns after fixes.
@@ -86,3 +87,23 @@ staging the fix, so ignored local files could not hide missing inputs. The exact
 Rust CI test command passed **47 tests**, including all six full-frame tests. `npm ci` and
 the asset build also passed from that clean copy. The static website's fixture allow-list
 is unchanged.
+
+## Mixed-version asset-cache regression
+
+An existing tab reported `Asset integrity check failed for timings.json`: its service worker
+used network-first manifest retrieval but cache-first unversioned small assets. After a build
+update, that could pair the new manifest with old shell-cached timing bytes. Merely deleting
+the analysis worker's cache entry did not bypass the stale shell response.
+
+Verified asset requests now include the expected SHA-256 in the URL, isolating them from old
+unversioned service-worker and HTTP cache entries. A hash/length mismatch deletes the bad entry
+and retries once with `cache: reload`; the response must still match both checks. New service
+workers forward reload requests directly and use only their own shell cache for other lookups.
+
+The added real-WASM browser regression seeds stale unversioned shell timings and a corrupt
+hash-keyed analysis-cache entry, initializes successfully, and verifies repaired cached bytes.
+That regression plus the existing offline, model-failure and initialization-cancellation tests
+passed (**4 targeted browser tests**). Three additional unit tests cover corruption recovery,
+offline cached bytes, quota failure and persistent corruption rejection. The production build,
+TypeScript and publication-integrity checks pass. The browser suite now contains 27 scenarios;
+the unrelated scenarios were not repeated for this cache-only fix.

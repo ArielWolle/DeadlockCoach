@@ -21,6 +21,7 @@
 | Camp/boost reminders assumed fixed recurring match-clock availability | Removed the recurring camp timer and made boost unlock a one-shot event; camp advice now explicitly requires checking whether the camp is up |
 | Full-window capture required users to align the game viewport | Added an automatic default profile with independent minimap, Souls and clock locators; moved/resized video fixtures and independently moved HUD widgets are covered |
 | Viewport adjustment kept consuming live source frames | Added bounded five-frame frozen history, report-driven located/configured overlays, local sample export and same-share resume |
+| Fresh manifest could be paired with stale shell-cached timings | Verified asset URLs include their expected SHA-256, corrupt entries get one checked network refetch, and new service workers honor reload requests and restrict lookups to their own shell cache |
 
 ## External blockers / not claimed complete
 

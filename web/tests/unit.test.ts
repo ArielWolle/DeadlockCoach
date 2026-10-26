@@ -6,6 +6,7 @@ import { fit, grow, move, normalized, resize, selection, viewport, ViewportError
 import { consistentBorders, detectBorders } from '../src/borders.ts';
 import {FrameHistory} from '../src/frame-history.ts';
 import {regionsFromReport} from '../src/region-overlays.ts';
+import {loadVerifiedAsset} from '../src/assets.ts';
 
 test('settings normalize corrupt input, finite numeric ranges and viewport bounds', () => {
   assert.deepEqual(normalize(null), defaults);
@@ -13,6 +14,35 @@ test('settings normalize corrupt input, finite numeric ranges and viewport bound
   assert.equal(s.rate, 1); assert.equal(s.volume, 0); assert.equal(s.interval, 5);
   assert.ok(s.crop.x + s.crop.w <= 1); assert.ok(s.crop.y + s.crop.h <= 1);
   assert.equal(s.options.map, false); assert.equal(s.options.timers, true);
+});
+
+async function assetFixture() {
+  const content = new TextEncoder().encode('[{"name":"current timings"}]');
+  const hash = [...new Uint8Array(await crypto.subtle.digest('SHA-256', content))].map(b => b.toString(16).padStart(2, '0')).join('');
+  return { content, entry: { bytes: content.byteLength, sha256: hash } };
+}
+
+test('verified assets recover a corrupt cache using a content-addressed network refetch', async () => {
+  const {content,entry}=await assetFixture();let deleted=false;let stored:Response|undefined;let requestUrl='';
+  const cache={match:async()=>new Response('old timings'),delete:async()=>{deleted=true;return true;},put:async(_url:RequestInfo|URL,r:Response)=>{stored=r;}};
+  const fetchAsset:typeof fetch=async(url,options)=>{requestUrl=String(url);assert.equal(options?.cache,'reload');return new Response(content);};
+  assert.deepEqual(new Uint8Array(await loadVerifiedAsset('https://example.test/DeadlockCoach/','timings.json',entry,cache,fetchAsset)),content);
+  assert.equal(new URL(requestUrl).searchParams.get('sha256'),entry.sha256);assert.equal(deleted,true);
+  assert.deepEqual(new Uint8Array(await stored!.arrayBuffer()),content);
+});
+
+test('verified asset cache remains usable offline and cache write failure is nonfatal', async () => {
+  const {content,entry}=await assetFixture();
+  const cache={match:async()=>new Response(content),delete:async()=>true,put:async()=>{throw new Error('quota');}};
+  const fetchAsset:typeof fetch=async()=>{throw new Error('offline');};
+  assert.deepEqual(new Uint8Array(await loadVerifiedAsset('https://example.test/','timings.json',entry,cache,fetchAsset)),content);
+});
+
+test('verified assets retry bad network bytes once but never accept persistent corruption', async () => {
+  const {entry}=await assetFixture();const modes:RequestCache[]=[];
+  const fetchAsset:typeof fetch=async(_url,options)=>{modes.push(options!.cache!);return new Response('wrong build');};
+  await assert.rejects(loadVerifiedAsset('https://example.test/','timings.json',entry,undefined,fetchAsset),/integrity check failed.*after refetching/);
+  assert.deepEqual(modes,['no-cache','reload']);
 });
 
 test('JSONL accepts BOM and blank lines but rejects malformed game clocks and arbitrary arrays', () => {

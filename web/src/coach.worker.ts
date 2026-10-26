@@ -2,6 +2,7 @@
 import init, { Coach } from '../wasm/coach_web';
 import type { Manifest, WorkerReply, ProfileReply } from './types';
 import type { GameProfile } from './profiles';
+import { loadVerifiedAsset } from './assets';
 const ctx = self as unknown as DedicatedWorkerGlobalScope;
 let coach: Coach | undefined;
 const send = (r: WorkerReply | ProfileReply) => ctx.postMessage(r);
@@ -23,17 +24,8 @@ async function initialize(base: string, profile: GameProfile) {
   const buffers: Record<string, ArrayBuffer> = {};
   let loaded = 0; const total = names.reduce((n, name) => n + manifest.files[name].bytes, 0);
   for (const name of names) {
-    const url = `${base}assets/${name}`;
     const expected = manifest.files[name];
-    let response = await cache?.match(url);
-    if (!response) { response = await fetch(url); }
-    if (!response.ok) throw new Error(`${name}: HTTP ${response.status}`);
-    const buffer = await response.arrayBuffer();
-    const hash = [...new Uint8Array(await crypto.subtle.digest('SHA-256', buffer))].map(b => b.toString(16).padStart(2, '0')).join('');
-    if (hash !== expected.sha256 || buffer.byteLength !== expected.bytes) {
-      await cache?.delete(url); throw new Error(`Asset integrity check failed for ${name}. Reload to retry.`);
-    }
-    try { await cache?.put(url, new Response(buffer.slice(0))); } catch { /* quota is not fatal */ }
+    const buffer = await loadVerifiedAsset(base, name, expected, cache);
     buffers[name] = buffer; loaded += buffer.byteLength;
     send({ type: 'progress', message: `Loading ${name} (${Math.round(loaded / 1048576)} MB)…`, fraction: loaded / total * .9 });
   }
