@@ -24,7 +24,8 @@ worker using the same Rust vision and rule engine as the native app.
 - Capture, HUD OCR, inventory/scoreboard recognition, minimap estimates and coaching.
 - Active lane plans: catch/clear waves, hold, take short poke windows, use a conditional
   one-camp window, shop or prepare a rotation—with evidence and document citations.
-- Browser speech, voice/category settings, mute, pause and stop controls.
+- Browser speech with a saved 0–100% Coach volume slider, voice/category settings, mute,
+  pause and stop controls. New settings default to 100%; existing saved levels are preserved.
 - One-second screenshots and a separate fast HP/minimap worker; earlier objective reminders,
   wave reports, positive farm-pace feedback and conditional gank checks.
 - Optional frozen five-frame HUD inspector with located/configured overlays and sample export.

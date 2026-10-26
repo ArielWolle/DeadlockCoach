@@ -156,12 +156,24 @@ test('recording archives export, import images and snapshots, and delete locally
 test('voice test invokes browser speech and mute cancels the queue', async ({ page }) => {
   await page.addInitScript(() => {
     const history: string[] = []; (window as unknown as { speechCalls: string[] }).speechCalls = history;
+    const volumes:number[]=[];(window as unknown as {speechVolumes:number[]}).speechVolumes=volumes;
     Object.defineProperty(window, 'speechSynthesis', { configurable: true, value: {
       getVoices: () => [], addEventListener: () => {}, cancel: () => history.push('cancel'),
-      speak: (utterance: SpeechSynthesisUtterance) => { history.push(utterance.text); utterance.onend?.(new Event('end') as SpeechSynthesisEvent); },
+      speak: (utterance: SpeechSynthesisUtterance) => { history.push(utterance.text);volumes.push(utterance.volume); utterance.onend?.(new Event('end') as SpeechSynthesisEvent); },
     } });
   });
-  await page.goto('./'); await page.getByRole('button', { name: 'Test voice' }).click();
+  await page.goto('./');
+  const volume=page.getByRole('slider',{name:'Coach volume',exact:true});await expect(volume).toHaveValue('100');
+  await page.setViewportSize({width:390,height:844});
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+  await volume.press('ArrowLeft');await expect(page.locator('#coach-volume-value')).toHaveText('95%');
+  await page.getByRole('button', { name: 'Test voice' }).click();
+  expect(await page.evaluate(()=>(window as unknown as {speechVolumes:number[]}).speechVolumes.at(-1))).toBeCloseTo(.95,5);
+  await page.reload();await expect(volume).toHaveValue('95');
+  await page.locator('[data-page="settings"]').click();await expect(page.locator('#volume')).toHaveValue('0.95');
+  await page.locator('#volume').press('End');await page.locator('[data-page="coach"]').click();await expect(volume).toHaveValue('100');
+  await page.getByRole('button', { name: 'Test voice' }).click();
+  expect(await page.evaluate(()=>(window as unknown as {speechVolumes:number[]}).speechVolumes.at(-1))).toBe(1);
   expect(await page.evaluate(() => (window as unknown as { speechCalls: string[] }).speechCalls)).toContain('Coach audio test. Your next move starts here.');
   await page.getByRole('button', { name: 'Mute voice' }).click();
   expect(await page.evaluate(() => (window as unknown as { speechCalls: string[] }).speechCalls)).toContain('cancel');

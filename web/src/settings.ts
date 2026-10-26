@@ -1,6 +1,6 @@
 import type { Settings } from './types';
 export const defaults: Settings = {
-  muted: false, voice: '', rate: 1, volume: .85, interval: 1, record: false, autoCrop: true,
+  muted: false, voice: '', rate: 1, volume: 1, interval: 1, record: false, autoCrop: true,
   options: { timers: true, economy: true, map: true, counters: true, deaths: true, laning:true },
   laneFocus:'auto',
   heroFocus:'',

@@ -17,3 +17,7 @@
 .team-health { display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:.5rem 1rem; }
 .team-health p { margin:0;padding:.6rem;border:1px solid var(--line,#354a48);border-radius:6px; }
 .preview-footer { flex-wrap:wrap;gap:6px 12px; }
+.voice-footer { flex-wrap:wrap; }
+.coach-volume { flex:1 0 100%;display:grid;grid-template-columns:auto minmax(70px,1fr) 42px;align-items:center;gap:10px;font-size:12px; }
+.coach-volume input[type="range"] { min-width:0;width:100%;padding:0;margin:0;accent-color:var(--teal); }
+.coach-volume output { text-align:right;font-variant-numeric:tabular-nums; }

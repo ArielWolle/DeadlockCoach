@@ -655,6 +655,7 @@ function voices() {
 }
 function populateSettings() {
   voices(); input('rate').value = String(settings.rate); input('volume').value = String(settings.volume);
+  syncVolume();
   input('interval').value = String(settings.interval); input('record').checked = settings.record;
   input('auto-crop').checked = settings.autoCrop;
   $<HTMLSelectElement>('lane-focus').value=settings.laneFocus;
@@ -663,6 +664,16 @@ function populateSettings() {
   for (const key of ['x', 'y', 'w', 'h'] as const) input(`crop-${key}`).value = String(Math.round(settings.crop[key] * 1000000) / 10000);
   text('rate-value', `${settings.rate.toFixed(1)}×`); text('volume-value', `${Math.round(settings.volume * 100)}%`);
   button('mute').textContent = settings.muted ? 'Unmute voice' : 'Mute voice'; button('mute').setAttribute('aria-pressed', String(settings.muted));
+}
+function syncVolume(){
+  const level=Math.round(settings.volume*100),label=`${level}%`;
+  input('coach-volume').value=String(level);input('coach-volume').setAttribute('aria-valuetext',label);
+  input('volume').value=String(settings.volume);input('volume').setAttribute('aria-valuetext',label);
+  text('coach-volume-value',label);text('volume-value',label);
+}
+function setVolume(volume:number){
+  settings.volume=normalize({...settings,volume}).volume;
+  speaker.configure(settings);saveSettings(settings);syncVolume();
 }
 function saveForm() {
   const next = structuredClone(settings);
@@ -849,7 +860,8 @@ button('clear-recordings').onclick = async () => { try { await clearFrames(); aw
 input('knowledge-search').oninput = renderKnowledge; $<HTMLSelectElement>('knowledge-category').onchange = renderKnowledge;
 $<HTMLFormElement>('settings-form').onsubmit = e => { e.preventDefault(); saveForm(); };
 input('rate').oninput = () => text('rate-value', `${Number(input('rate').value).toFixed(1)}×`);
-input('volume').oninput = () => text('volume-value', `${Math.round(Number(input('volume').value) * 100)}%`);
+input('volume').oninput = () => setVolume(Number(input('volume').value));
+input('coach-volume').oninput = () => setVolume(Number(input('coach-volume').value)/100);
 button('reset-settings').onclick = () => { settings = structuredClone(defaults); saveSettings(settings); speaker.configure(settings); populateSettings(); configureOptions(); notice('Defaults restored.'); };
 button('reload-engine').onclick = async () => {
   cancelMode(); ready = false; initializing = undefined; worker?.terminate(); worker = undefined;
