@@ -1,4 +1,5 @@
 import type { Settings } from './types';
+import { viewport } from './crop';
 
 export interface Pixels { rgba: ImageData; map: ImageData; timestamp: number; preview: Blob | null }
 export class Capture {
@@ -46,12 +47,7 @@ export class Capture {
 
   private async fromSource(source: CanvasImageSource, width: number, height: number, crop: Settings['crop'], record: boolean): Promise<Pixels> {
     if (width < 320 || height < 180) throw new Error('Source is too small for HUD recognition (minimum 320×180).');
-    const x = Math.round(width * crop.x), y = Math.round(height * crop.y);
-    const w = Math.min(width - x, Math.round(width * crop.w));
-    const h = Math.min(height - y, Math.round(height * crop.h));
-    if (w < 320 || h < 180) throw new Error('The calibrated viewport is too small. Reset capture calibration.');
-    // Keep the complete chosen viewport. Do not silently distort an ultrawide/letterboxed HUD.
-    if (Math.abs(w / h - 16 / 9) > .06) throw new Error('This detector is calibrated for a 16:9 game viewport. Use Calibration in Settings to exclude borders/letterboxing, or choose a 16:9 game window.');
+    const { x, y, w, h } = viewport(crop, { width, height });
     this.canvas.width = 1600; this.canvas.height = 900;
     const ctx = this.canvas.getContext('2d', { willReadFrequently: true })!;
     ctx.drawImage(source, x, y, w, h, 0, 0, 1600, 900);

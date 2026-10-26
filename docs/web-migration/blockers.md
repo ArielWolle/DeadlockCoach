@@ -14,6 +14,7 @@
 | Offline module scripts missed their cached response | Static preview responses include `Vary: Origin`; same-origin static cache matches now ignore that header. Offline reload and real WASM replay pass |
 | Minimap ring detector repeatedly computed trigonometry inside pixel loops | Precomputed circle offsets and dilated mask once, preserving minimap regression results and reducing detector cost |
 | Repeated text detection on tiny single-line HUD fields | Added direct line recognition for calibrated team totals. Clock/name experiments degraded reads, so those retained full detection. Native and browser regressions pass |
+| Letterboxed captures produced a repeated 16:9 error with percentage-only recovery | Added live visual viewport editing, typed error recovery, conservative automatic four-edge border detection and a manual override |
 
 ## External blockers / not claimed complete
 
@@ -26,8 +27,10 @@
 3. **Headphone output and voice quality**: browser speech methods can be tested in code; audible
    output, voice installation and OS output routing need a human check on the gaming PC.
 4. **Performance target not fully met**: after enabling SIMD, optimizing minimap rings and
-   using direct line recognition for team totals, the last measured headless browser OCR frame took **6,176 ms** on this machine (recorded
-   1600×900 HUD, not a live game benchmark). This exceeds the default five-second target.
+   using direct line recognition for team totals, recorded browser OCR frames have taken
+   roughly **6–15 seconds** on this machine. The latest full editor-regression run logged
+   **11,728 ms** for its final OCR frame (recorded 1600×900 HUD, not a live game benchmark).
+   This exceeds the default five-second target.
    The loop skips queueing and samples the current frame when ready; late speech is discarded.
    A 10-second interval is a practical setting to try. Game FPS impact, thermal load and
    background scheduling remain unmeasured. A guaranteed five-second cycle requires more work.
@@ -37,6 +40,8 @@
    In particular, inherited `data/timings.json` models Hard camps as a recurring clock
    event although actual camp respawns depend on clearing; its reminder is not evidence
    of an available camp. That game-data rule needs a separate correction/verification.
+   Stream diagnostics also showed a 1080p clock digit misread after preprocessing (33:29
+   read as 33:20); auto-cropping does not establish exact OCR correctness on every source.
 6. **Hosted Actions run status**: workflow syntax/expressions are validated with actionlint,
    and their build/test commands are exercised locally. This environment has git but no `gh`
    CLI (the owner said not to install it), so hosted private-repository checks cannot be inspected

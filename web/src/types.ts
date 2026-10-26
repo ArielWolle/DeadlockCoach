@@ -17,7 +17,7 @@ export interface Snapshot {
 export interface Analysis { snapshot: Snapshot; cues: Cue[] }
 export interface Options { timers: boolean; economy: boolean; map: boolean; counters: boolean; deaths: boolean }
 export interface Settings {
-  muted: boolean; voice: string; rate: number; volume: number; interval: number; record: boolean;
+  muted: boolean; voice: string; rate: number; volume: number; interval: number; record: boolean; autoCrop: boolean;
   options: Options; crop: { x: number; y: number; w: number; h: number };
 }
 export interface RecordedFrame { id?: number; created: number; timestamp: number; snapshot: Snapshot; cues: Cue[]; image: Blob }

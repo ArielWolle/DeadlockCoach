@@ -41,12 +41,26 @@ Locally retained source-frame SHA-256 values for this test:
 
 ### Continuous stream setup
 
-Select the Twitch tab/window through the browser's screen-sharing picker. The selected
-capture needs the game video to fill a 16:9 viewport; a fullscreen player can still have
-letterboxing on a 16:10 screen. Use capture calibration to exclude those bars. For the
-specific 1920×1143 geometry above, the approximate viewport percentages are left 0%, top
-2.8%, width 100%, height 94.4%. These values depend on the actual shared source dimensions;
-they are not a universal Twitch preset and were not saved over the owner's preferences.
+Select the Twitch tab/window through the browser's screen-sharing picker. A fullscreen
+player can still have letterboxing on a 16:10 screen. The app now checks for black borders
+automatically; **Adjust viewport** opens a live draggable/resizable selection when a manual
+adjustment is needed. The source and cropped preview are shown together, avoiding the need
+to calculate percentages. For the geometry above the actual game rectangle is still
+`(0, 31.5, 1920, 1080)`; this is source-specific, not a universal Twitch preset.
+
+### Visual-editor follow-up
+
+Browser integration tests cover mouse/keyboard selection, touch alternatives, automatic
+top/side cropping before real OCR, cancellation without changing saved coordinates, applying
+without another share prompt, source resizing, and letterboxed screenshot imports. They
+also check the open modal with axe and verify the editor fits a small screen.
+
+A separate local diagnostic used an older raw 1920×1199 Monkeymires screenshot with the
+player's black bars. Automatic preprocessing completed without a manual dialog and preserved
+4,951 souls, but the OCR clock was **33:20**, compared with the visually read **33:29**.
+That diagnostic did not pass exact clock comparison. It is retained as an OCR/crop-quality
+limitation, not counted as a passing end-to-end accuracy test. The creator image is not
+published as a new fixture. Geometry/capture regressions use the existing controlled fixtures.
 
 ## Praydonnis — 720p diagnostic, subsequently paused
 

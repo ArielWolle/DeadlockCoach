@@ -2,6 +2,9 @@ import './style.css';
 import { Capture, type Pixels } from './capture';
 import { defaults, loadSettings, normalize, saveSettings } from './settings';
 import { Speaker } from './speech';
+import { CropEditor } from './crop-editor';
+import { ViewportError, viewport, type Crop } from './crop';
+import { sampleBorders } from './borders';
 import { clearFrames, download, listFrames, recordFrame, snapshotLines } from './storage';
 import type { Analysis, Cue, GameItem, Knowledge, Options, Settings, Snapshot, WorkerReply } from './types';
 
@@ -14,12 +17,14 @@ export const clock = (n?: number | null) => n == null ? '—:—' : `${Math.floo
 const base = new URL(import.meta.env.BASE_URL, location.origin).href;
 let settings = loadSettings();
 const capture = new Capture(), speaker = new Speaker(settings);
+const cropEditor = new CropEditor();
 let worker: Worker | undefined, ready = false, initializing: Promise<void> | undefined;
 let initResolve: (() => void) | undefined, initReject: ((e: Error) => void) | undefined;
 let initTimer: ReturnType<typeof setTimeout> | undefined;
 let id = 0, generation = 0, busy = false, running = false, paused = false, replaying = false;
 let timer: ReturnType<typeof setTimeout> | undefined;
 let lastResultAt = 0, lastElapsed = 0, assetVersion = 'Not loaded';
+let needsViewport = false, manualViewport = false, automaticViewport = false, sourceGeometry = '';
 let latest: Snapshot = {}, latestFrame: ImageData | undefined, latestMap: ImageData | undefined;
 let cues: Array<Cue & { at?: number | null }> = [];
 let knowledge: Knowledge[] = [], knowledgeReady: Promise<void> | undefined;
@@ -29,12 +34,15 @@ let pending: { id: number; resolve: (r: { analysis: Analysis; elapsed: number })
 
 function notice(message: string, error = false) {
   text('notice', message); $('notice').hidden = !message; $('notice').classList.toggle('error', error);
+  if (!message) button('fix-viewport').hidden = true;
 }
 function status(value: string, source?: string) {
   text('session-state', value); if (source) text('source-label', source);
   $('status-dot').classList.toggle('active', running && !paused);
   button('pause').disabled = !running; button('stop').disabled = !running && !capture.active && !replaying;
   button('start').disabled = running || replaying; button('pause').textContent = paused ? 'Resume' : 'Pause';
+  button('edit-viewport').disabled = replaying;
+  button('edit-viewport-settings').disabled = replaying;
 }
 function diagnostics() {
   const values = { 'Engine': ready ? 'Local WASM · single-thread worker' : 'Not initialized', 'Asset version': assetVersion,
@@ -96,6 +104,7 @@ function request(message: Record<string, unknown>, transfer: Transferable[] = []
 
 function cancelMode() {
   generation++; running = false; paused = false; replaying = false; clearTimeout(timer);
+  cropEditor.cancel(); needsViewport = false; button('fix-viewport').hidden = true;
   capture.stop(); speaker.cancel(); button('cancel-replay').disabled = true;
   for (const key of ['demo', 'demo-replay', 'replay-import']) button(key).disabled = false;
   // A worker cannot cancel synchronous WASM inference. Terminate an in-flight instance
@@ -114,7 +123,61 @@ function resetEngine() {
   renderSnapshot(latest);
 }
 
-async function start() {
+async function autoCropSource(current: number): Promise<boolean> {
+  if (!settings.autoCrop || manualViewport || !capture.active) return false;
+  const size = { width: capture.video.videoWidth, height: capture.video.videoHeight };
+  if (!size.width || !size.height) return false;
+  try {
+    const crop = await sampleBorders(capture.video, size);
+    if (current !== generation || !capture.active) return false;
+    if (crop) { settings.crop = crop; automaticViewport = true; }
+    else if (automaticViewport && Math.abs(size.width / size.height - 16 / 9) <= .06) {
+      settings.crop = { x: 0, y: 0, w: 1, h: 1 }; automaticViewport = false;
+    } else return false;
+    saveSettings(settings); populateSettings(); return true;
+  } catch { return false; } // A resizing/muted source can be calibrated manually instead.
+}
+
+async function editLiveViewport(required = needsViewport, invalidate = true): Promise<boolean> {
+  if (!capture.active) { void start(true); return false; }
+  if (cropEditor.active) return false;
+  if (invalidate) generation++;
+  const current = generation, wasPaused = paused;
+  if (running) paused = true;
+  clearTimeout(timer); speaker.cancel();
+  needsViewport = required; button('fix-viewport').hidden = !required;
+  status('Adjusting game viewport', 'Drag the frame around the game; analysis is paused.');
+  const crop = await cropEditor.open({ image: capture.video, width: capture.video.videoWidth, height: capture.video.videoHeight,
+    initial: settings.crop, description: 'This is the full shared source, updating live. Select only the game video and keep its HUD inside the frame.',
+    applyLabel: required ? (running ? 'Apply and resume coaching' : 'Apply and start coaching') : 'Apply viewport' });
+  if (current !== generation || !capture.active) return false;
+  if (!crop) {
+    if (running) {
+      paused = required || wasPaused;
+      status(paused ? 'Coaching paused' : 'Coaching live');
+      if (!paused) schedule(0);
+    }
+    if (required) { notice('Select the game area to continue coaching.', true); button('fix-viewport').hidden = false; }
+    return false;
+  }
+  settings.crop = crop; manualViewport = true; automaticViewport = false; needsViewport = false;
+  sourceGeometry = `${capture.video.videoWidth}x${capture.video.videoHeight}`;
+  saveSettings(settings); populateSettings(); button('fix-viewport').hidden = true;
+  resetEngine();
+  if (running) {
+    paused = required ? false : wasPaused;
+    if (!paused && !ready) {
+      status('Restarting analysis…');
+      try { await initialize(); } catch { paused = true; status('Analysis paused'); return true; }
+      if (current !== generation || !capture.active) return true;
+    }
+    status(paused ? 'Coaching paused' : 'Coaching live'); if (!paused) schedule(0);
+  }
+  notice('Game viewport applied. Only the selected area will be analyzed.');
+  return true;
+}
+
+async function start(forceEditor = false) {
   if (running || replaying) return;
   generation++; const current = generation; notice('');
   // Screen permission is requested before any asynchronous model work.
@@ -123,6 +186,17 @@ async function start() {
   try {
     const source = await sharing;
     if (current !== generation) { capture.stop(); return; }
+    manualViewport = false; automaticViewport = false; sourceGeometry = `${source.width}x${source.height}`;
+    status('Checking capture borders…', source.label);
+    await autoCropSource(current);
+    if (current !== generation) return;
+    let invalid = false;
+    try { viewport(settings.crop, source); } catch (e) { if (e instanceof ViewportError) invalid = true; else throw e; }
+    if (forceEditor || invalid) {
+      const applied = await editLiveViewport(true, false);
+      if (current !== generation) return;
+      if (!applied) { cancelMode(); notice('Capture stopped. Select a source again when you are ready to calibrate.'); return; }
+    }
     status('Loading analysis…', source.label); await initialize();
     if (current !== generation) { capture.stop(); return; }
     resetEngine(); running = true; paused = false;
@@ -144,6 +218,12 @@ async function tick() {
   if (paused || busy || pending) { schedule(); return; }
   busy = true; const current = generation; const begin = performance.now();
   try {
+    const geometry = `${capture.video.videoWidth}x${capture.video.videoHeight}`;
+    if (geometry !== sourceGeometry && capture.video.videoWidth && capture.video.videoHeight) {
+      sourceGeometry = geometry;
+      if (await autoCropSource(current)) resetEngine();
+      if (current !== generation) return;
+    }
     const pixels = await capture.frame(settings.crop, settings.record);
     const timestamp = pixels.timestamp; const recording = settings.record; const preview = pixels.preview;
     const result = await analyzePixels(pixels);
@@ -157,7 +237,11 @@ async function tick() {
       catch (e) { settings.record = false; input('record').checked = false; saveSettings(settings); notice(`Local recording paused: ${String(e)}. Coaching continues.`, true); }
     }
   } catch (e) {
-    if (current === generation) { speaker.cancel(); notice(e instanceof Error ? e.message : String(e), true); status('Waiting for a readable frame'); }
+    if (current === generation) {
+      speaker.cancel(); notice(e instanceof Error ? e.message : String(e), true);
+      if (e instanceof ViewportError) { needsViewport = true; await editLiveViewport(true); }
+      else status('Waiting for a readable frame');
+    }
   } finally {
     busy = false;
     if (current === generation) schedule(Math.max(200, settings.interval * 1000 - (performance.now() - begin)));
@@ -262,7 +346,7 @@ async function loadNames() {
 
 async function beginReplay() {
   if (replaying) throw new Error('A replay is already running');
-  cancelMode(); generation++; replaying = true; button('cancel-replay').disabled = false;
+  cancelMode(); notice(''); generation++; replaying = true; button('cancel-replay').disabled = false;
   for (const key of ['demo', 'demo-replay', 'replay-import']) button(key).disabled = true;
   button('start').disabled = true; text('feed-badge', 'REPLAY · SILENT'); status('Replay lab', 'Local playback · speech is disabled');
   await initialize(); if (!replaying) throw new Error('Replay canceled');
@@ -306,6 +390,7 @@ async function importFiles() {
   if (!files.length) { notice('Choose screenshots or a recording to analyze.'); return; }
   if (files.length > 120) { notice('Choose at most 120 files at a time.', true); return; }
   let current = -1;
+  let importCrop = { ...settings.crop };
   try {
     current = await beginReplay();
     for (const file of files.sort((a, b) => a.name.localeCompare(b.name))) {
@@ -313,7 +398,9 @@ async function importFiles() {
       const importLimit = /\.json$/i.test(file.name) ? 80 : 20;
       if (file.size > importLimit * 1024 * 1024) throw new Error(`${file.name} exceeds the ${importLimit} MB import limit`);
       if (/\.(jpg|jpeg|png)$/i.test(file.name)) {
-        const p = await capture.image(file, settings.crop);
+        const calibrated = await replayImage(file, importCrop);
+        if (!calibrated || current !== generation) return;
+        const { pixels: p, crop } = calibrated; importCrop = crop;
         // Imported numbered screenshots are sampled at 5-second virtual spacing.
         p.timestamp = files.indexOf(file) * 5000;
         const r = await analyzePixels(p); if (current !== generation) break;
@@ -341,6 +428,22 @@ async function importFiles() {
     if (current === generation) text('replay-status', 'Replay complete. Select a result to inspect it.');
   } catch (e) { if (replaying) notice(e instanceof Error ? e.message : String(e), true); }
   finally { if (current === generation || (current === -1 && replaying)) endReplay(); }
+}
+
+async function replayImage(file: Blob, crop: Crop): Promise<{ pixels: Pixels; crop: Crop } | undefined> {
+  try { return { pixels: await capture.image(file, crop), crop }; }
+  catch (e) {
+    if (!(e instanceof ViewportError)) throw e;
+    const bitmap = await createImageBitmap(file);
+    try {
+      const detected = settings.autoCrop ? await sampleBorders(bitmap, { width: bitmap.width, height: bitmap.height }) : undefined;
+      const selected = detected || await cropEditor.open({ image: bitmap, width: bitmap.width, height: bitmap.height,
+        initial: crop, description: 'Select the game inside this screenshot. This crop applies to this import, without changing your live-capture preferences.',
+        applyLabel: 'Apply to screenshots' });
+      if (!selected) { cancelMode(); text('replay-status', 'Replay canceled.'); return; }
+      return { pixels: await capture.image(file, selected), crop: selected };
+    } finally { bitmap.close(); }
+  }
 }
 
 async function recordings() {
@@ -379,8 +482,9 @@ function voices() {
 function populateSettings() {
   voices(); input('rate').value = String(settings.rate); input('volume').value = String(settings.volume);
   input('interval').value = String(settings.interval); input('record').checked = settings.record;
+  input('auto-crop').checked = settings.autoCrop;
   for (const key of Object.keys(settings.options) as Array<keyof Options>) input(`opt-${key}`).checked = settings.options[key];
-  for (const key of ['x', 'y', 'w', 'h'] as const) input(`crop-${key}`).value = String(Math.round(settings.crop[key] * 1000) / 10);
+  for (const key of ['x', 'y', 'w', 'h'] as const) input(`crop-${key}`).value = String(Math.round(settings.crop[key] * 1000000) / 10000);
   text('rate-value', `${settings.rate.toFixed(1)}×`); text('volume-value', `${Math.round(settings.volume * 100)}%`);
   button('mute').textContent = settings.muted ? 'Unmute voice' : 'Mute voice'; button('mute').setAttribute('aria-pressed', String(settings.muted));
 }
@@ -388,9 +492,11 @@ function saveForm() {
   const next = structuredClone(settings);
   next.voice = $<HTMLSelectElement>('voice').value; next.rate = Number(input('rate').value); next.volume = Number(input('volume').value);
   next.interval = Number(input('interval').value); next.record = input('record').checked;
+  next.autoCrop = input('auto-crop').checked;
   for (const key of Object.keys(next.options) as Array<keyof Options>) next.options[key] = input(`opt-${key}`).checked;
   for (const key of ['x', 'y', 'w', 'h'] as const) next.crop[key] = Number(input(`crop-${key}`).value) / 100;
   if (next.crop.x + next.crop.w > 1.001 || next.crop.y + next.crop.h > 1.001) { notice('Calibration extends beyond the captured source. Offset + size must be no more than 100%.', true); return; }
+  if (JSON.stringify(next.crop) !== JSON.stringify(settings.crop)) { manualViewport = true; automaticViewport = false; }
   settings = normalize(next); saveSettings(settings); speaker.configure(settings); worker?.postMessage({ type: 'configure', options: settings.options });
   populateSettings(); diagnostics(); notice('Settings saved on this device.');
 }
@@ -403,6 +509,7 @@ function route() {
 }
 
 button('start').onclick = () => { void start(); };
+for (const key of ['edit-viewport', 'fix-viewport']) button(key).onclick = () => { void editLiveViewport(); };
 button('stop').onclick = () => { cancelMode(); status('Capture stopped', 'No further frames are being captured.'); };
 button('pause').onclick = async () => {
   if (!running) return;
@@ -453,6 +560,16 @@ setInterval(() => {
     speaker.cancel(); text('session-state', 'Analysis delayed — check capture');
   }
 }, 5000);
+// Keep the existing percentage inputs as an advanced option; the visual editor is primary.
+const calibration = input('crop-x').closest('fieldset')!;
+const advanced = document.createElement('details'), advancedTitle = document.createElement('summary');
+advancedTitle.textContent = 'Advanced percentage controls'; advanced.append(advancedTitle);
+advanced.append(...Array.from(calibration.children).filter(el => el.tagName !== 'LEGEND'));
+calibration.append(advanced);
+calibration.querySelector('legend')!.after(($<HTMLTemplateElement>('visual-calibration-controls').content.cloneNode(true)));
+for (const key of ['x', 'y', 'w', 'h']) { input(`crop-${key}`).min = key === 'x' || key === 'y' ? '0' : '0.01'; input(`crop-${key}`).max = '100'; input(`crop-${key}`).step = 'any'; }
+// Settings editor controls were cloned after event setup.
+button('edit-viewport-settings').onclick = () => { void editLiveViewport(); };
 populateSettings(); renderSnapshot(latest); diagnostics(); route(); void loadNames();
 if (import.meta.env.PROD && 'serviceWorker' in navigator) {
   void navigator.serviceWorker.register(`${base}sw.js`, { scope: new URL(import.meta.env.BASE_URL, location.origin).pathname })

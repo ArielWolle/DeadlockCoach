@@ -24,6 +24,25 @@ Users may choose non-local installed voices; these may use the browser/vendor's 
 
 The desktop adapters remain intact; this does not embed a desktop Rust server into a web page.
 
+## Viewport calibration and black borders
+
+`crop.ts` keeps source-pixel geometry separate from display CSS pixels and normalized saved
+coordinates. The visual `<dialog>` displays a continuously updating full-source canvas, an
+editable 16:9 frame and a clean cropped preview. Pointer capture supports mouse/touch handles;
+keyboard arrows and explicit move/size buttons provide non-drag alternatives. Focus stays in
+the native modal and Escape cancels. Source resizing updates the preview and selection.
+
+`borders.ts` scans contiguous dark rows/columns from the four edges, allows sparse player
+controls in bars, requires visible interior content and a plausible 16:9 result, and checks
+agreement across three samples. Blank/dark frames and unstable candidates are rejected.
+Automatic cropping runs at sharing start and source-size changes unless a manual edit has
+overridden that session. An explicit Auto-detect action is also available in the editor.
+This is heuristic border detection, not universal game-window/HUD localization.
+
+Invalid live viewports pause analysis and open the editor. Applying stores precise coordinates,
+resets recognition state and resumes using the same capture stream; cancel restores the prior
+selection or leaves an invalid source paused. Screenshot calibration is local to that import.
+
 ## Scheduling and cancellation
 
 One frame job at a time; no queued frames. Processing longer than the configured interval

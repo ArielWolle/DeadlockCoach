@@ -10,6 +10,8 @@ worker using the same Rust vision and rule engine as the native app.
 
 - Capture, HUD OCR, inventory/scoreboard recognition, minimap estimates and coaching.
 - Browser speech, voice/category settings, mute, pause and stop controls.
+- Live visual viewport editor with mouse/touch resizing, keyboard controls and cropped preview.
+- Automatic black top/bottom/side border detection, with manual adjustment for ambiguous sources.
 - Screenshot and JSONL replay through the actual WASM engine.
 - Searchable versioned knowledge base with original sources and uncertainty labels.
 - Bounded opt-in local recording with export/import/deletion.
@@ -75,6 +77,23 @@ statistics are correlational.
 
 Screen sharing always requires an explicit browser selection. Closing the app, stopping sharing,
 or sleeping the tab interrupts coaching. A PWA installation cannot bypass these rules.
+
+### Frame your game or Twitch video
+
+Black borders are checked when sharing starts and when the source size changes. If a stable
+16:9 content area is found, it is cropped automatically. Otherwise an incompatible viewport
+opens the visual editor instead of repeatedly showing an aspect-ratio error.
+
+Use **Adjust viewport** on Coach or **Open visual crop editor** in Settings at any time:
+drag the frame to move it, drag a corner to resize it, and check the cropped preview. The
+selection stays 16:9. **Auto-detect borders**, **Fit 16:9**, **Center**, arrow-key controls,
+click-to-move controls, reset, cancel and apply are available. Analysis/speech pause during
+editing; applying reuses the active share. Manual selection takes priority for that session.
+Percentage inputs remain under **Advanced percentage controls**.
+
+Automatic cropping is conservative: a dark/blank scene or inconsistent edges are not treated
+as confirmed borders. Use the editor when detection is uncertain or overlays obscure the edges.
+Screenshot imports also recover from an incompatible viewport without altering live preferences.
 
 ## Native application
 
