@@ -16,6 +16,7 @@
 | Repeated text detection on tiny single-line HUD fields | Added direct line recognition for calibrated team totals. Clock/name experiments degraded reads, so those retained full detection. Native and browser regressions pass |
 | Letterboxed captures produced a repeated 16:9 error with percentage-only recovery | Added live visual viewport editing, typed error recovery, conservative automatic four-edge border detection and a manual override |
 | Reusable UI matching was coupled to Deadlock interpretation | Extracted `coach-perception`, profile DAGs, replaceable OCR/custom stages, a JSONL CLI and browser Matching lab. The old game scanner remains a registered adapter |
+| GitHub Actions clean checkout lacked full-frame test images | The unanchored `frames/` ignore rule also excluded `samples/frames`. Anchored it to `/frames/`, added the eight fixtures to Git, and verified tests/asset generation from a tracked-files-only copy |
 
 ## External blockers / not claimed complete
 
@@ -44,11 +45,10 @@
    of an available camp. That game-data rule needs a separate correction/verification.
    Stream diagnostics also showed a 1080p clock digit misread after preprocessing (33:29
    read as 33:20); auto-cropping does not establish exact OCR correctness on every source.
-6. **Hosted Actions run status**: workflow syntax/expressions are validated with actionlint,
-   and their build/test commands are exercised locally. This environment has git but no `gh`
-   CLI (the owner said not to install it), so hosted private-repository checks cannot be inspected
-   here. After push, use the repository Actions tab to verify runner execution. This is distinct
-   from the Pages activation blocker.
+6. **Hosted Actions inspection**: this environment has git but no `gh` CLI (the owner said
+   not to install it). The signed-in browser can inspect private job logs when its relay is
+   connected; local command results alone are not confirmation of hosted runner success.
+   This is distinct from the Pages activation blocker.
 
 ## Validation procedure
 

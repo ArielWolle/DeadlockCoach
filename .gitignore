@@ -5,7 +5,8 @@ node_modules
 .env
 snap.jpg
 remote.jpg
-frames/
+# Ignore local capture/debug output, while keeping samples/frames regression fixtures versioned.
+/frames/
 sessions/
 tag.txt
 brain.log

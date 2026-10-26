@@ -58,3 +58,16 @@ coverage. This check used screenshot replay and does not satisfy the live-captur
 See [blockers.md](blockers.md). Pages is gated off, hosted CI status needs verification in GitHub,
 and live OS capture/headphones/background/game performance require a real gaming session.
 No whole-site WCAG conformance claim is made from automated checks and keyboard smoke tests alone.
+
+## Clean-checkout CI regression
+
+Run `40344319180`, job `121647058674`, failed because `samples/frames` was missing from
+the checkout: `.gitignore` used `frames/`, which ignored nested fixture directories too.
+The fixtures had existed only locally. The rule is now anchored to `/frames/`, and the
+eight saved regression images are versioned with a fixture inventory.
+
+Verification used `git checkout-index --all` into a new temporary source directory after
+staging the fix, so ignored local files could not hide missing inputs. The exact portable
+Rust CI test command passed **47 tests**, including all six full-frame tests. `npm ci` and
+the asset build also passed from that clean copy. The static website's fixture allow-list
+is unchanged.
