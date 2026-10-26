@@ -149,6 +149,19 @@ fn variants_center(img: &image::DynamicImage) -> Vec<Vec<f32>> {
 }
 
 impl ColorLibrary {
+    /// In-memory equivalent of the native directory loaders. Reject corrupt assets instead
+    /// of silently starting with an incomplete library in the browser.
+    pub fn from_images(images: Vec<(String, Vec<u8>)>, centered: bool, top_square: bool) -> Result<Self, String> {
+        let mut templates = Vec::with_capacity(images.len());
+        for (name, bytes) in images {
+            let img = image::load_from_memory(&bytes).map_err(|e| format!("{name}: {e}"))?;
+            let vectors = if centered { variants_center(&img) } else { variants(&img, top_square) };
+            templates.push((name, vectors));
+        }
+        if templates.is_empty() { return Err("template library is empty".into()); }
+        Ok(Self { templates })
+    }
+
     /// Like `load` but each template gets centered zoom variants (for inventory/shop item icons).
     pub fn load_centered(dir: &Path) -> std::io::Result<ColorLibrary> {
         let mut templates = vec![];

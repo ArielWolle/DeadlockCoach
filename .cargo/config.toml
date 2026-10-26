@@ -1,0 +1,4 @@
+[target.wasm32-unknown-unknown]
+# Chrome/Edge support WASM SIMD. Keep execution single-threaded: no SharedArrayBuffer,
+# COOP/COEP, special response headers, or backend required.
+rustflags = ["-C", "target-feature=+simd128"]

@@ -64,17 +64,25 @@ impl Scanner {
     /// `root` is the repo root containing data/.
     pub fn load(root: &Path) -> Result<Scanner, String> {
         let e = |x: std::io::Error| x.to_string();
-        Ok(Scanner {
-            ocr: Reader::load(&root.join("data/models"))?,
-            items: ColorLibrary::load_centered(&root.join("data/icons/shop")).map_err(e)?,
-            heroes: ColorLibrary::load(&root.join("data/icons/h_card"), true).map_err(e)?,
-            heroes_crit: ColorLibrary::load(&root.join("data/icons/h_crit"), true).map_err(e)?,
+        Ok(Self::from_resources(
+            Reader::load(&root.join("data/models"))?,
+            ColorLibrary::load_centered(&root.join("data/icons/shop")).map_err(e)?,
+            ColorLibrary::load(&root.join("data/icons/h_card"), true).map_err(e)?,
+            ColorLibrary::load(&root.join("data/icons/h_crit"), true).map_err(e)?,
+            load_hero_names(root),
+        ))
+    }
+
+    pub fn from_resources(ocr: Reader, items: ColorLibrary, heroes: ColorLibrary,
+        heroes_crit: ColorLibrary, hero_names: Vec<(String, String)>) -> Self {
+        Scanner {
+            ocr, items, heroes, heroes_crit,
             tracker: parse::Tracker::default(),
             sums: vec![HashMap::new(); 12],
             frames: 0,
             last_totals: (None, None),
             pending_totals: (None, None),
-            hero_names: load_hero_names(root),
+            hero_names,
             match_id: None,
             pending_match: None,
             virt_ms: 0,
@@ -82,7 +90,7 @@ impl Scanner {
             board_history: vec![],
             map_analyzer: crate::minimap::Analyzer::new(),
             map_tracker: crate::minimap::Tracker::default(),
-        })
+        }
     }
 
     /// Reset per-match memory (call when the clock goes back to the start).
@@ -161,8 +169,18 @@ impl Scanner {
     /// Native-resolution, lossless minimap when supplied by an updated Agent;
     /// otherwise fall back to the compressed full-frame crop (legacy recordings).
     pub fn scan_with_minimap(&mut self, jpeg: &[u8], minimap_png: &[u8], now_ms: u64) -> GameSnapshot {
-        use crate::screen::{self, Screen};
         let Ok(img) = image::load_from_memory(jpeg) else { return GameSnapshot::default() };
+        let map = image::load_from_memory(minimap_png).ok()
+            .filter(|i| i.width() >= 100 && i.height() >= 100
+                && (i.width() as f32 / i.height() as f32 - 335.0 / 350.0).abs() < 0.05)
+            .map(|i| i.to_rgb8());
+        self.scan_image(&img, map.as_ref(), now_ms)
+    }
+
+    /// Pixel entry point shared with WebAssembly. Canvas supplies RGBA directly, so no
+    /// lossy JPEG roundtrip is required. Main HUD stays at calibrated 16:9 coordinates.
+    pub fn scan_image(&mut self, img: &image::DynamicImage, minimap: Option<&image::RgbImage>, now_ms: u64) -> GameSnapshot {
+        use crate::screen::{self, Screen};
         let (scr, raw_clock) = screen::classify(&self.ocr, &img, &self.hero_names);
         // Only HUD screens yield data; menus, shop and loading yield an empty snapshot.
         if !scr.has_hud() { return GameSnapshot { screen: Some(format!("{scr:?}")), ..Default::default() }; }
@@ -186,11 +204,11 @@ impl Scanner {
         let mut snap = GameSnapshot { match_id: self.match_id, screen: Some(format!("{scr:?}")), ..Default::default() };
         snap.game_clock_secs = self.tracker.accept_clock(raw_clock, now_ms);
 
-        let map_crop = image::load_from_memory(minimap_png).ok()
-            .filter(|i| i.width() >= 100 && i.height() >= 100
-                && (i.width() as f32 / i.height() as f32 - 335.0 / 350.0).abs() < 0.05)
-            .map(|i| i.to_rgb8()).unwrap_or_else(|| crate::minimap::crop_from_frame(&img));
-        let mut map = self.map_analyzer.analyze(&map_crop);
+        let fallback;
+        let map_crop = match minimap { Some(m) => m, None => {
+            fallback = crate::minimap::crop_from_frame(img); &fallback
+        }};
+        let mut map = self.map_analyzer.analyze(map_crop);
         // Personal carry has a literal HUD instruction. Unlike proximity to a hero ring,
         // this can establish that YOU carry the urn, except while spectating.
         if scr != Screen::Dead && raw_clock.unwrap_or(0) >= 600 && map.urn_pos.is_some() {
@@ -265,8 +283,12 @@ impl Scanner {
             for it in &r.items { if !snap.enemy_items.contains(it) { snap.enemy_items.push(it.clone()); } }
         }
 
-        let a = self.text(&img, hud::ALLY_TOTAL).and_then(|s| hud::pick_total(&hud::team_total_candidates(&s), self.last_totals.0));
-        let e = self.text(&img, hud::ENEMY_TOTAL).and_then(|s| hud::pick_total(&hud::team_total_candidates(&s), self.last_totals.1));
+        // These fields are tightly calibrated single lines. Direct recognition avoids
+        // two full detection-model passes; multiline/uncertain fields keep full detection.
+        let a = self.ocr.read_line(&hud::crop(img, hud::ALLY_TOTAL)).ok()
+            .and_then(|s| hud::pick_total(&hud::team_total_candidates(&s), self.last_totals.0));
+        let e = self.ocr.read_line(&hud::crop(img, hud::ENEMY_TOTAL)).ok()
+            .and_then(|s| hud::pick_total(&hud::team_total_candidates(&s), self.last_totals.1));
         snap.ally_networth = plausible(&mut self.last_totals.0, &mut self.pending_totals.0, a);
         snap.enemy_networth = plausible(&mut self.last_totals.1, &mut self.pending_totals.1, e);
         snap

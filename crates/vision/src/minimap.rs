@@ -167,21 +167,24 @@ fn rings(mask: &[bool], w: u32, h: u32, scale: f32) -> Vec<(f32, f32)> {
     let mut candidates = vec![];
     let margin = (12.0 * scale).ceil() as i32;
     let step = scale.round().max(1.0) as usize;
+    // Precompute circle samples and dilate once. The old inner loop evaluated millions
+    // of sin/cos calls and 3×3 neighbourhood scans per frame, especially expensive in WASM.
+    let supported = dilate(mask, w, h, 1);
+    let circles: Vec<Vec<(i32, i32)>> = [8.0, 9.0, 10.0, 11.0].iter().map(|radius| {
+        (0..32).map(|i| {
+            let a = i as f32 * std::f32::consts::TAU / 32.0;
+            ((a.cos() * radius * scale).round() as i32, (a.sin() * radius * scale).round() as i32)
+        }).collect()
+    }).collect();
     for y in (margin..h as i32 - margin).step_by(step) {
         for x in (margin..w as i32 - margin).step_by(step) {
             let mut best = 0;
-            for radius in [8.0, 9.0, 10.0, 11.0] {
+            for circle in &circles {
                 let mut hits = 0;
-                for i in 0..32 {
-                    let a = i as f32 * std::f32::consts::TAU / 32.0;
-                    let (xx, yy) = (x + (a.cos() * radius * scale).round() as i32,
-                                    y + (a.sin() * radius * scale).round() as i32);
-                    let supported = (-1..=1).any(|dy| (-1..=1).any(|dx| {
-                        let (px, py) = (xx + dx, yy + dy);
-                        px >= 0 && py >= 0 && px < w as i32 && py < h as i32
-                            && mask[(py as u32 * w + px as u32) as usize]
-                    }));
-                    if supported { hits += 1; }
+                for (i, (dx, dy)) in circle.iter().enumerate() {
+                    let (xx, yy) = (x + dx, y + dy);
+                    if supported[(yy as u32 * w + xx as u32) as usize] { hits += 1; }
+                    if hits + 31 - (i as i32) < 27 { break; }
                 }
                 best = best.max(hits);
             }

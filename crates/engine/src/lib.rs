@@ -8,7 +8,7 @@ pub mod map_rules;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Priority { Low, Normal, High }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Cue {
     /// Dedup key: the same key is not repeated within its cooldown.
     pub key: String,
