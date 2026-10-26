@@ -1,0 +1,49 @@
+name: Publish website (opt-in)
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: github-pages
+  cancel-in-progress: false
+jobs:
+  hosting-status:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Explain hosting gate
+        env:
+          ENABLED: ${{ vars.PAGES_ENABLED }}
+        run: |
+          if [ "$ENABLED" != "true" ]; then
+            echo "Pages deployment is disabled. CI still builds and uploads web-dist."
+            echo "Enable Pages with GitHub Actions and set PAGES_ENABLED=true when hosting is available."
+          else
+            echo "Pages is opted in; deployment is allowed only from main."
+          fi
+  build:
+    if: vars.PAGES_ENABLED == 'true' && github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/web-build.yml
+  deploy:
+    if: vars.PAGES_ENABLED == 'true' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: web-dist
+          path: web-dist
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: web-dist
+      - uses: actions/deploy-pages@v4
+        id: deployment

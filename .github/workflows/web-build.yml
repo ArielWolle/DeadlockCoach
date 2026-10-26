@@ -1,0 +1,61 @@
+name: Browser build and verification
+on:
+  workflow_call:
+permissions:
+  contents: read
+jobs:
+  web:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      BASE_PATH: /DeadlockCoach/
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.94.1'
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: browser-simd-v1
+      - name: Native portable regression tests
+        working-directory: .
+        run: cargo test --locked --release -p coach-core -p coach-engine -p coach-vision -p coach-web
+      - name: Install web dependencies
+        run: npm ci
+      - name: Install pinned WASM build tool
+        run: cargo install wasm-pack --locked --version 0.13.1
+      - name: Build WASM and prepare versioned assets
+        run: npm run prepare:app
+      - name: Unit tests
+        run: npm run test:unit
+      - name: Production build and artifact integrity checks
+        run: npm run build
+      - name: Install browser
+        run: npx playwright install --with-deps chromium
+      - name: Browser parity, capture lifecycle, offline and accessibility tests
+        run: npm test
+      - name: Upload static website
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-dist
+          path: web/dist
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload browser test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-test-evidence
+          path: |
+            web/playwright-report
+            web/test-results
+          retention-days: 7

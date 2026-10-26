@@ -1,0 +1,11 @@
+{
+  "name": "Deadlock Coach",
+  "short_name": "Deadlock Coach",
+  "description": "Local screen analysis and spoken coaching for Deadlock.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#101619",
+  "theme_color": "#101619",
+  "icons": [{ "src": "./favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}

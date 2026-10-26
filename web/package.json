@@ -1,0 +1,25 @@
+{
+  "name": "deadlock-coach-web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "engines": { "node": ">=22.12.0" },
+  "scripts": {
+    "assets": "node scripts/assets.mjs",
+    "wasm": "wasm-pack build ../crates/web --target web --release --out-dir ../../web/wasm --out-name coach_web",
+    "prepare:app": "npm run assets && npm run wasm",
+    "dev": "vite --host 127.0.0.1",
+    "check": "tsc --noEmit",
+    "build": "npm run assets && npm run check && vite build && node scripts/check-dist.mjs",
+    "preview": "vite preview --host 127.0.0.1",
+    "test": "playwright test",
+    "test:unit": "node --experimental-strip-types --test tests/unit.test.ts"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "^4.10.0",
+    "@playwright/test": "^1.55.0",
+    "@types/node": "^22.0.0",
+    "typescript": "~5.9.2",
+    "vite": "^7.1.0"
+  }
+}

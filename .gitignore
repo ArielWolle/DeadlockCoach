@@ -10,3 +10,8 @@ sessions/
 tag.txt
 brain.log
 brain.err
+/web/dist/
+/web/wasm/
+/web/public/assets/
+/web/test-results/
+/web/playwright-report/

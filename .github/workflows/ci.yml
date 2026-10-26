@@ -1,0 +1,39 @@
+name: DeadlockCoach CI
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  workflow-lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+          cache: false
+      - name: Validate Actions workflow syntax and expressions
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.11 -color
+  browser:
+    uses: ./.github/workflows/web-build.yml
+  native-windows:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.94.1'
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: windows-native-v1
+      - name: Native workspace tests (including desktop compatibility)
+        run: cargo test --locked --release --workspace
+      - name: Native application builds
+        run: cargo build --locked --release -p coach-agent -p coach-brain -p deadlock-coach
