@@ -13,6 +13,12 @@ Users may choose non-local installed voices; these may use the browser/vendor's 
 
 ## Shared Rust
 
+Reusable matching, OCR and graph execution now live in `coach-perception`, independently of
+Deadlock state. `coach-vision` retains Deadlock interpretation and re-exports the matching/OCR
+APIs for native compatibility. The browser registers `deadlock.scan` as a custom graph stage;
+generic profiles use the same runtime without the game's assets, snapshot schema or advice.
+See [profile authoring and extension points](../perception/README.md).
+
 - `Reader::from_bytes` loads the same RTen detection/recognition models as native builds.
 - `Reader::read_line` avoids full text detection for tightly calibrated team-total fields;
   clock, hero names and multiline regions retain detector-backed OCR for accuracy.

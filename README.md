@@ -2,6 +2,18 @@
 
 A local-first Deadlock coach: screenshot → local OCR/vision → structured match state → rules → spoken cues.
 
+## Flexible UI-matching engine
+
+**Matching lab** now exposes a game-independent perception pipeline: crop/anchor → preprocess
+→ OCR/template/color detector → parse → gate → confirm → named observations. Profiles are
+portable JSON with embedded template assets, visual region authoring and per-stage diagnostics.
+Generic profiles support arbitrary aspect ratios and run without Deadlock-specific advice;
+non-OCR profiles also avoid loading neural models. Deadlock remains a specialized adapter.
+
+The reusable `coach-perception` Rust crate runs natively and in WASM. Its `coach-perceive`
+CLI accepts JSONL image paths/base64 and emits JSONL observations; the browser also publishes
+`coach:perception` events and exports observations. See [profile authoring and extension points](docs/perception/README.md).
+
 ## Browser app (no application backend)
 
 Open the app **on the gaming PC**, click **Start coaching**, select a 16:9 Deadlock window,
@@ -40,7 +52,7 @@ Changing Rust code requires rebuilding WASM. Changing data/docs requires rebuild
 ### Tests
 
 ```powershell
-cargo test --locked --release -p coach-core -p coach-engine -p coach-vision -p coach-web
+cargo test --locked --release -p coach-core -p coach-engine -p coach-perception -p coach-vision -p coach-web
 npm --prefix web run test:unit
 npm --prefix web exec playwright install chromium
 npm --prefix web test
@@ -69,11 +81,11 @@ processed on a GitHub runner or server.
 
 ## Accuracy and supported environments
 
-This is a calibrated, rule-based prototype. Browser migration preserves the native detection
-limits: 16:9 HUD coordinates, approximate small scoreboard icons and wave markers, and
-experimental enemy urn possession. Unknown is not interpreted as safe or absent. Camp routes,
-availability and arbitrary HUD layouts are not fully inferred. Source data is dated and meta
-statistics are correlational.
+The shipped Deadlock adapter is a calibrated, rule-based prototype: it uses 16:9 HUD coordinates,
+approximate small scoreboard icons/wave markers and experimental enemy urn possession. Generic
+profiles define their own regions, aspect ratio and evidence checks. Unknown is not interpreted
+as safe or absent. Camp routes/availability and arbitrary layouts are not automatically inferred.
+Source data is dated and meta statistics are correlational.
 
 Screen sharing always requires an explicit browser selection. Closing the app, stopping sharing,
 or sleeping the tab interrupts coaching. A PWA installation cannot bypass these rules.
@@ -105,6 +117,7 @@ remain available for the original remote-Brain workflow.
 ## Documentation
 
 - [Migration architecture](docs/web-migration/architecture.md)
+- [Game profiles and perception pipelines](docs/perception/README.md)
 - [Blockers and validation](docs/web-migration/blockers.md)
 - [Local validation results](docs/web-migration/validation.md)
 - [Knowledge base](docs/README.md)

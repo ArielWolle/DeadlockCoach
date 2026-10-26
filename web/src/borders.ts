@@ -4,7 +4,7 @@ interface Pixels { width: number; height: number; data: ArrayLike<number> }
 
 /** Conservative edge-only letterbox/pillarbox detection. A dark or ambiguous frame is
  * not evidence of borders: require a visible content area and an approximately 16:9 result. */
-export function detectBorders(pixels: Pixels, source: Size): Rect | undefined {
+export function detectBorders(pixels: Pixels, source: Size, aspect: number | null = ASPECT): Rect | undefined {
   const { width: w, height: h, data } = pixels;
   if (w < 32 || h < 18 || data.length !== w * h * 4 || !source.width || !source.height) return;
   const black = (x: number, y: number) => {
@@ -38,13 +38,17 @@ export function detectBorders(pixels: Pixels, source: Size): Rect | undefined {
   if (visible / ((right - left) * (bottom - top)) < .12) return;
   const x = left * source.width / w, y = top * source.height / h;
   const contentW = (right - left) * source.width / w, contentH = (bottom - top) * source.height / h;
-  if (Math.abs(contentW / contentH - ASPECT) > .04) return;
+  if (aspect !== null && Math.abs(contentW / contentH - aspect) > .04) return;
+  if (aspect === null) {
+    const rect = { x, y, w: contentW, h: contentH };
+    try { viewport(normalized(rect, source), source, null); return rect; } catch { return; }
+  }
   // Snap to exact 16:9 while including the detected content rather than clipping HUD edges.
-  let width = Math.max(contentW, contentH * ASPECT), height = width / ASPECT;
+  let width = Math.max(contentW, contentH * aspect), height = width / aspect;
   const scale = Math.min(1, source.width / width, source.height / height); width *= scale; height *= scale;
   const rect = { x: Math.max(0, Math.min(source.width - width, x + contentW / 2 - width / 2)),
     y: Math.max(0, Math.min(source.height - height, y + contentH / 2 - height / 2)), w: width, h: height };
-  try { viewport(normalized(rect, source), source); return rect; } catch { return; }
+  try { viewport(normalized(rect, source), source, aspect); return rect; } catch { return; }
 }
 
 export function consistentBorders(rects: Array<Rect | undefined>, size: Size): Crop | undefined {
@@ -59,7 +63,7 @@ export function consistentBorders(rects: Array<Rect | undefined>, size: Size): C
 }
 
 /** Sample a live source over three frames; never rely on one dark gameplay frame. */
-export async function sampleBorders(image: HTMLVideoElement | ImageBitmap, size: Size): Promise<Crop | undefined> {
+export async function sampleBorders(image: HTMLVideoElement | ImageBitmap, size: Size, aspect: number | null = ASPECT): Promise<Crop | undefined> {
   const canvas = document.createElement('canvas');
   const scale = Math.min(1, 640 / size.width, 480 / size.height);
   canvas.width = Math.round(size.width * scale); canvas.height = Math.round(size.height * scale);
@@ -68,7 +72,7 @@ export async function sampleBorders(image: HTMLVideoElement | ImageBitmap, size:
   for (let i = 0; i < 3; i++) {
     if (image instanceof HTMLVideoElement && (image.readyState < 2 || image.videoWidth !== size.width || image.videoHeight !== size.height)) return;
     ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
-    frames.push(detectBorders(ctx.getImageData(0, 0, canvas.width, canvas.height), size));
+    frames.push(detectBorders(ctx.getImageData(0, 0, canvas.width, canvas.height), size, aspect));
     if (!frames[i]) return;
     if (i < 2 && image instanceof HTMLVideoElement) await new Promise(resolve => setTimeout(resolve, 150));
   }

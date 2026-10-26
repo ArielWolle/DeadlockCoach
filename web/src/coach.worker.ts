@@ -1,21 +1,26 @@
 /// <reference lib="webworker" />
 import init, { Coach } from '../wasm/coach_web';
-import type { Manifest, WorkerReply } from './types';
+import type { Manifest, WorkerReply, ProfileReply } from './types';
+import type { GameProfile } from './profiles';
 const ctx = self as unknown as DedicatedWorkerGlobalScope;
 let coach: Coach | undefined;
-const send = (r: WorkerReply) => ctx.postMessage(r);
+const send = (r: WorkerReply | ProfileReply) => ctx.postMessage(r);
 
-async function initialize(base: string) {
+async function initialize(base: string, profile: GameProfile) {
   send({ type: 'progress', message: 'Loading local analysis engine…', fraction: 0 });
   await init();
   const mr = await fetch(`${base}assets/manifest.json`, { cache: 'no-cache' });
   if (!mr.ok) throw new Error(`Asset manifest: HTTP ${mr.status}`);
   const manifest: Manifest = await mr.json();
   if (manifest.schema !== 1) throw new Error('Unsupported asset manifest version');
-  const names = ['models/text-detection.rten', 'models/text-rec.rten', 'templates.bin', 'heroes.json', 'timings.json', 'counters.json', 'rules.json'];
+  const legacy = profile.adapter === 'deadlock' || profile.nodes.some(n => n.op.type === 'custom' && n.op.name === 'deadlock.scan'
+    || n.op.type === 'classify' && String(n.op.library).startsWith('deadlock.'));
+  const ocr = legacy || profile.nodes.some(n => n.op.type === 'ocr');
+  const names = [...(ocr ? ['models/text-detection.rten', 'models/text-rec.rten'] : []),
+    ...(legacy ? ['templates.bin', 'heroes.json', 'timings.json', 'counters.json', 'rules.json'] : [])];
   let cache: Cache | undefined;
   try { cache = await caches.open(`deadlock-assets-${manifest.version}`); } catch { /* storage can be unavailable; network still works */ }
-  const buffers: ArrayBuffer[] = [];
+  const buffers: Record<string, ArrayBuffer> = {};
   let loaded = 0; const total = names.reduce((n, name) => n + manifest.files[name].bytes, 0);
   for (const name of names) {
     const url = `${base}assets/${name}`;
@@ -29,16 +34,19 @@ async function initialize(base: string) {
       await cache?.delete(url); throw new Error(`Asset integrity check failed for ${name}. Reload to retry.`);
     }
     try { await cache?.put(url, new Response(buffer.slice(0))); } catch { /* quota is not fatal */ }
-    buffers.push(buffer); loaded += buffer.byteLength;
+    buffers[name] = buffer; loaded += buffer.byteLength;
     send({ type: 'progress', message: `Loading ${name} (${Math.round(loaded / 1048576)} MB)…`, fraction: loaded / total * .9 });
   }
-  const text = (i: number) => new TextDecoder().decode(buffers[i]);
-  coach?.free();
-  coach = new Coach(new Uint8Array(buffers[0]), new Uint8Array(buffers[1]), new Uint8Array(buffers[2]), text(3), text(4), text(5), text(6));
+  const bytes = (name: string) => new Uint8Array(buffers[name] || new ArrayBuffer(0));
+  const text = (name: string, fallback = '') => buffers[name] ? new TextDecoder().decode(buffers[name]) : fallback;
+  // Build the candidate before freeing the previous working adapter/profile.
+  const candidate = Coach.create(JSON.stringify(profile), bytes('models/text-detection.rten'), bytes('models/text-rec.rten'), bytes('templates.bin'),
+    text('heroes.json', '[]'), text('timings.json', '[]'), text('counters.json', '[]'), text('rules.json', '{}'));
+  coach?.free(); coach = candidate;
   try {
     for (const key of await caches.keys()) if (key.startsWith('deadlock-assets-') && key !== `deadlock-assets-${manifest.version}`) await caches.delete(key);
   } catch { /* no persistent cache */ }
-  send({ type: 'ready', version: manifest.version });
+  return manifest.version;
 }
 
 // Single serialized mailbox. The main thread never sends a second frame until completion.
@@ -47,7 +55,12 @@ ctx.onmessage = event => {
   const m = event.data;
   tasks = tasks.then(async () => {
     try {
-      if (m.type === 'init') { await initialize(m.base); return; }
+      if (m.type === 'init') { const version = await initialize(m.base, m.profile); send({ type: 'ready', version }); return; }
+      if (m.type === 'profile') {
+        try { await initialize(m.base, m.profile); send({ type: 'profile_ready', requestId: m.requestId }); }
+        catch (e) { send({ type: 'profile_error', requestId: m.requestId, message: e instanceof Error ? e.message : String(e) }); }
+        return;
+      }
       if (!coach) throw new Error('Analysis engine is not initialized');
       if (m.type === 'reset') { coach.reset(); return; }
       if (m.type === 'configure') { coach.configure(JSON.stringify(m.options)); return; }

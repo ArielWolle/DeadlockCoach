@@ -69,3 +69,13 @@ test('automatic cropping refuses blank, dark, unbordered and unstable sources', 
   assert.equal(consistentBorders([r, r, { ...r, x: r.x + 40 }], size), undefined);
   assert.deepEqual(consistentBorders([r, r, r], size), normalized(r, size));
 });
+
+test('generic profile viewport and field-region geometry support free aspect and small UI elements', () => {
+  const size = { width: 800, height: 600 };
+  assert.deepEqual(viewport({ x: 0, y: 0, w: 1, h: 1 }, size, null), { x: 0, y: 0, w: 800, h: 600 });
+  const small = selection({ x: .5, y: .5, w: .05, h: .02 }, size, null, 1, 1);
+  assert.equal(small.w, 40); assert.equal(small.h, 12);
+  const taller = resize(small, 'se', 0, 20, size, null, 1, 1);
+  assert.equal(taller.w, 40); assert.equal(taller.h, 32);
+  viewport(normalized(taller, size), size, null, 1, 1);
+});

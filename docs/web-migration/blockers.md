@@ -15,6 +15,7 @@
 | Minimap ring detector repeatedly computed trigonometry inside pixel loops | Precomputed circle offsets and dilated mask once, preserving minimap regression results and reducing detector cost |
 | Repeated text detection on tiny single-line HUD fields | Added direct line recognition for calibrated team totals. Clock/name experiments degraded reads, so those retained full detection. Native and browser regressions pass |
 | Letterboxed captures produced a repeated 16:9 error with percentage-only recovery | Added live visual viewport editing, typed error recovery, conservative automatic four-edge border detection and a manual override |
+| Reusable UI matching was coupled to Deadlock interpretation | Extracted `coach-perception`, profile DAGs, replaceable OCR/custom stages, a JSONL CLI and browser Matching lab. The old game scanner remains a registered adapter |
 
 ## External blockers / not claimed complete
 
@@ -29,7 +30,8 @@
 4. **Performance target not fully met**: after enabling SIMD, optimizing minimap rings and
    using direct line recognition for team totals, recorded browser OCR frames have taken
    roughly **6–15 seconds** on this machine. The latest full editor-regression run logged
-   **11,728 ms** for its final OCR frame (recorded 1600×900 HUD, not a live game benchmark).
+   **11,728 ms** for its final OCR frame; the later profile-engine regression recorded
+   **5,663 ms** (recorded 1600×900 HUD, not a live game benchmark).
    This exceeds the default five-second target.
    The loop skips queueing and samples the current frame when ready; late speech is discarded.
    A 10-second interval is a practical setting to try. Game FPS impact, thermal load and

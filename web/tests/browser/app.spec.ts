@@ -169,7 +169,7 @@ test('voice test invokes browser speech and mute cancels the queue', async ({ pa
 
 test('all dashboard routes pass automated accessibility checks', async ({ page }) => {
   await page.goto('./');
-  for (const route of ['coach', 'map', 'match', 'replay', 'knowledge', 'settings']) {
+  for (const route of ['coach', 'map', 'match', 'replay', 'pipeline', 'knowledge', 'settings']) {
     await page.goto(`./#${route}`);
     const results = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21aa', 'wcag22aa']).analyze();
     expect(results.violations, `${route}: ${results.violations.map(v => `${v.id}: ${v.nodes.map(n => n.target).join(', ')}`).join('; ')}`).toEqual([]);

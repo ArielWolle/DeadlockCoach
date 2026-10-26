@@ -8,6 +8,9 @@ interface Source {
   initial: Crop;
   description: string;
   applyLabel: string;
+  aspect?: number | null;
+  minimum?: { width: number; height: number };
+  purpose?: 'viewport' | 'region';
 }
 
 /** Live UI only: no capture permission changes and no frame is sent to OCR until Apply. */
@@ -26,6 +29,8 @@ export class CropEditor {
   private animation = 0;
   private lastPaint = -Infinity;
   private frameCount = 0;
+  private aspect: number | null = 16 / 9;
+  private minimum = { width: 320, height: 180 };
   private drag?: { id: number; x: number; y: number; rect: Rect; corner?: Corner };
 
   constructor() {
@@ -34,11 +39,11 @@ export class CropEditor {
     document.getElementById('crop-cancel')!.onclick = () => this.cancel();
     document.getElementById('crop-apply')!.onclick = () => {
       const crop = normalized(this.rect, this.size);
-      try { viewport(crop, this.size); this.finish(crop); }
+      try { viewport(crop, this.size, this.aspect, this.minimum.width, this.minimum.height); this.finish(crop); }
       catch (e) { this.announce(String(e instanceof Error ? e.message : e)); }
     };
-    document.getElementById('crop-fit')!.onclick = () => { this.rect = fit(this.size); this.update(true); };
-    document.getElementById('crop-reset')!.onclick = () => { this.rect = selection(this.original, this.size); this.update(true); };
+    document.getElementById('crop-fit')!.onclick = () => { this.rect = fit(this.size, this.aspect); this.update(true); };
+    document.getElementById('crop-reset')!.onclick = () => { this.rect = selection(this.original, this.size, this.aspect, this.minimum.width, this.minimum.height); this.update(true); };
     document.getElementById('crop-center')!.onclick = () => {
       this.rect.x = (this.size.width - this.rect.w) / 2; this.rect.y = (this.size.height - this.rect.h) / 2; this.update(true);
     };
@@ -47,9 +52,9 @@ export class CropEditor {
       const control = document.getElementById('crop-auto') as HTMLButtonElement;
       control.disabled = true; this.announce('Checking black borders across several frames…');
       try {
-        const crop = await sampleBorders(source.image, { ...this.size });
+        const crop = await sampleBorders(source.image, { ...this.size }, this.aspect);
         if (source !== this.source) return;
-        if (crop) { this.rect = selection(crop, this.size); this.update(); this.announce('Black borders detected. Review the cropped preview, then apply.'); }
+        if (crop) { this.rect = selection(crop, this.size, this.aspect, this.minimum.width, this.minimum.height); this.update(); this.announce('Black borders detected. Review the cropped preview, then apply.'); }
         else this.announce('No reliable black borders detected. Drag the frame or use Fit 16:9 to select the game manually.');
       } catch { if (source === this.source) this.announce('Preview is temporarily unavailable. Try again or adjust manually.'); }
       finally { control.disabled = false; }
@@ -58,7 +63,7 @@ export class CropEditor {
       document.getElementById(`crop-${name}`)!.onclick = () => { this.rect = move(this.rect, dx, dy, this.size); this.update(true); };
     }
     for (const [name, delta] of [['smaller', -32], ['larger', 32]] as const) {
-      document.getElementById(`crop-${name}`)!.onclick = () => { this.rect = grow(this.rect, delta, this.size); this.update(true); };
+      document.getElementById(`crop-${name}`)!.onclick = () => { this.rect = grow(this.rect, delta, this.size, this.aspect, this.minimum.width, this.minimum.height); this.update(true); };
     }
     this.box.addEventListener('pointerdown', e => {
       if (e.button !== 0 || this.drag) return;
@@ -74,7 +79,7 @@ export class CropEditor {
       if (!bounds.width || !bounds.height) return;
       const dx = (e.clientX - d.x) * this.size.width / bounds.width;
       const dy = (e.clientY - d.y) * this.size.height / bounds.height;
-      this.rect = d.corner ? resize(d.rect, d.corner, dx, dy, this.size) : move(d.rect, dx, dy, this.size);
+      this.rect = d.corner ? resize(d.rect, d.corner, dx, dy, this.size, this.aspect, this.minimum.width, this.minimum.height) : move(d.rect, dx, dy, this.size);
       this.update();
     });
     const release = (e: PointerEvent) => {
@@ -90,7 +95,7 @@ export class CropEditor {
       const d = delta[e.key]; if (!d) return;
       e.preventDefault();
       const corner = (e.target as HTMLElement).dataset.corner as Corner | undefined;
-      this.rect = corner ? resize(this.rect, corner, ...d, this.size) : move(this.rect, ...d, this.size);
+      this.rect = corner ? resize(this.rect, corner, ...d, this.size, this.aspect, this.minimum.width, this.minimum.height) : move(this.rect, ...d, this.size);
       this.update(true);
     });
   }
@@ -99,10 +104,22 @@ export class CropEditor {
   open(source: Source): Promise<Crop | undefined> {
     if (this.opening) return this.opening;
     this.source = source; this.size = { width: source.width, height: source.height };
-    this.original = { ...source.initial }; this.rect = selection(source.initial, this.size);
+    this.aspect = source.aspect === undefined ? 16 / 9 : source.aspect;
+    this.minimum = source.minimum || { width: 320, height: 180 };
+    this.original = { ...source.initial }; this.rect = selection(source.initial, this.size, this.aspect, this.minimum.width, this.minimum.height);
     this.frameCount = 0; this.lastPaint = -Infinity;
     document.getElementById('crop-description')!.textContent = source.description;
+    document.getElementById('crop-title')!.textContent = source.purpose === 'region' ? 'Select field region' : 'Select your game viewport';
+    document.getElementById('crop-move')!.setAttribute('aria-label', source.purpose === 'region' ? 'Move field region' : 'Move game viewport');
+    document.querySelector('.crop-result p')!.textContent = source.purpose === 'region'
+      ? 'Keep only the pixels for this field or search area inside the frame. Coordinates are relative to the analyzed image.'
+      : 'Keep the entire game HUD inside the frame. Exclude chat, browser chrome and black bars.';
+    this.preview.setAttribute('aria-label', 'Preview of the selected image region');
     document.getElementById('crop-source-kind')!.textContent = source.image instanceof HTMLVideoElement ? 'Live source preview' : 'Screenshot preview';
+    const ratio = this.aspect === null ? 'Free aspect' : Math.abs(this.aspect - 16 / 9) < .01 ? '16:9' : `${this.aspect.toFixed(2)}:1`;
+    document.querySelector('#crop-move span')!.textContent = source.purpose === 'region' ? 'FIELD REGION' : `GAME VIEW · ${ratio.toUpperCase()}`;
+    document.getElementById('crop-fit')!.textContent = this.aspect === null ? 'Use full source' : `Fit ${ratio}`;
+    document.getElementById('crop-auto')!.hidden = source.purpose === 'region';
     document.getElementById('crop-apply')!.textContent = source.applyLabel;
     this.opening = new Promise(resolve => { this.resolve = resolve; });
     this.dialog.showModal(); this.update(true); this.paint(performance.now());
@@ -122,11 +139,16 @@ export class CropEditor {
     const { x, y, w, h } = normalized(this.rect, this.size);
     Object.assign(this.box.style, { left: `${x * 100}%`, top: `${y * 100}%`, width: `${w * 100}%`, height: `${h * 100}%` });
     this.stage.style.aspectRatio = `${this.size.width} / ${this.size.height}`;
-    const summary = `${Math.round(this.rect.w)}×${Math.round(this.rect.h)} selected · left ${Math.round(this.rect.x)}, top ${Math.round(this.rect.y)} px · 16:9 locked`;
+    const summary = `${Math.round(this.rect.w)}×${Math.round(this.rect.h)} selected · left ${Math.round(this.rect.x)}, top ${Math.round(this.rect.y)} px · ${this.aspect === null ? 'free aspect' : 'aspect locked'}`;
+    const previewScale = Math.min(640 / this.rect.w, 480 / this.rect.h);
+    this.preview.width = Math.max(1, Math.round(this.rect.w * previewScale));
+    this.preview.height = Math.max(1, Math.round(this.rect.h * previewScale));
+    this.preview.style.maxHeight = '300px'; this.preview.style.objectFit = 'contain';
+    this.preview.style.aspectRatio = `${this.rect.w} / ${this.rect.h}`;
     document.getElementById('crop-summary')!.textContent = summary;
     document.getElementById('crop-source-size')!.textContent = `${this.size.width}×${this.size.height} source`;
     let error = '';
-    try { viewport(normalized(this.rect, this.size), this.size); } catch (e) { error = e instanceof Error ? e.message : String(e); }
+    try { viewport(normalized(this.rect, this.size), this.size, this.aspect, this.minimum.width, this.minimum.height); } catch (e) { error = e instanceof Error ? e.message : String(e); }
     (document.getElementById('crop-apply') as HTMLButtonElement).disabled = !!error;
     if (announce) this.announce(error || summary);
     this.drawPreview();
@@ -146,7 +168,7 @@ export class CropEditor {
         const { videoWidth: width, videoHeight: height } = source.image;
         if (width && height && (width !== this.size.width || height !== this.size.height)) {
           const crop = normalized(this.rect, this.size); this.size = { width, height };
-          this.rect = selection(crop, this.size); this.update(); this.announce('Source size changed. Review the selection before applying.');
+          this.rect = selection(crop, this.size, this.aspect, this.minimum.width, this.minimum.height); this.update(); this.announce('Source size changed. Review the selection before applying.');
         }
       }
       const width = Math.min(1440, this.size.width), height = Math.round(width * this.size.height / this.size.width);
