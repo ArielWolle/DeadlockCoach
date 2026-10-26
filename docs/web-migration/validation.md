@@ -35,6 +35,10 @@ not an SLA, and not validation of capture while the game has foreground focus.
 
 ## Remaining acceptance work
 
+See [Twitch stream smoke tests](stream-tests.md) for an additional real 1080p stream-frame
+check: clock and souls matched the visible HUD; totals/roster/items/minimap still need wider
+coverage. This check used screenshot replay and does not satisfy the live-capture gate.
+
 See [blockers.md](blockers.md). Pages is gated off, hosted CI status needs verification in GitHub,
 and live OS capture/headphones/background/game performance require a real gaming session.
 No whole-site WCAG conformance claim is made from automated checks and keyboard smoke tests alone.
