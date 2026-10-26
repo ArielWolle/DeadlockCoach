@@ -1,0 +1,24 @@
+[package]
+name = "coach-perception"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+ocrs = { version = "0.13", optional = true }
+rten = { version = "0.26", optional = true }
+rten-imageproc = { version = "0.26", optional = true }
+serde.workspace = true
+serde_json.workspace = true
+regex = "1"
+base64 = "0.22"
+web-time = "1"
+sha2 = "0.10"
+
+[features]
+default = ["ocrs-backend"]
+ocrs-backend = ["dep:ocrs", "dep:rten", "dep:rten-imageproc"]
+
+[[bin]]
+name = "coach-perceive"
+path = "src/bin/perceive.rs"

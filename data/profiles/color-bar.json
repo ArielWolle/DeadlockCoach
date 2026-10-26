@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "id": "color-bar",
+  "name": "Any game · color/bar starter (no OCR)",
+  "adapter": "generic",
+  "viewport": { "aspect_ratio": null, "max_width": 1600 },
+  "nodes": [
+    { "id": "bar_region", "op": { "type": "crop", "region": { "x": 0.05, "y": 0.9, "w": 0.25, "h": 0.025 } } },
+    { "id": "green_pixels", "inputs": ["bar_region"], "op": { "type": "color_ratio", "rgb": [60, 200, 80], "tolerance": 45 } },
+    { "id": "percentage", "inputs": ["green_pixels"], "op": { "type": "parse", "parser": "number", "scale": 100, "min": 0, "max": 100 } },
+    { "id": "stable_bar", "inputs": ["percentage"], "op": { "type": "confirm", "frames": 2, "tolerance": 10, "max_age_ms": 20000 } }
+  ],
+  "outputs": { "hud.bar_fill_percent": "stable_bar" }
+}

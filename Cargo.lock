@@ -651,6 +651,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "coach-perception"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "image",
+ "ocrs",
+ "regex",
+ "rten",
+ "rten-imageproc",
+ "serde",
+ "serde_json",
+ "sha2",
+ "web-time",
+]
+
+[[package]]
 name = "coach-transport"
 version = "0.1.0"
 dependencies = [
@@ -666,10 +682,8 @@ name = "coach-vision"
 version = "0.1.0"
 dependencies = [
  "coach-core",
+ "coach-perception",
  "image",
- "ocrs",
- "rten",
- "rten-imageproc",
  "serde",
  "serde_json",
 ]
@@ -680,6 +694,7 @@ version = "0.1.0"
 dependencies = [
  "coach-core",
  "coach-engine",
+ "coach-perception",
  "coach-vision",
  "console_error_panic_hook",
  "image",

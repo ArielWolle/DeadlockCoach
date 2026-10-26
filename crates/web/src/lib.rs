@@ -2,6 +2,7 @@
 use coach_core::GameSnapshot;
 use coach_engine::{Engine, Rule, RulesConfig};
 use coach_vision::{ocr::Reader, scan::Scanner, ColorLibrary};
+use coach_perception::{Pipeline, Resources, Profile, Packet, FrameContext, Stage, Report, profile_from_json};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
@@ -13,7 +14,16 @@ impl Default for Options {
 }
 
 #[derive(Serialize)]
-struct Analysis { snapshot: GameSnapshot, cues: Vec<coach_engine::Cue> }
+struct Analysis { snapshot: GameSnapshot, cues: Vec<coach_engine::Cue>, perception: Option<Report> }
+
+struct DeadlockStage { scanner: Scanner }
+impl Stage for DeadlockStage {
+    fn run(&mut self, _inputs: &[Packet], frame: &FrameContext<'_>, _config: &serde_json::Value) -> Result<Packet, String> {
+        let snapshot = self.scanner.scan_image(frame.frame, frame.auxiliary, frame.timestamp_ms);
+        Ok(Packet { value: Some(serde_json::to_value(snapshot).map_err(|e| e.to_string())?), ..Default::default() })
+    }
+    fn reset(&mut self) { self.scanner.reset(); }
+}
 
 type Images = Vec<(String, Vec<u8>)>;
 
@@ -43,7 +53,7 @@ fn unpack(bytes: &[u8]) -> Result<[Images; 3], String> {
 
 #[wasm_bindgen]
 pub struct Coach {
-    scanner: Scanner,
+    pipeline: Pipeline,
     engine: Engine,
     timings: String,
     counters: String,
@@ -54,12 +64,16 @@ pub struct Coach {
 }
 
 fn js_error(s: impl ToString) -> JsValue { JsValue::from_str(&s.to_string()) }
+fn to_js(value: &impl Serialize) -> Result<JsValue, JsValue> {
+    value.serialize(&serde_wasm_bindgen::Serializer::json_compatible()).map_err(js_error)
+}
 fn json<T: serde::de::DeserializeOwned>(s: &str) -> Result<T, JsValue> {
     serde_json::from_str(s.trim_start_matches('\u{feff}')).map_err(js_error)
 }
 
 impl Coach {
     fn engine(&self) -> Result<Engine, JsValue> {
+        if self.pipeline.profile().adapter != "deadlock" { return Ok(Engine::new(vec![])); }
         let mut rules: Vec<Box<dyn Rule>> = vec![];
         if self.options.timers { rules.extend(coach_engine::rules_from_timings(&self.timings).map_err(js_error)?); }
         if self.options.map { rules.push(Box::new(coach_engine::map_rules::MapRule)); }
@@ -86,19 +100,36 @@ impl Coach {
     #[wasm_bindgen(constructor)]
     pub fn new(detection: Vec<u8>, recognition: Vec<u8>, assets: Vec<u8>, heroes_json: &str,
         timings: &str, counters: &str, rules: &str) -> Result<Coach, JsValue> {
+        Self::create(include_str!("../../../data/profiles/deadlock.json"), detection, recognition, assets, heroes_json, timings, counters, rules)
+    }
+
+    /// Generic profiles can omit models and all Deadlock assets when their stages do not need them.
+    pub fn create(profile_json: &str, detection: Vec<u8>, recognition: Vec<u8>, assets: Vec<u8>, heroes_json: &str,
+        timings: &str, counters: &str, rules: &str) -> Result<Coach, JsValue> {
         console_error_panic_hook::set_once();
-        let [items, heroes, critical] = unpack(&assets).map_err(js_error)?;
-        #[derive(Deserialize)] struct Hero { class_name: String, name: String }
-        let names: Vec<Hero> = json(heroes_json)?;
-        let scanner = Scanner::from_resources(
-            Reader::from_bytes(detection, recognition).map_err(js_error)?,
-            ColorLibrary::from_images(items, true, false).map_err(js_error)?,
-            ColorLibrary::from_images(heroes, false, true).map_err(js_error)?,
-            ColorLibrary::from_images(critical, false, true).map_err(js_error)?,
-            names.into_iter().map(|h| (h.class_name, h.name)).collect(),
-        );
-        let mut coach = Coach { scanner, engine: Engine::new(vec![]), timings: timings.into(),
-            counters: counters.trim_start_matches('\u{feff}').into(), rules: json(rules)?,
+        let profile = profile_from_json(profile_json).map_err(js_error)?;
+        check_adapter(&profile)?;
+        let mut resources = Resources::default();
+        let reader = if !detection.is_empty() && !recognition.is_empty() { Some(Reader::from_bytes(detection, recognition).map_err(js_error)?) } else { None };
+        if let Some(reader) = &reader { resources.ocr = Some(std::sync::Arc::new(reader.clone())); }
+        if !assets.is_empty() {
+            let [items, heroes, critical] = unpack(&assets).map_err(js_error)?;
+            let items = std::sync::Arc::new(ColorLibrary::from_images(items, true, false).map_err(js_error)?);
+            let heroes = std::sync::Arc::new(ColorLibrary::from_images(heroes, false, true).map_err(js_error)?);
+            let critical = std::sync::Arc::new(ColorLibrary::from_images(critical, false, true).map_err(js_error)?);
+            resources.libraries.insert("deadlock.items".into(), items.clone());
+            resources.libraries.insert("deadlock.heroes".into(), heroes.clone());
+            resources.libraries.insert("deadlock.critical_heroes".into(), critical.clone());
+            #[derive(Deserialize)] struct Hero { class_name: String, name: String }
+            let names: Vec<Hero> = json(heroes_json)?;
+            if let Some(reader) = reader {
+                let scanner = Scanner::from_shared(reader, items, heroes, critical, names.into_iter().map(|h| (h.class_name, h.name)).collect());
+                resources.stages.insert("deadlock.scan".into(), Box::new(DeadlockStage { scanner }));
+            }
+        }
+        let pipeline = Pipeline::new(profile, resources).map_err(js_error)?;
+        let mut coach = Coach { pipeline, engine: Engine::new(vec![]), timings: timings.into(),
+            counters: counters.trim_start_matches('\u{feff}').into(), rules: if rules.is_empty() { RulesConfig::default() } else { json(rules)? },
             options: Options::default(), match_id: None, last_clock: None };
         coach.engine = coach.engine()?;
         Ok(coach)
@@ -111,7 +142,7 @@ impl Coach {
     }
 
     pub fn reset(&mut self) -> Result<(), JsValue> {
-        self.scanner.reset(); self.match_id = None; self.last_clock = None;
+        self.pipeline.reset(); self.match_id = None; self.last_clock = None;
         self.engine = self.engine()?; Ok(())
     }
 
@@ -127,17 +158,33 @@ impl Coach {
             && (map_width as f32 / map_height as f32 - 335.0 / 350.0).abs() < 0.05 {
             image::RgbaImage::from_raw(map_width, map_height, map).map(|m| image::DynamicImage::ImageRgba8(m).to_rgb8())
         } else { None };
-        let snapshot = self.scanner.scan_image(&image, map.as_ref(), now_ms as u64);
+        let perception = self.pipeline.run(&image, map.as_ref(), now_ms as u64);
+        let snapshot = if self.pipeline.profile().adapter == "deadlock" {
+            let id = self.pipeline.profile().nodes.iter().find(|n| matches!(&n.op, coach_perception::Operation::Custom { name, .. } if name == "deadlock.scan")).map(|n| n.id.as_str());
+            perception.stages.iter().find(|s| Some(s.id.as_str()) == id).and_then(|s| s.value.clone())
+                .and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default()
+        } else { GameSnapshot::default() };
         let cues = self.step(&snapshot)?;
-        serde_wasm_bindgen::to_value(&Analysis { snapshot, cues }).map_err(js_error)
+        to_js(&Analysis { snapshot, cues, perception: Some(perception) })
     }
 
     /// Replay imports traverse the very same rule engine as live frames.
     pub fn replay(&mut self, snapshot_json: &str) -> Result<JsValue, JsValue> {
         let snapshot: GameSnapshot = json(snapshot_json)?;
         let cues = self.step(&snapshot)?;
-        serde_wasm_bindgen::to_value(&Analysis { snapshot, cues }).map_err(js_error)
+        to_js(&Analysis { snapshot, cues, perception: None })
     }
+}
+
+fn check_adapter(profile: &Profile) -> Result<(), JsValue> {
+    if profile.adapter != "generic" && profile.adapter != "deadlock" { return Err(js_error("unknown browser game adapter")); }
+    if profile.adapter == "deadlock" && profile.nodes.iter().filter(|n| matches!(&n.op, coach_perception::Operation::Custom { name, .. } if name == "deadlock.scan")).count() != 1 {
+        return Err(js_error("Deadlock coaching requires exactly one deadlock.scan stage"));
+    }
+    if profile.adapter == "deadlock" && (profile.viewport.aspect_ratio.is_none_or(|r| (r - 16.0 / 9.0).abs() > 0.01) || profile.viewport.max_width != 1600) {
+        return Err(js_error("the legacy Deadlock adapter requires its calibrated 16:9 / 1600-wide input; use a generic profile for other layouts"));
+    }
+    Ok(())
 }
 
 #[cfg(test)]

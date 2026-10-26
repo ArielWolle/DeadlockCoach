@@ -2,6 +2,7 @@
 use crate::{hud, ocr::Reader, parse, ColorLibrary};
 use coach_core::GameSnapshot;
 use std::{collections::HashMap, path::Path};
+use std::sync::Arc;
 
 /// A hero score is the mean of its best K frames (robust to dimmed/critical/dead portraits).
 const TOP_K: usize = 5;
@@ -10,9 +11,9 @@ fn score_of(v: &[f32]) -> f32 { v.iter().sum::<f32>() / v.len().max(1) as f32 }
 
 pub struct Scanner {
     ocr: Reader,
-    items: ColorLibrary,
-    heroes: ColorLibrary,
-    heroes_crit: ColorLibrary,
+    items: Arc<ColorLibrary>,
+    heroes: Arc<ColorLibrary>,
+    heroes_crit: Arc<ColorLibrary>,
     tracker: parse::Tracker,
     /// Summed template scores per slot (0-5 ally, 6-11 enemy) and frames counted.
     sums: Vec<HashMap<String, Vec<f32>>>,
@@ -75,6 +76,11 @@ impl Scanner {
 
     pub fn from_resources(ocr: Reader, items: ColorLibrary, heroes: ColorLibrary,
         heroes_crit: ColorLibrary, hero_names: Vec<(String, String)>) -> Self {
+        Self::from_shared(ocr, Arc::new(items), Arc::new(heroes), Arc::new(heroes_crit), hero_names)
+    }
+
+    pub fn from_shared(ocr: Reader, items: Arc<ColorLibrary>, heroes: Arc<ColorLibrary>,
+        heroes_crit: Arc<ColorLibrary>, hero_names: Vec<(String, String)>) -> Self {
         Scanner {
             ocr, items, heroes, heroes_crit,
             tracker: parse::Tracker::default(),

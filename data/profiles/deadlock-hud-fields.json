@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "id": "deadlock-hud-fields",
+  "name": "Deadlock · composable HUD fields (no coaching)",
+  "adapter": "generic",
+  "viewport": { "aspect_ratio": 1.7777778, "max_width": 1600 },
+  "nodes": [
+    { "id": "clock_region", "op": { "type": "crop", "region": { "x": 0.47, "y": 0.01, "w": 0.06, "h": 0.034444444 } } },
+    { "id": "clock_text", "inputs": ["clock_region"], "op": { "type": "ocr", "mode": "detect", "upscale": 3 } },
+    { "id": "clock_value", "inputs": ["clock_text"], "op": { "type": "parse", "parser": "clock", "min": 0, "max": 14400 } },
+    { "id": "clock_stable", "inputs": ["clock_value"], "op": { "type": "confirm", "frames": 2, "tolerance": 15, "max_age_ms": 30000 } },
+    { "id": "has_clock", "inputs": ["clock_value"], "op": { "type": "status", "one_of": ["ok"] } },
+    { "id": "currency_region", "when": "has_clock", "op": { "type": "crop", "region": { "x": 0.04, "y": 0.8, "w": 0.09, "h": 0.06 } } },
+    { "id": "currency_text", "inputs": ["currency_region"], "op": { "type": "ocr", "mode": "detect", "upscale": 3 } },
+    { "id": "currency_value", "inputs": ["currency_text"], "op": { "type": "parse", "parser": "number", "min": 0, "max": 1000000 } },
+    { "id": "currency_stable", "inputs": ["currency_value"], "op": { "type": "confirm", "frames": 2, "tolerance": 300, "max_delta": 3000, "max_age_ms": 30000 } }
+  ],
+  "outputs": {
+    "match.clock_seconds": "clock_stable",
+    "player.currency": "currency_stable",
+    "debug.clock_text": "clock_text",
+    "debug.currency_text": "currency_text"
+  }
+}

@@ -5,9 +5,7 @@ edition.workspace = true
 
 [dependencies]
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
-ocrs = "0.13"
-rten = "0.26"
-rten-imageproc = "0.26"
+coach-perception = { path = "../perception" }
 
 
 coach-core = { path = "../core" }

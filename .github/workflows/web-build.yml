@@ -28,7 +28,10 @@ jobs:
           key: browser-simd-v1
       - name: Native portable regression tests
         working-directory: .
-        run: cargo test --locked --release -p coach-core -p coach-engine -p coach-vision -p coach-web
+        run: cargo test --locked --release -p coach-core -p coach-engine -p coach-perception -p coach-vision -p coach-web
+      - name: Perception core without the bundled OCR backend
+        working-directory: .
+        run: cargo test --locked --release -p coach-perception --no-default-features
       - name: Install web dependencies
         run: npm ci
       - name: Install pinned WASM build tool

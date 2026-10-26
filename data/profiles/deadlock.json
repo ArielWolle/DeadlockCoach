@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "id": "deadlock",
+  "name": "Deadlock · calibrated adapter",
+  "adapter": "deadlock",
+  "viewport": { "aspect_ratio": 1.7777778, "max_width": 1600 },
+  "nodes": [
+    { "id": "game", "op": { "type": "custom", "name": "deadlock.scan" } },
+    { "id": "clock", "inputs": ["game"], "op": { "type": "select", "path": "/game_clock_secs" } },
+    { "id": "souls", "inputs": ["game"], "op": { "type": "select", "path": "/souls" } },
+    { "id": "screen", "inputs": ["game"], "op": { "type": "select", "path": "/screen" } },
+    { "id": "items", "inputs": ["game"], "op": { "type": "select", "path": "/items" } },
+    { "id": "minimap", "inputs": ["game"], "op": { "type": "select", "path": "/minimap" } },
+    { "id": "allies", "inputs": ["game"], "op": { "type": "select", "path": "/ally_heroes" } },
+    { "id": "enemies", "inputs": ["game"], "op": { "type": "select", "path": "/enemy_heroes" } }
+  ],
+  "outputs": {
+    "match.clock_seconds": "clock",
+    "player.currency": "souls",
+    "scene": "screen",
+    "player.items": "items",
+    "world.minimap": "minimap",
+    "team.heroes": "allies",
+    "opponents.heroes": "enemies"
+  }
+}
