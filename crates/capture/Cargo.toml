@@ -5,5 +5,5 @@ edition.workspace = true
 
 [dependencies]
 xcap = "0.9"
-image = { version = "0.25", default-features = false, features = ["jpeg"] }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 coach-core = { path = "../core" }

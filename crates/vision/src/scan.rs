@@ -25,6 +25,8 @@ pub struct Scanner {
     virt_ms: u64,
     last_board: Vec<coach_core::PlayerRow>,
     board_history: Vec<Vec<coach_core::PlayerRow>>,
+    map_analyzer: crate::minimap::Analyzer,
+    map_tracker: crate::minimap::Tracker,
 }
 
 /// Team totals only grow (mostly), and not by leaps. A value outside that band is accepted
@@ -78,6 +80,8 @@ impl Scanner {
             virt_ms: 0,
             last_board: vec![],
             board_history: vec![],
+            map_analyzer: crate::minimap::Analyzer::new(),
+            map_tracker: crate::minimap::Tracker::default(),
         })
     }
 
@@ -90,6 +94,7 @@ impl Scanner {
         self.pending_totals = (None, None);
         self.last_board.clear();
         self.board_history.clear();
+        self.map_tracker = crate::minimap::Tracker::default();
     }
 
     fn text(&self, img: &image::DynamicImage, r: crate::Region) -> Option<String> {
@@ -150,6 +155,12 @@ impl Scanner {
     }
 
     pub fn scan_at(&mut self, jpeg: &[u8], now_ms: u64) -> GameSnapshot {
+        self.scan_with_minimap(jpeg, &[], now_ms)
+    }
+
+    /// Native-resolution, lossless minimap when supplied by an updated Agent;
+    /// otherwise fall back to the compressed full-frame crop (legacy recordings).
+    pub fn scan_with_minimap(&mut self, jpeg: &[u8], minimap_png: &[u8], now_ms: u64) -> GameSnapshot {
         use crate::screen::{self, Screen};
         let Ok(img) = image::load_from_memory(jpeg) else { return GameSnapshot::default() };
         let (scr, raw_clock) = screen::classify(&self.ocr, &img, &self.hero_names);
@@ -174,6 +185,26 @@ impl Scanner {
 
         let mut snap = GameSnapshot { match_id: self.match_id, screen: Some(format!("{scr:?}")), ..Default::default() };
         snap.game_clock_secs = self.tracker.accept_clock(raw_clock, now_ms);
+
+        let map_crop = image::load_from_memory(minimap_png).ok()
+            .filter(|i| i.width() >= 100 && i.height() >= 100
+                && (i.width() as f32 / i.height() as f32 - 335.0 / 350.0).abs() < 0.05)
+            .map(|i| i.to_rgb8()).unwrap_or_else(|| crate::minimap::crop_from_frame(&img));
+        let mut map = self.map_analyzer.analyze(&map_crop);
+        // Personal carry has a literal HUD instruction. Unlike proximity to a hero ring,
+        // this can establish that YOU carry the urn, except while spectating.
+        if scr != Screen::Dead && raw_clock.unwrap_or(0) >= 600 && map.urn_pos.is_some() {
+            let instruction = self.text(&img, crate::Region {
+                x: 710.0 / 1600.0, y: 585.0 / 900.0,
+                w: 190.0 / 1600.0, h: 32.0 / 900.0,
+            }).unwrap_or_default().to_ascii_uppercase();
+            if instruction.contains("DELIVER") && instruction.contains("URN") {
+                map.urn = Some(coach_core::UrnState::CarriedByYou);
+            }
+        }
+        // A cyan portrait must never create an urn before its first spawn.
+        if raw_clock.unwrap_or(0) < 600 { map.urn = None; map.urn_pos = None; }
+        snap.minimap = Some(self.map_tracker.observe(map, now_ms));
 
         if scr == Screen::Dead {
             // While dead the HUD shows the spectated player, so personal values are not ours.

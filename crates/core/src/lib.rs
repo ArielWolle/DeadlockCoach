@@ -62,6 +62,72 @@ pub struct GameSnapshot {
     pub players: Vec<PlayerRow>,
     /// Which screen the frame showed ("Gameplay", "Shop", ...), for debugging.
     pub screen: Option<String>,
+    /// Read from the minimap; None if it could not be found on this frame.
+    pub minimap: Option<MinimapState>,
+}
+
+/// Lanes by colour: Yellow = right, Blue = centre, Green = left (as seen on the minimap,
+/// own base at the bottom).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum Lane { Green, Blue, Yellow }
+
+/// Positions are normalised minimap coordinates, (0,0) top-left, (1,1) bottom-right.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+pub struct Pt { pub x: f32, pub y: f32 }
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LaneState {
+    /// Own-team troopers seen in this lane and how far up the lane they are
+    /// (0 = own base, 1 = enemy base), averaged.
+    pub ally_troopers: u32,
+    pub ally_progress: Option<f32>,
+    pub enemy_troopers: u32,
+    pub enemy_progress: Option<f32>,
+    /// Fraction of the lane line drawn in your colour (rest is red). 0 = the enemy has pushed
+    /// to your base, 1 = you have pushed to theirs. This is the lane "front".
+    pub push: Option<f32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum UrnState {
+    /// Vase marker detected, but possession has not been established.
+    Visible,
+    /// Lying on the ground (spawned, nobody carries it).
+    Ground,
+    /// Carried by this team's hero.
+    CarriedByAlly,
+    CarriedByEnemy,
+    CarriedByYou,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MinimapState {
+    /// Number of recent supporting observations. Rules require at least three.
+    pub observations: u32,
+    pub green: LaneState,
+    pub blue: LaneState,
+    pub yellow: LaneState,
+    /// Positive detection of the gold icon. False means not confirmed, NOT "boss dead".
+    pub midboss_up: bool,
+    pub urn: Option<UrnState>,
+    pub urn_pos: Option<Pt>,
+    /// Enemy heroes currently visible on the minimap (red ring), with positions.
+    pub enemies: Vec<Pt>,
+    /// Allied heroes other than you.
+    pub allies: Vec<Pt>,
+    /// Estimated number of visible enemy heroes (clusters are split by size).
+    pub enemy_count: u32,
+    pub you: Option<Pt>,
+    /// Lane you are standing in, if you are near one.
+    pub your_lane: Option<Lane>,
+}
+
+impl MinimapState {
+    pub fn lane(&self, l: Lane) -> &LaneState {
+        match l { Lane::Green => &self.green, Lane::Blue => &self.blue, Lane::Yellow => &self.yellow }
+    }
 }
 
 /// One scoreboard column.

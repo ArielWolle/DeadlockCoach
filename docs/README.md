@@ -1,5 +1,7 @@
 # DeadlockCoach knowledge base
 
+Implementation notes: [Minimap detection and coaching](minimap-implementation.md).
+
 Searchable markdown for the coach. Each file lists its sources and retrieval date.
 Anything marked UNVERIFIED must be confirmed before it becomes a spoken cue.
 

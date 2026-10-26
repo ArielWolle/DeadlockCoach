@@ -1,5 +1,6 @@
 //! Vision: resolution-independent HUD regions and icon template matching.
 pub mod hud;
+pub mod minimap;
 pub mod ocr;
 pub mod parse;
 pub mod scan;

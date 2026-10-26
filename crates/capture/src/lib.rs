@@ -7,6 +7,8 @@ use xcap::{Monitor, Window};
 pub struct Frame {
     pub meta: FrameMeta,
     pub jpeg: Vec<u8>,
+    /// Lossless minimap crop BEFORE the main screenshot is downscaled.
+    pub minimap_png: Vec<u8>,
     /// "window" if the Deadlock window was captured, "monitor" for fallback.
     pub source: &'static str,
 }
@@ -40,6 +42,15 @@ pub fn capture_frame(max_width: u32, quality: u8) -> Result<Frame, String> {
     };
     let (w, h) = (rgba.width(), rgba.height());
     let mut img = DynamicImage::ImageRgba8(rgba);
+    let map = img.crop_imm(
+        (w as f32 * 1255.0 / 1600.0) as u32,
+        (h as f32 * 525.0 / 900.0) as u32,
+        ((w as f32 * 335.0 / 1600.0) as u32).max(1),
+        ((h as f32 * 350.0 / 900.0) as u32).max(1),
+    ).to_rgb8();
+    let mut minimap_png = std::io::Cursor::new(Vec::new());
+    DynamicImage::ImageRgb8(map).write_to(&mut minimap_png, image::ImageFormat::Png)
+        .map_err(|e| e.to_string())?;
     if w > max_width {
         img = img.resize(max_width, u32::MAX, FilterType::Triangle);
     }
@@ -51,6 +62,7 @@ pub fn capture_frame(max_width: u32, quality: u8) -> Result<Frame, String> {
     Ok(Frame {
         meta: FrameMeta { width: w, height: h, dpi_scale: scale, timestamp_ms: now_ms() },
         jpeg,
+        minimap_png: minimap_png.into_inner(),
         source,
     })
 }

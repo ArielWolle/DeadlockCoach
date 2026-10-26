@@ -22,9 +22,36 @@ pub fn encode_frame(meta: &FrameMeta, jpeg: &[u8]) -> Vec<u8> {
 }
 
 pub fn decode_frame(data: &[u8]) -> Option<(FrameMeta, Vec<u8>)> {
+    let (meta, jpeg, _) = decode_frame_with_minimap(data)?;
+    Some((meta, jpeg))
+}
+
+/// Extended header retains the original fields and adds the main image length.
+/// Legacy senders have no jpeg_len and no crop; legacy readers can still decode JPEG
+/// (JPEG readers tolerate the appended PNG). Updated readers split the payload exactly.
+pub fn encode_frame_with_minimap(meta: &FrameMeta, jpeg: &[u8], png: &[u8]) -> Vec<u8> {
+    let mut header = serde_json::to_value(meta).unwrap();
+    header["jpeg_len"] = serde_json::json!(jpeg.len());
+    let m = serde_json::to_vec(&header).unwrap();
+    let mut out = Vec::with_capacity(4 + m.len() + jpeg.len() + png.len());
+    out.extend_from_slice(&(m.len() as u32).to_be_bytes());
+    out.extend_from_slice(&m);
+    out.extend_from_slice(jpeg);
+    out.extend_from_slice(png);
+    out
+}
+
+pub fn decode_frame_with_minimap(data: &[u8]) -> Option<(FrameMeta, Vec<u8>, Vec<u8>)> {
     let len = u32::from_be_bytes(data.get(..4)?.try_into().ok()?) as usize;
-    let meta = serde_json::from_slice(data.get(4..4 + len)?).ok()?;
-    Some((meta, data.get(4 + len..)?.to_vec()))
+    let end = 4usize.checked_add(len)?;
+    let header: serde_json::Value = serde_json::from_slice(data.get(4..end)?).ok()?;
+    let meta = serde_json::from_value(header.clone()).ok()?;
+    let payload = data.get(end..)?;
+    let n = match header.get("jpeg_len") {
+        Some(n) => usize::try_from(n.as_u64()?).ok()?,
+        None => payload.len(),
+    };
+    Some((meta, payload.get(..n)?.to_vec(), payload.get(n..)?.to_vec()))
 }
 
 /// Agent side: accept Brain connections, push every broadcast frame to each,
@@ -82,6 +109,15 @@ pub async fn connect<F: FnMut(FrameMeta, Vec<u8>)>(
     audio_out: &mut mpsc::UnboundedReceiver<Vec<u8>>,
     mut on_frame: F,
 ) -> Result<(), String> {
+    connect_with_minimap(addr, token, audio_out, |meta, jpeg, _| on_frame(meta, jpeg)).await
+}
+
+pub async fn connect_with_minimap<F: FnMut(FrameMeta, Vec<u8>, Vec<u8>)>(
+    addr: &str,
+    token: &str,
+    audio_out: &mut mpsc::UnboundedReceiver<Vec<u8>>,
+    mut on_frame: F,
+) -> Result<(), String> {
     let stream = TcpStream::connect(addr).await.map_err(|e| e.to_string())?;
     let (mut ws, _) = tokio_tungstenite::client_async(format!("ws://{addr}/"), stream)
         .await
@@ -96,7 +132,7 @@ pub async fn connect<F: FnMut(FrameMeta, Vec<u8>)>(
             msg = ws.next() => match msg {
                 Some(m) => {
                     if let Message::Binary(b) = m.map_err(|e| e.to_string())? {
-                        if let Some((meta, jpeg)) = decode_frame(&b) { on_frame(meta, jpeg); }
+                        if let Some((meta, jpeg, png)) = decode_frame_with_minimap(&b) { on_frame(meta, jpeg, png); }
                     }
                 }
                 None => break,
@@ -118,5 +154,18 @@ mod tests {
         let meta = FrameMeta { width: 1920, height: 1080, dpi_scale: 1.0, timestamp_ms: 5 };
         let (m, j) = decode_frame(&encode_frame(&meta, &[1, 2, 3])).unwrap();
         assert_eq!((m.width, m.timestamp_ms, j), (1920, 5, vec![1, 2, 3]));
+    }
+
+    #[test]
+    fn minimap_payload_and_legacy_decode() {
+        let meta = FrameMeta { width: 2560, height: 1440, dpi_scale: 1.0, timestamp_ms: 20 };
+        let packet = encode_frame_with_minimap(&meta, &[1, 2], &[3, 4, 5]);
+        let (_, jpeg, png) = decode_frame_with_minimap(&packet).unwrap();
+        assert_eq!(jpeg, vec![1, 2]); assert_eq!(png, vec![3, 4, 5]);
+        assert_eq!(decode_frame(&packet).unwrap().1, jpeg);
+        let old = encode_frame(&meta, &[8, 9]);
+        assert!(decode_frame_with_minimap(&old).unwrap().2.is_empty());
+        assert!(decode_frame_with_minimap(&packet[..packet.len() - 4]).is_none());
+        assert!(decode_frame_with_minimap(&[255, 255, 255, 255]).is_none());
     }
 }

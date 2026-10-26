@@ -21,7 +21,7 @@ async fn main() {
             tick.tick().await;
             if txc.receiver_count() == 0 { continue; }
             match tokio::task::spawn_blocking(|| coach_capture::capture_frame(1600, 80)).await {
-                Ok(Ok(f)) => { let _ = txc.send(Arc::new(coach_transport::encode_frame(&f.meta, &f.jpeg))); }
+                Ok(Ok(f)) => { let _ = txc.send(Arc::new(coach_transport::encode_frame_with_minimap(&f.meta, &f.jpeg, &f.minimap_png))); }
                 Ok(Err(e)) => eprintln!("capture failed: {e}"),
                 Err(e) => eprintln!("capture task failed: {e}"),
             }

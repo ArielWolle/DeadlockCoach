@@ -3,6 +3,7 @@
 use coach_core::GameSnapshot;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+pub mod map_rules;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Priority { Low, Normal, High }
@@ -119,6 +120,7 @@ impl Default for RulesConfig {
 pub struct UnspentSoulsRule(pub RulesConfig);
 impl Rule for UnspentSoulsRule {
     fn evaluate(&self, snap: &GameSnapshot) -> Vec<Cue> {
+        if snap.minimap.as_ref().is_some_and(|m| m.urn == Some(coach_core::UrnState::CarriedByYou)) { return vec![]; }
         let Some(s) = snap.souls else { return vec![] };
         if s < self.0.unspent_souls { return vec![]; }
         if snap.dead {
@@ -184,7 +186,7 @@ impl Rule for NetworthLeadRule {
     }
 }
 pub fn default_rules(cfg: RulesConfig) -> Vec<Box<dyn Rule>> {
-    vec![Box::new(UnspentSoulsRule(cfg.clone())), Box::new(DeathCauseRule), Box::new(NetworthLeadRule::new(cfg))]
+    vec![Box::new(map_rules::MapRule), Box::new(UnspentSoulsRule(cfg.clone())), Box::new(DeathCauseRule), Box::new(NetworthLeadRule::new(cfg))]
 }
 
 pub struct Engine {
