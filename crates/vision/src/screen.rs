@@ -37,10 +37,13 @@ fn has(s: &str, needle: &str) -> bool { s.to_ascii_uppercase().contains(needle) 
 
 /// Returns the screen and the raw parsed clock (if it was read while classifying).
 pub fn classify(rd: &Reader, img: &DynamicImage, hero_names: &[(String, String)]) -> (Screen, Option<u32>) {
+    classify_hinted(rd,img,hero_names,None)
+}
+pub fn classify_hinted(rd:&Reader,img:&DynamicImage,hero_names:&[(String,String)],known_clock:Option<u32>)->(Screen,Option<u32>){
     let back = rd.read(&hud::crop(img, back_anchor())).unwrap_or_default();
     if has(&back, "RESUME") { return (Screen::Menu, None); }
     if has(&back, "BACK") { return (Screen::Shop, None); }
-    let clock = rd.read(&hud::crop(img, hud::CLOCK)).ok().and_then(|s| parse::parse_clock(&s));
+    let clock = known_clock.or_else(||rd.read(&hud::crop(img, hud::CLOCK)).ok().and_then(|s| parse::parse_clock(&s)));
     if clock.is_some() {
         if crate::scoreboard::looks_like_scoreboard(rd, img, hero_names) { return (Screen::Scoreboard, clock); }
         let resp = rd.read(&hud::crop(img, respawn_anchor())).unwrap_or_default();

@@ -58,3 +58,9 @@ scale handling, expiry, and carrier co-motion. Policy tests exercise wave-versus
 
 Next validation targets: a real enemy-carry sequence, an observed Midboss kill/respawn, and
 native-resolution crops during gameplay. Existing recordings only contain compressed crops.
+# Active lane-coaching follow-up
+
+The reader now estimates a unique green player ring and projects it onto a lane, withholding
+the estimate until consecutive frames support it. Personal HP/max-HP readings and a manual
+lane-focus fallback feed a document-grounded decision policy. See [active lane coaching](active-laning.md)
+for evidence gates and remaining uncertainty. Older notes below describe the original detector.

@@ -51,6 +51,12 @@ pub struct GameSnapshot {
     pub ally_networth: Option<u32>,
     pub enemy_networth: Option<u32>,
     pub hp: Option<u32>,
+    pub max_hp: Option<u32>,
+    /// Consecutive plausible personal HP/max-HP reads. Not a probability.
+    pub health_observations: u32,
+    pub health_delta_ratio: Option<f32>,
+    /// Explicit user context; kept separate from inferred minimap identity.
+    pub coaching_context: CoachingContext,
     /// True while the player is dead/spectating (personal HUD values are not the player's own).
     pub dead: bool,
     pub respawn_secs: Option<u32>,
@@ -70,6 +76,10 @@ pub struct GameSnapshot {
 /// own base at the bottom).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Lane { Green, Blue, Yellow }
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CoachingContext { pub focus_lane: Option<Lane> }
 
 /// Positions are normalised minimap coordinates, (0,0) top-left, (1,1) bottom-right.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
@@ -115,13 +125,14 @@ pub struct MinimapState {
     pub urn_pos: Option<Pt>,
     /// Enemy heroes currently visible on the minimap (red ring), with positions.
     pub enemies: Vec<Pt>,
-    /// Allied heroes other than you.
+    /// Allied hero rings; the own candidate is excluded when identified.
     pub allies: Vec<Pt>,
     /// Estimated number of visible enemy heroes (clusters are split by size).
     pub enemy_count: u32,
     pub you: Option<Pt>,
     /// Lane you are standing in, if you are near one.
     pub your_lane: Option<Lane>,
+    pub your_progress: Option<f32>,
 }
 
 impl MinimapState {

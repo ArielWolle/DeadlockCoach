@@ -21,9 +21,11 @@ pub fn item_cell(cx: f32, col: usize, row: usize) -> Region {
 /// Quick check used by the screen classifier: do the probe columns show hero names?
 /// (K/D/A digits are too small for the OCR model, but names read reliably.)
 pub fn looks_like_scoreboard(rd: &Reader, img: &DynamicImage, hero_names: &[(String, String)]) -> bool {
-    [hud::ALLY_CENTERS[1], hud::ALLY_CENTERS[3], hud::ENEMY_CENTERS[1], hud::ENEMY_CENTERS[4]].iter()
-        .filter(|cx| rd.read(&hud::crop(img, name_region(**cx))).ok().and_then(|s| match_hero(&s, hero_names)).is_some())
-        .count() >= 3
+    let mut matches=0;
+    for (i,cx) in [hud::ALLY_CENTERS[1],hud::ALLY_CENTERS[3],hud::ENEMY_CENTERS[1],hud::ENEMY_CENTERS[4]].iter().enumerate(){
+        if rd.read(&hud::crop(img,name_region(*cx))).ok().and_then(|s|match_hero(&s,hero_names)).is_some(){matches+=1;}
+        if matches>=3{return true;}if matches+3-i<3{return false;}
+    }false
 }
 /// Normalised Levenshtein-ish match of OCR text against hero display names.
 pub fn match_hero(text: &str, names: &[(String, String)]) -> Option<String> {

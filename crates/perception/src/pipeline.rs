@@ -35,8 +35,8 @@ pub struct Profile {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
-pub struct Viewport { pub aspect_ratio: Option<f32>, pub max_width: u32 }
-impl Default for Viewport { fn default() -> Self { Self { aspect_ratio: None, max_width: 1600 } } }
+pub struct Viewport { pub aspect_ratio: Option<f32>, pub max_width: u32, pub auto_crop:bool }
+impl Default for Viewport { fn default() -> Self { Self { aspect_ratio: None, max_width: 1600, auto_crop:true } } }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -71,6 +71,12 @@ pub struct Region {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct Bounds { pub x: u32, pub y: u32, pub w: u32, pub h: u32 }
 
+#[derive(Debug,Clone,Copy,Serialize,Deserialize,Default,PartialEq,Eq)]
+#[serde(rename_all="snake_case")]
+pub enum RegionOrigin { #[default] Configured, Detected }
+#[derive(Debug,Clone,Serialize,Deserialize)]
+pub struct RegionObservation {pub id:String,pub label:String,pub bounds:Bounds,pub origin:RegionOrigin,pub score:Option<f32>,#[serde(default)] pub value_path:Option<String>}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum OcrMode { #[default] Detect, Line }
@@ -85,6 +91,7 @@ pub enum Operation {
     Preprocess { #[serde(default)] grayscale: bool, #[serde(default)] invert: bool,
         #[serde(default)] threshold: Option<u8>, #[serde(default = "one")] scale: f32 },
     Ocr { #[serde(default)] mode: OcrMode, #[serde(default = "default_scale")] upscale: u32 },
+    LocateText { pattern:String, #[serde(default)] index:usize },
     Extract { pattern: String, #[serde(default = "default_capture")] group: usize },
     Parse { parser: Parser, #[serde(default)] min: Option<f64>, #[serde(default)] max: Option<f64>,
         #[serde(default = "one")] scale: f32, #[serde(default)] decimal_comma: bool },
@@ -109,7 +116,7 @@ fn default_scales() -> Vec<f32> { vec![1.0] }
 impl Operation {
     pub fn kind(&self) -> &'static str {
         match self { Self::Crop {..} => "crop", Self::Preprocess {..} => "preprocess", Self::Ocr {..} => "ocr",
-            Self::Extract {..} => "extract", Self::Parse {..} => "parse", Self::Contains {..} => "contains",
+            Self::Extract {..} => "extract", Self::LocateText {..}=>"locate_text", Self::Parse {..} => "parse", Self::Contains {..} => "contains",
             Self::Select {..} => "select", Self::Gate {..} => "gate", Self::Confirm {..} => "confirm",
             Self::Coalesce => "coalesce", Self::Status {..} => "status", Self::Classify {..} => "classify", Self::Match {..} => "match",
             Self::Locate {..} => "locate", Self::ColorRatio {..} => "color_ratio", Self::Custom {..} => "custom" }
@@ -124,6 +131,8 @@ pub struct Packet {
     /// Detector similarity score, not a calibrated probability. OCR without scores stays None.
     pub score: Option<f32>,
     pub bounds: Option<Bounds>,
+    pub bounds_origin:RegionOrigin,
+    pub regions:Vec<RegionObservation>,
 }
 
 pub struct FrameContext<'a> { pub frame: &'a DynamicImage, pub auxiliary: Option<&'a image::RgbImage>, pub timestamp_ms: u64, pub node_id: &'a str }
@@ -143,6 +152,7 @@ pub struct Reading {
     pub score: Option<f32>,
     pub bounds: Option<Bounds>,
     pub source: String,
+    #[serde(default)] pub bounds_origin:RegionOrigin,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -150,6 +160,8 @@ pub struct Trace {
     pub id: String, pub operation: String, pub inputs: Vec<String>, pub status: Status,
     pub elapsed_ms: f64, pub value: Option<Value>, pub score: Option<f32>, pub bounds: Option<Bounds>,
     pub image_size: Option<[u32; 2]>, pub error: Option<String>,
+    #[serde(default)] pub bounds_origin:RegionOrigin,
+    #[serde(default)] pub regions:Vec<RegionObservation>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -168,7 +180,7 @@ pub struct Resources {
 }
 
 #[derive(Clone)]
-pub struct TextResult { pub text: String, pub score: Option<f32> }
+pub struct TextResult { pub text: String, pub score: Option<f32>, pub regions:Vec<RegionObservation> }
 /// Replace the OCR implementation without changing profile execution or game adapters.
 pub trait TextBackend {
     fn recognize(&self, image: &DynamicImage, mode: OcrMode, upscale: u32) -> Result<TextResult, String>;
@@ -176,12 +188,13 @@ pub trait TextBackend {
 #[cfg(feature = "ocrs-backend")]
 impl TextBackend for Reader {
     fn recognize(&self, image: &DynamicImage, mode: OcrMode, upscale: u32) -> Result<TextResult, String> {
+        let mut regions=vec![];
         let text = match mode {
-            OcrMode::Detect => self.read_scaled(image, upscale)?,
+            OcrMode::Detect => {regions=self.read_spans(image,upscale)?;regions.iter().map(|r|r.label.clone()).collect::<Vec<_>>().join("\n")},
             OcrMode::Line if upscale == 1 => self.read_line(image)?,
             OcrMode::Line => self.read_line(&image.resize_exact(image.width() * upscale, image.height() * upscale, FilterType::CatmullRom))?,
         };
-        Ok(TextResult { text, score: None })
+        Ok(TextResult { text, score: None,regions })
     }
 }
 type OcrCache = HashMap<(usize, bool, u32), Result<TextResult, String>>;
@@ -231,7 +244,7 @@ impl Pipeline {
             templates.insert(template.id.clone(), Template { image: Arc::new(image), gray, color });
         }
         let mut regexes = HashMap::new();
-        for node in &profile.nodes { if let Operation::Extract { pattern, .. } = &node.op {
+        for node in &profile.nodes { if let Operation::Extract { pattern, .. } | Operation::LocateText {pattern,..} = &node.op {
             regexes.insert(node.id.clone(), Regex::new(pattern).map_err(|e| e.to_string())?);
         }}
         fn canonical(v: Value) -> Value { match v {
@@ -265,12 +278,13 @@ impl Pipeline {
             let (status, packet, error) = match result { Ok((status, p)) => (status, p, None), Err(e) => { self.history.remove(&node.id); (Status::Error, Packet::default(), Some(e)) } };
             traces.push(Trace { id: node.id.clone(), operation: node.op.kind().into(), inputs: ids, status,
                 elapsed_ms: start.elapsed().as_secs_f64() * 1000.0, value: packet.value.clone(), score: packet.score,
-                bounds: packet.bounds, image_size: packet.image.as_ref().map(|i| [i.width(), i.height()]), error });
+                bounds: packet.bounds, image_size: packet.image.as_ref().map(|i| [i.width(), i.height()]), error,
+                bounds_origin:packet.bounds_origin,regions:packet.regions.clone() });
             packets.insert(node.id, (status, packet));
         }
         let fields = self.profile.outputs.iter().map(|(field, source)| {
             let (status, p) = &packets[source];
-            (field.clone(), Reading { status: *status, value: if *status == Status::Ok { p.value.clone() } else { None }, score: p.score, bounds: p.bounds, source: source.clone() })
+            (field.clone(), Reading { status: *status, value: if *status == Status::Ok { p.value.clone() } else { None }, score: p.score, bounds: p.bounds, source: source.clone(), bounds_origin:p.bounds_origin })
         }).collect();
         Report { schema_version: 1, profile_id: self.profile.id.clone(), frame_id: self.frame_id, timestamp_ms,
             profile_revision: self.revision.clone(), frame_size: [frame.width(), frame.height()], fields, stages: traces }
@@ -281,6 +295,7 @@ impl Pipeline {
         let input = &inputs[0];
         if input.image.as_ref().is_some_and(|i| i.width() == 0 || i.height() == 0) { return Err("empty input image".into()); }
         let mut out = input.clone();
+        out.regions.clear();
         match &node.op {
             Operation::Crop { region, anchor_input } => {
                 let image = input.image.as_ref().ok_or("crop needs an image")?;
@@ -305,6 +320,8 @@ impl Pipeline {
                 } else { image.crop_imm(relative.x, relative.y, relative.w, relative.h) };
                 spend(budget, crop.width(), crop.height())?;
                 out = Packet { image: Some(Arc::new(crop)), bounds: Some(bounds), ..Default::default() };
+                out.bounds_origin=if *anchor_input {inputs[1].bounds_origin} else {input.bounds_origin};
+                out.regions.push(RegionObservation{id:node.id.clone(),label:node.id.clone(),bounds,origin:out.bounds_origin,score:None,value_path:None});
             }
             Operation::Preprocess { grayscale, invert, threshold, scale } => {
                 let mut image = (**input.image.as_ref().ok_or("preprocess needs an image")?).clone();
@@ -326,6 +343,15 @@ impl Pipeline {
                 let text: String = result.text.chars().take(8192).collect();
                 if text.trim().is_empty() { return Ok((Status::Missing, Packet::default())); }
                 out.value = Some(Value::String(text)); out.score = result.score.filter(|s| s.is_finite());
+                let origin=input.bounds.unwrap_or(Bounds{x:0,y:0,w:image.width(),h:image.height()});
+                out.regions=result.regions.into_iter().map(|mut r|{r.bounds=map_bounds(r.bounds,origin,image.width(),image.height());r}).collect();
+            }
+            Operation::LocateText { index,.. } => {
+                let Some(region)=input.regions.iter().filter(|r|self.regexes[&node.id].is_match(&r.label)).nth(*index).cloned()else{return Ok((Status::Missing,Packet::default()));};
+                let b=region.bounds;
+                if b.w==0||b.h==0||b.x+b.w>context.frame.width()||b.y+b.h>context.frame.height(){return Err("text detector returned invalid bounds".into());}
+                out.image=Some(Arc::new(context.frame.crop_imm(b.x,b.y,b.w,b.h)));out.bounds=Some(b);out.bounds_origin=region.origin;
+                out.value=Some(json!(region.label));out.score=region.score;out.regions=vec![RegionObservation{id:node.id.clone(),..region}];
             }
             Operation::Extract { group, .. } => {
                 let Some(text) = input.value.as_ref().and_then(Value::as_str) else { return Ok((Status::Missing, Packet::default())); };
@@ -350,6 +376,9 @@ impl Pipeline {
             Operation::Select { path } => {
                 let value = input.value.as_ref().and_then(|v| v.pointer(path)).filter(|v| !v.is_null()).cloned();
                 if value.is_none() { return Ok((Status::Missing, Packet::default())); } out.value = value;
+                if let Some(region)=input.regions.iter().find(|r|r.value_path.as_deref()==Some(path)){
+                    out.bounds=Some(region.bounds);out.bounds_origin=region.origin;out.score=region.score;
+                }
             }
             Operation::Gate { min_score, equals } => {
                 if min_score.is_some_and(|m| input.score.is_none_or(|s| s < m)) || equals.as_ref().is_some_and(|v| input.value.as_ref() != Some(v)) {
@@ -436,6 +465,8 @@ impl Pipeline {
                 let origin = input.bounds.unwrap_or(Bounds { x: 0, y: 0, w: image.width(), h: image.height() });
                 out.image = Some(Arc::new(image.crop_imm(local.x, local.y, local.w, local.h)));
                 out.bounds = Some(map_bounds(local, origin, image.width(), image.height())); out.value = Some(json!(template)); out.score = Some(score);
+                out.bounds_origin=RegionOrigin::Detected;
+                out.regions.push(RegionObservation{id:node.id.clone(),label:template.clone(),bounds:out.bounds.unwrap(),origin:RegionOrigin::Detected,score:Some(score),value_path:None});
             }
             Operation::ColorRatio { rgb, tolerance } => {
                 let image = input.image.as_ref().ok_or("color ratio needs an image")?.to_rgb8();
@@ -535,6 +566,7 @@ fn validate(profile: &Profile, resources: &Resources) -> Result<Vec<usize>, Stri
                 let r = Regex::new(pattern).map_err(|e| format!("{}: {e}", n.id))?;
                 if *group >= r.captures_len() { return Err(format!("{}: missing regex capture group", n.id)); }
             }
+            Operation::LocateText {pattern,..} => {if pattern.len()>1024{return Err("text-locator pattern too long".into());}Regex::new(pattern).map_err(|e|e.to_string())?;}
             Operation::Confirm { frames, tolerance, max_age_ms, max_delta } if *frames == 0 || *frames > 60 || !tolerance.is_finite() || *tolerance < 0.0 || *max_age_ms == 0 || max_delta.is_some_and(|v| !v.is_finite() || v < 0.0) => return Err(format!("{}: invalid confirmation settings", n.id)),
             Operation::Parse { min, max, scale, .. } if !scale.is_finite() || min.is_some_and(|v| !v.is_finite()) || max.is_some_and(|v| !v.is_finite()) || min.zip(*max).is_some_and(|(a,b)| a > b) => return Err(format!("{}: invalid parser bounds", n.id)),
             Operation::Select { path } if !path.is_empty() && !path.starts_with('/') => return Err(format!("{}: select path must be a JSON pointer", n.id)),
@@ -552,7 +584,7 @@ fn validate(profile: &Profile, resources: &Resources) -> Result<Vec<usize>, Stri
             Operation::Locate { min_score, .. } => vec![*min_score], _ => vec![],
         };
         if scores.iter().any(|s| !s.is_finite() || !(-1.0..=2.0).contains(s)) { return Err(format!("{}: invalid score threshold", n.id)); }
-        if matches!(n.op, Operation::Extract {..} | Operation::Parse {..} | Operation::Contains {..} | Operation::Select {..} | Operation::Gate {..} | Operation::Confirm {..} | Operation::Status {..}) && n.inputs.len() != 1 {
+        if matches!(n.op, Operation::Extract {..} | Operation::LocateText {..} | Operation::Parse {..} | Operation::Contains {..} | Operation::Select {..} | Operation::Gate {..} | Operation::Confirm {..} | Operation::Status {..}) && n.inputs.len() != 1 {
             return Err(format!("{}: value operation requires exactly one input", n.id));
         }
     }

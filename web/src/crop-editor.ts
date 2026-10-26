@@ -1,5 +1,8 @@
 import { fit, grow, move, normalized, resize, selection, viewport, type Corner, type Crop, type Rect, type Size } from './crop';
 import { sampleBorders } from './borders';
+import type {SourceFrame} from './frame-history';
+import {reportRegions,drawRegions,type OverlayRegion} from './region-overlays';
+import {download} from './storage';
 
 interface Source {
   image: HTMLVideoElement | ImageBitmap;
@@ -11,9 +14,11 @@ interface Source {
   aspect?: number | null;
   minimum?: { width: number; height: number };
   purpose?: 'viewport' | 'region';
+  frames?:SourceFrame[];
+  regions?:OverlayRegion[];
 }
 
-/** Live UI only: no capture permission changes and no frame is sent to OCR until Apply. */
+/** Frozen capture-history/reference inspector; legacy video sources remain supported. */
 export class CropEditor {
   private dialog = document.getElementById('crop-dialog') as HTMLDialogElement;
   private stage = document.getElementById('crop-stage')!;
@@ -31,9 +36,19 @@ export class CropEditor {
   private frameCount = 0;
   private aspect: number | null = 16 / 9;
   private minimum = { width: 320, height: 180 };
+  private history:SourceFrame[]=[];private selected=-1;
   private drag?: { id: number; x: number; y: number; rect: Rect; corner?: Corner };
 
   constructor() {
+    document.getElementById('crop-show-regions')!.onchange=()=>{this.renderSource();this.drawPreview();};
+    document.getElementById('crop-export-sample')!.onclick=()=>{
+      const frame=this.history[this.selected];if(!frame)return;
+      const canvas=document.createElement('canvas');canvas.width=frame.width;canvas.height=frame.height;canvas.getContext('2d')!.drawImage(frame.image,0,0);
+      const payload={schema_version:1,annotation_state:'unreviewed',timestamp_ms:frame.timestamp,image_base64:canvas.toDataURL('image/png').split(',')[1],
+        profile_id:frame.report?.profile_id,profile_revision:frame.report?.profile_revision,
+        frame_size:[frame.width,frame.height],original_source_size:[frame.rawWidth,frame.rawHeight],inspection_region:normalized(this.rect,this.size),capture_viewport:frame.crop,regions:reportRegions(frame)};
+      download(`hud-inspection-${frame.id}.json`,new Blob([JSON.stringify(payload)],{type:'application/json'}));
+    };
     this.dialog.addEventListener('cancel', () => this.cancel());
     this.dialog.addEventListener('close', () => { if (this.resolve && !this.dialog.open) this.finish(); });
     document.getElementById('crop-cancel')!.onclick = () => this.cancel();
@@ -104,18 +119,28 @@ export class CropEditor {
   open(source: Source): Promise<Crop | undefined> {
     if (this.opening) return this.opening;
     this.source = source; this.size = { width: source.width, height: source.height };
+    this.history=source.frames||[];this.selected=this.history.length-1;for(let i=this.history.length-1;i>=0;i--){if(this.history[i].report){this.selected=i;break;}}
+    const chosen=this.history[this.selected];if(chosen){this.source={...source,image:chosen.image,width:chosen.width,height:chosen.height};this.size={width:chosen.width,height:chosen.height};}
     this.aspect = source.aspect === undefined ? 16 / 9 : source.aspect;
     this.minimum = source.minimum || { width: 320, height: 180 };
     this.original = { ...source.initial }; this.rect = selection(source.initial, this.size, this.aspect, this.minimum.width, this.minimum.height);
     this.frameCount = 0; this.lastPaint = -Infinity;
     document.getElementById('crop-description')!.textContent = source.description;
-    document.getElementById('crop-title')!.textContent = source.purpose === 'region' ? 'Select field region' : 'Select your game viewport';
+     document.getElementById('crop-title')!.textContent = source.frames?.length && source.purpose==='region' ? 'Inspect captured HUD elements' : source.purpose === 'region' ? 'Select field region' : 'Select your game viewport';
     document.getElementById('crop-move')!.setAttribute('aria-label', source.purpose === 'region' ? 'Move field region' : 'Move game viewport');
     document.querySelector('.crop-result p')!.textContent = source.purpose === 'region'
       ? 'Keep only the pixels for this field or search area inside the frame. Coordinates are relative to the analyzed image.'
       : 'Keep the entire game HUD inside the frame. Exclude chat, browser chrome and black bars.';
     this.preview.setAttribute('aria-label', 'Preview of the selected image region');
-    document.getElementById('crop-source-kind')!.textContent = source.image instanceof HTMLVideoElement ? 'Live source preview' : 'Screenshot preview';
+    document.getElementById('crop-source-kind')!.textContent = chosen ? 'Frozen source · sampling paused' : source.image instanceof HTMLVideoElement ? 'Live source preview' : 'Screenshot preview';
+    document.getElementById('crop-history-controls')!.hidden=!this.history.length;
+    document.getElementById('crop-history')!.replaceChildren();
+    for(const [i,frame]of this.history.entries()){
+      const b=document.createElement('button');b.type='button';b.className='crop-history-frame';b.setAttribute('aria-label',`Use captured frame ${i+1} of ${this.history.length}`);
+      b.setAttribute('aria-pressed',String(i===this.selected));const thumb=document.createElement('canvas');thumb.width=128;thumb.height=Math.max(1,Math.round(128*frame.height/frame.width));thumb.getContext('2d')!.drawImage(frame.image,0,0,thumb.width,thumb.height);
+      const caption=document.createElement('span');caption.textContent=`${i+1} · ${new Date(frame.timestamp).toLocaleTimeString()}`;b.append(thumb,caption);b.onclick=()=>this.selectFrame(i);document.getElementById('crop-history')!.append(b);
+    }
+    document.getElementById('crop-history-status')!.textContent=`Sampling paused · ${this.history.length} of the last 5 source frames available. Located boxes come from that frame; configured boxes are not detections.`;
     const ratio = this.aspect === null ? 'Free aspect' : Math.abs(this.aspect - 16 / 9) < .01 ? '16:9' : `${this.aspect.toFixed(2)}:1`;
     document.querySelector('#crop-move span')!.textContent = source.purpose === 'region' ? 'FIELD REGION' : `GAME VIEW · ${ratio.toUpperCase()}`;
     document.getElementById('crop-fit')!.textContent = this.aspect === null ? 'Use full source' : `Fit ${ratio}`;
@@ -126,11 +151,29 @@ export class CropEditor {
     document.getElementById('crop-move')!.focus();
     return this.opening;
   }
+  private selectFrame(index:number){
+    const f=this.history[index];if(!f||!this.source)return;const crop=normalized(this.rect,this.size);this.selected=index;
+    this.source={...this.source,image:f.image,width:f.width,height:f.height};this.size={width:f.width,height:f.height};
+    this.rect=selection(crop,this.size,this.aspect,this.minimum.width,this.minimum.height);this.lastPaint=-Infinity;
+    document.querySelectorAll('#crop-history button').forEach((b,i)=>b.setAttribute('aria-pressed',String(i===index)));
+    this.update(true);this.renderSource();
+  }
+  private overlays(){const f=this.history[this.selected];return f?reportRegions(f):this.source?.regions||[];}
+  private renderSource(){
+    if(!this.source)return;const width=Math.min(1440,this.size.width),height=Math.max(1,Math.round(width*this.size.height/this.size.width));
+    this.canvas.width=width;this.canvas.height=height;const ctx=this.canvas.getContext('2d')!;ctx.drawImage(this.source.image,0,0,width,height);
+    if((document.getElementById('crop-show-regions') as HTMLInputElement).checked)drawRegions(ctx,this.overlays(),width,height);
+    const boxes=this.overlays();document.getElementById('crop-region-status')!.textContent=boxes.length
+      ?`${boxes.filter(r=>r.origin==='detected').length} located boxes · ${boxes.filter(r=>r.origin==='configured').length} configured search regions`
+      :'No detector report for this frame yet. Boxes are never invented from screen size.';
+    const frame=this.history[this.selected];this.canvas.dataset.frame=String(frame?.id||1);this.canvas.dataset.sourceFrameId=String(frame?.id||'reference');
+  }
 
   cancel() { if (this.resolve) this.finish(); }
   private finish(crop?: Crop) {
     const resolve = this.resolve; this.resolve = undefined; this.opening = undefined;
     cancelAnimationFrame(this.animation); this.source = undefined; this.drag = undefined;
+    this.history=[];this.selected=-1;document.getElementById('crop-history')!.replaceChildren();
     this.dialog.close(); resolve?.(crop);
   }
   private announce(message: string) { document.getElementById('crop-editor-status')!.textContent = message; }
@@ -146,11 +189,13 @@ export class CropEditor {
     this.preview.style.maxHeight = '300px'; this.preview.style.objectFit = 'contain';
     this.preview.style.aspectRatio = `${this.rect.w} / ${this.rect.h}`;
     document.getElementById('crop-summary')!.textContent = summary;
-    document.getElementById('crop-source-size')!.textContent = `${this.size.width}×${this.size.height} source`;
+    const historical=this.history[this.selected];document.getElementById('crop-source-size')!.textContent=historical&&(historical.rawWidth!==this.size.width||historical.rawHeight!==this.size.height)
+      ?`${historical.rawWidth}×${historical.rawHeight} source · ${this.size.width}×${this.size.height} preview`:`${this.size.width}×${this.size.height} source`;
     let error = '';
     try { viewport(normalized(this.rect, this.size), this.size, this.aspect, this.minimum.width, this.minimum.height); } catch (e) { error = e instanceof Error ? e.message : String(e); }
     (document.getElementById('crop-apply') as HTMLButtonElement).disabled = !!error;
     if (announce) this.announce(error || summary);
+    this.renderSource();
     this.drawPreview();
   }
 
@@ -159,9 +204,11 @@ export class CropEditor {
     const { x, y, w, h } = this.rect;
     try { this.preview.getContext('2d')!.drawImage(this.source.image, x, y, w, h, 0, 0, this.preview.width, this.preview.height); }
     catch { /* A disconnected/resizing stream may temporarily have no frame. */ }
+    if((document.getElementById('crop-show-regions') as HTMLInputElement).checked)drawRegions(this.preview.getContext('2d')!,this.overlays(),this.preview.width,this.preview.height,normalized(this.rect,this.size));
   }
   private paint = (now: number) => {
     const source = this.source; if (!source || !this.dialog.open) return;
+    if(!(source.image instanceof HTMLVideoElement)){this.renderSource();this.drawPreview();return;}
     if (now - this.lastPaint >= 125) {
       this.lastPaint = now;
       if (source.image instanceof HTMLVideoElement) {
@@ -171,7 +218,7 @@ export class CropEditor {
           this.rect = selection(crop, this.size, this.aspect, this.minimum.width, this.minimum.height); this.update(); this.announce('Source size changed. Review the selection before applying.');
         }
       }
-      const width = Math.min(1440, this.size.width), height = Math.round(width * this.size.height / this.size.width);
+      const width = Math.min(1440, this.size.width), height = Math.max(1,Math.round(width * this.size.height / this.size.width));
       if (this.canvas.width !== width || this.canvas.height !== height) { this.canvas.width = width; this.canvas.height = height; }
       try {
         this.canvas.getContext('2d')!.drawImage(source.image, 0, 0, width, height);

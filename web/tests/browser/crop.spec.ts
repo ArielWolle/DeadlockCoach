@@ -2,6 +2,7 @@ import { test, expect, type Page } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
 
 async function mockSource(page: Page, borders: boolean) {
+  await page.addInitScript(()=>localStorage.setItem('coach-perception-profile-v1',JSON.stringify({schema_version:1,id:'legacy-editor-test',name:'Legacy editor fixture',adapter:'deadlock',viewport:{aspect_ratio:16/9,max_width:1600},nodes:[{id:'game',op:{type:'custom',name:'deadlock.scan'}}],outputs:{snapshot:'game'}})));
   await page.addInitScript(({ borders }) => {
     Object.defineProperty(navigator.mediaDevices, 'getDisplayMedia', { configurable: true, value: async () => {
       const image = new Image(); image.src = '/DeadlockCoach/assets/fixtures/00059_1792966931596.jpg'; await image.decode();
@@ -31,7 +32,8 @@ test('invalid viewport opens a live editor with mouse, keyboard and accessible c
   const dialog = page.getByRole('dialog', { name: 'Select your game viewport' });
   await expect(dialog).toBeVisible(); await expect(page.locator('#crop-summary')).toContainText('1920×1080');
   const frames = Number(await page.locator('#crop-source').getAttribute('data-frame'));
-  await expect.poll(async () => Number(await page.locator('#crop-source').getAttribute('data-frame'))).toBeGreaterThan(frames);
+  await expect(page.locator('#crop-history-status')).toContainText('Sampling paused');
+  await expect(page.locator('#crop-source')).toHaveAttribute('data-frame',String(frames));
   const box = page.locator('#crop-selection'), before = await box.boundingBox();
   const corner = page.getByRole('button', { name: 'Resize viewport from bottom right' });
   await corner.scrollIntoViewIfNeeded(); const handle = (await corner.boundingBox())!;
@@ -47,7 +49,7 @@ test('invalid viewport opens a live editor with mouse, keyboard and accessible c
   expect(violations.violations).toEqual([]);
   await page.screenshot({ path: 'test-results/visual-crop-editor.png', fullPage: true });
   await page.keyboard.press('Escape'); await expect(dialog).not.toBeVisible();
-  expect(await page.evaluate(() => (window as unknown as { testStream: MediaStream }).testStream.getTracks().every(t => t.readyState === 'ended'))).toBe(true);
+  await expect.poll(()=>page.evaluate(() => (window as unknown as { testStream: MediaStream }).testStream.getTracks().every(t => t.readyState === 'ended'))).toBe(true);
 });
 
 test('automatic top/side border cropping feeds correct HUD pixels and live edits reuse sharing', async ({ page }) => {

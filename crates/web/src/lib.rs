@@ -8,19 +8,34 @@ use wasm_bindgen::prelude::*;
 
 #[derive(Clone, Deserialize)]
 #[serde(default)]
-struct Options { timers: bool, economy: bool, map: bool, counters: bool, deaths: bool }
+struct Options { timers: bool, economy: bool, map: bool, counters: bool, deaths: bool, laning:bool, focus_lane:Option<coach_core::Lane> }
 impl Default for Options {
-    fn default() -> Self { Self { timers: true, economy: true, map: true, counters: true, deaths: true } }
+    fn default() -> Self { Self { timers: true, economy: true, map: true, counters: true, deaths: true, laning:true, focus_lane:None } }
 }
 
 #[derive(Serialize)]
-struct Analysis { snapshot: GameSnapshot, cues: Vec<coach_engine::Cue>, perception: Option<Report> }
+struct Analysis { snapshot: GameSnapshot, cues: Vec<coach_engine::Cue>, perception: Option<Report>, tactics:Option<coach_engine::laning::Decision> }
 
 struct DeadlockStage { scanner: Scanner }
+struct AutomaticStage {scanner:coach_vision::auto::AutoScanner}
+impl Stage for AutomaticStage {
+    fn run(&mut self,_inputs:&[Packet],frame:&FrameContext<'_>,_:&serde_json::Value)->Result<Packet,String>{
+        let value=self.scanner.scan(frame.frame,frame.timestamp_ms);
+        Ok(Packet{value:Some(serde_json::to_value(value).map_err(|e|e.to_string())?),regions:self.scanner.regions(),..Default::default()})
+    }
+    fn reset(&mut self){self.scanner.reset();}
+}
 impl Stage for DeadlockStage {
     fn run(&mut self, _inputs: &[Packet], frame: &FrameContext<'_>, _config: &serde_json::Value) -> Result<Packet, String> {
         let snapshot = self.scanner.scan_image(frame.frame, frame.auxiliary, frame.timestamp_ms);
-        Ok(Packet { value: Some(serde_json::to_value(snapshot).map_err(|e| e.to_string())?), ..Default::default() })
+        let mut regions=vec![];
+        regions.extend(self.scanner.regions());
+        for (id,label,r) in [("clock_search","Clock search",coach_vision::hud::CLOCK),("souls_search","Souls search",coach_vision::hud::SOULS),
+            ("map_search","Minimap search",coach_vision::Region{x:coach_vision::minimap::FRAC_X,y:coach_vision::minimap::FRAC_Y,w:coach_vision::minimap::FRAC_W,h:coach_vision::minimap::FRAC_H})]{
+            regions.push(coach_perception::RegionObservation{id:id.into(),label:label.into(),origin:coach_perception::RegionOrigin::Configured,score:None,value_path:None,
+                bounds:coach_perception::Bounds{x:(r.x*frame.frame.width() as f32) as u32,y:(r.y*frame.frame.height() as f32) as u32,w:(r.w*frame.frame.width() as f32) as u32,h:(r.h*frame.frame.height() as f32) as u32}});
+        }
+        Ok(Packet { value: Some(serde_json::to_value(snapshot).map_err(|e| e.to_string())?),regions, ..Default::default() })
     }
     fn reset(&mut self) { self.scanner.reset(); }
 }
@@ -61,6 +76,7 @@ pub struct Coach {
     options: Options,
     match_id: Option<u64>,
     last_clock: Option<u32>,
+    lane_coach:coach_engine::laning::LaneCoach,
 }
 
 fn js_error(s: impl ToString) -> JsValue { JsValue::from_str(&s.to_string()) }
@@ -76,6 +92,7 @@ impl Coach {
         if self.pipeline.profile().adapter != "deadlock" { return Ok(Engine::new(vec![])); }
         let mut rules: Vec<Box<dyn Rule>> = vec![];
         if self.options.timers { rules.extend(coach_engine::rules_from_timings(&self.timings).map_err(js_error)?); }
+        if self.options.laning {rules.push(Box::new(self.lane_coach.clone()));}
         if self.options.map { rules.push(Box::new(coach_engine::map_rules::MapRule)); }
         if self.options.economy {
             rules.push(Box::new(coach_engine::UnspentSoulsRule(self.rules.clone())));
@@ -123,14 +140,17 @@ impl Coach {
             #[derive(Deserialize)] struct Hero { class_name: String, name: String }
             let names: Vec<Hero> = json(heroes_json)?;
             if let Some(reader) = reader {
-                let scanner = Scanner::from_shared(reader, items, heroes, critical, names.into_iter().map(|h| (h.class_name, h.name)).collect());
+                let names:Vec<_>=names.into_iter().map(|h|(h.class_name,h.name)).collect();
+                let automatic=Scanner::from_shared(reader.clone(),items.clone(),heroes.clone(),critical.clone(),names.clone());
+                resources.stages.insert("deadlock.auto".into(),Box::new(AutomaticStage{scanner:coach_vision::auto::AutoScanner::new(automatic,reader.clone())}));
+                let scanner = Scanner::from_shared(reader, items, heroes, critical, names);
                 resources.stages.insert("deadlock.scan".into(), Box::new(DeadlockStage { scanner }));
             }
         }
         let pipeline = Pipeline::new(profile, resources).map_err(js_error)?;
         let mut coach = Coach { pipeline, engine: Engine::new(vec![]), timings: timings.into(),
             counters: counters.trim_start_matches('\u{feff}').into(), rules: if rules.is_empty() { RulesConfig::default() } else { json(rules)? },
-            options: Options::default(), match_id: None, last_clock: None };
+            options: Options::default(), match_id: None, last_clock: None, lane_coach:coach_engine::laning::LaneCoach::default() };
         coach.engine = coach.engine()?;
         Ok(coach)
     }
@@ -149,7 +169,7 @@ impl Coach {
     /// RGBA transfer avoids full-frame JPEG encoding, preserving HUD edges.
     pub fn analyze(&mut self, rgba: Vec<u8>, width: u32, height: u32, map: Vec<u8>,
         map_width: u32, map_height: u32, now_ms: f64) -> Result<JsValue, JsValue> {
-        if width < 320 || height < 180 || width > 4096 || height > 2304 || !now_ms.is_finite() || now_ms < 0.0 {
+        if width == 0 || height == 0 || width > 4096 || height > 2304 || !now_ms.is_finite() || now_ms < 0.0 {
             return Err(js_error("invalid frame dimensions or timestamp"));
         }
         let image = image::RgbaImage::from_raw(width, height, rgba).ok_or_else(|| js_error("invalid RGBA buffer length"))?;
@@ -159,29 +179,33 @@ impl Coach {
             image::RgbaImage::from_raw(map_width, map_height, map).map(|m| image::DynamicImage::ImageRgba8(m).to_rgb8())
         } else { None };
         let perception = self.pipeline.run(&image, map.as_ref(), now_ms as u64);
-        let snapshot = if self.pipeline.profile().adapter == "deadlock" {
-            let id = self.pipeline.profile().nodes.iter().find(|n| matches!(&n.op, coach_perception::Operation::Custom { name, .. } if name == "deadlock.scan")).map(|n| n.id.as_str());
+        let mut snapshot:GameSnapshot = if self.pipeline.profile().adapter == "deadlock" {
+            let id = self.pipeline.profile().nodes.iter().find(|n| matches!(&n.op, coach_perception::Operation::Custom { name, .. } if name == "deadlock.scan"||name=="deadlock.auto")).map(|n| n.id.as_str());
             perception.stages.iter().find(|s| Some(s.id.as_str()) == id).and_then(|s| s.value.clone())
                 .and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default()
         } else { GameSnapshot::default() };
+        snapshot.coaching_context.focus_lane=self.options.focus_lane;
+        let tactics=if self.options.laning && self.pipeline.profile().adapter=="deadlock" {self.lane_coach.decide(&snapshot)} else {None};
         let cues = self.step(&snapshot)?;
-        to_js(&Analysis { snapshot, cues, perception: Some(perception) })
+        to_js(&Analysis { snapshot, cues, perception: Some(perception), tactics })
     }
 
     /// Replay imports traverse the very same rule engine as live frames.
     pub fn replay(&mut self, snapshot_json: &str) -> Result<JsValue, JsValue> {
-        let snapshot: GameSnapshot = json(snapshot_json)?;
+        let mut snapshot: GameSnapshot = json(snapshot_json)?;
+        snapshot.coaching_context.focus_lane=self.options.focus_lane.or(snapshot.coaching_context.focus_lane);
+        let tactics=if self.options.laning && self.pipeline.profile().adapter=="deadlock" {self.lane_coach.decide(&snapshot)} else {None};
         let cues = self.step(&snapshot)?;
-        to_js(&Analysis { snapshot, cues, perception: None })
+        to_js(&Analysis { snapshot, cues, perception: None, tactics })
     }
 }
 
 fn check_adapter(profile: &Profile) -> Result<(), JsValue> {
     if profile.adapter != "generic" && profile.adapter != "deadlock" { return Err(js_error("unknown browser game adapter")); }
-    if profile.adapter == "deadlock" && profile.nodes.iter().filter(|n| matches!(&n.op, coach_perception::Operation::Custom { name, .. } if name == "deadlock.scan")).count() != 1 {
-        return Err(js_error("Deadlock coaching requires exactly one deadlock.scan stage"));
+    if profile.adapter == "deadlock" && profile.nodes.iter().filter(|n| matches!(&n.op, coach_perception::Operation::Custom { name, .. } if name == "deadlock.scan"||name=="deadlock.auto")).count() != 1 {
+        return Err(js_error("Deadlock coaching requires exactly one deadlock.scan or deadlock.auto stage"));
     }
-    if profile.adapter == "deadlock" && (profile.viewport.aspect_ratio.is_none_or(|r| (r - 16.0 / 9.0).abs() > 0.01) || profile.viewport.max_width != 1600) {
+    if profile.adapter == "deadlock" && profile.nodes.iter().any(|n|matches!(&n.op,coach_perception::Operation::Custom{name,..}if name=="deadlock.scan")) && (profile.viewport.aspect_ratio.is_none_or(|r| (r - 16.0 / 9.0).abs() > 0.01) || profile.viewport.max_width != 1600) {
         return Err(js_error("the legacy Deadlock adapter requires its calibrated 16:9 / 1600-wide input; use a generic profile for other layouts"));
     }
     Ok(())

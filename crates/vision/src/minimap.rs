@@ -164,13 +164,16 @@ fn dilate(mask: &[bool], w: u32, h: u32, radius: i32) -> Vec<bool> {
 /// from diamonds and fragmented lines. Nearby maxima are suppressed; never invent heroes
 /// to split a merged component.
 fn rings(mask: &[bool], w: u32, h: u32, scale: f32) -> Vec<(f32, f32)> {
+    rings_at(mask,w,h,scale,&[8.0,9.0,10.0,11.0])
+}
+fn rings_at(mask:&[bool],w:u32,h:u32,scale:f32,radii:&[f32]) -> Vec<(f32,f32)> {
     let mut candidates = vec![];
-    let margin = (12.0 * scale).ceil() as i32;
+    let margin = ((radii.iter().copied().fold(0.0,f32::max)+1.0) * scale).ceil() as i32;
     let step = scale.round().max(1.0) as usize;
     // Precompute circle samples and dilate once. The old inner loop evaluated millions
     // of sin/cos calls and 3×3 neighbourhood scans per frame, especially expensive in WASM.
     let supported = dilate(mask, w, h, 1);
-    let circles: Vec<Vec<(i32, i32)>> = [8.0, 9.0, 10.0, 11.0].iter().map(|radius| {
+    let circles: Vec<Vec<(i32, i32)>> = radii.iter().map(|radius| {
         (0..32).map(|i| {
             let a = i as f32 * std::f32::consts::TAU / 32.0;
             ((a.cos() * radius * scale).round() as i32, (a.sin() * radius * scale).round() as i32)
@@ -296,6 +299,15 @@ impl Analyzer {
         let ally_pts: Vec<_> = rings(&m.white, w, h, s).into_iter()
             .filter(|p| !self.near_structure(*p, 13.0) && p.1 > 80.0 && p.1 < 290.0)
             .take(6).collect();
+        let own:Vec<_> = rings_at(&m.green,w,h,s,&[4.0,5.0,6.0,7.0]).into_iter()
+            .filter(|p| !self.near_structure(*p,12.0) && p.1>75.0 && p.1<305.0).collect();
+        // A unique bright-green ring is only a candidate; the temporal tracker confirms it.
+        if let [p] = own.as_slice() {
+            st.you=Some(norm(p.0,p.1,CW as u32,CH as u32)); mk.push((p.0,p.1,'Y'));
+            if let Some((lane,progress,d))=self.project(*p) { if d<=18.0 {
+                st.your_lane=Some([coach_core::Lane::Green,coach_core::Lane::Blue,coach_core::Lane::Yellow][lane]); st.your_progress=Some(progress);
+            }}
+        }
 
         // Lane fronts.
         for (k, lane) in [&mut st.green, &mut st.blue, &mut st.yellow].into_iter().enumerate() {
@@ -332,7 +344,8 @@ impl Analyzer {
         for p in &ring_pts { mk.push((p.0, p.1, 'E')); }
         st.enemy_count = ring_pts.len() as u32;
         st.enemies = ring_pts.iter().map(|(x, y)| norm(*x, *y, CW as u32, CH as u32)).collect();
-        st.allies = ally_pts.iter().map(|(x, y)| norm(*x, *y, CW as u32, CH as u32)).collect();
+        st.allies = ally_pts.iter().map(|(x, y)| norm(*x, *y, CW as u32, CH as u32))
+            .filter(|p| st.you.is_none_or(|me| (me.x-p.x).hypot(me.y-p.y)>0.035)).collect();
 
         // Midboss: gold winged icon near the map centre.
         let mut gold = 0u32;
@@ -375,13 +388,16 @@ pub struct Tracker {
 
 impl Tracker {
     pub fn observe(&mut self, mut raw: MinimapState, now_ms: u64) -> MinimapState {
-        if self.history.back().map(|(t, _)| now_ms < *t || now_ms - *t > 15000).unwrap_or(false) {
+        if self.history.back().map(|(t, _)| now_ms < *t || now_ms - *t > 20000).unwrap_or(false) {
             self.history.clear();
         }
-        self.history.retain(|(t, _)| now_ms.saturating_sub(*t) <= 15000);
+        self.history.retain(|(t, _)| now_ms.saturating_sub(*t) <= 30000);
         self.history.push_back((now_ms, raw.clone()));
         while self.history.len() > 3 { self.history.pop_front(); }
         raw.observations = self.history.len() as u32;
+        let own_confirmed = self.history.len() >= 2 && raw.you.is_some_and(|p| self.history.iter().rev().nth(1)
+            .and_then(|(_,m)| m.you).is_some_and(|old| (p.x-old.x).hypot(p.y-old.y)<0.30));
+        if !own_confirmed { raw.you=None; raw.your_lane=None; raw.your_progress=None; }
         raw.midboss_up = self.history.len() >= 3 && self.history.iter().filter(|(_, m)| m.midboss_up).count() >= 2;
         for k in 0..3 {
             let values: Vec<f32> = self.history.iter().filter_map(|(_, m)| match k {

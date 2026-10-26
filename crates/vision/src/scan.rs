@@ -28,6 +28,8 @@ pub struct Scanner {
     board_history: Vec<Vec<coach_core::PlayerRow>>,
     map_analyzer: crate::minimap::Analyzer,
     map_tracker: crate::minimap::Tracker,
+    vitals: crate::vitals::Tracker,
+    regions:Vec<coach_perception::RegionObservation>,
 }
 
 /// Team totals only grow (mostly), and not by leaps. A value outside that band is accepted
@@ -96,6 +98,8 @@ impl Scanner {
             board_history: vec![],
             map_analyzer: crate::minimap::Analyzer::new(),
             map_tracker: crate::minimap::Tracker::default(),
+            vitals: crate::vitals::Tracker::default(),
+            regions:vec![],
         }
     }
 
@@ -109,11 +113,13 @@ impl Scanner {
         self.last_board.clear();
         self.board_history.clear();
         self.map_tracker = crate::minimap::Tracker::default();
+        self.vitals = crate::vitals::Tracker::default();
     }
 
     fn text(&self, img: &image::DynamicImage, r: crate::Region) -> Option<String> {
         self.ocr.read(&hud::crop(img, r)).ok()
     }
+    pub fn regions(&self)->Vec<coach_perception::RegionObservation>{self.regions.clone()}
 
     /// Greedy global assignment of heroes to the 12 slots by mean score.
     pub fn hero_scores(&self) -> Vec<Option<(String, f32)>> {
@@ -186,8 +192,15 @@ impl Scanner {
     /// Pixel entry point shared with WebAssembly. Canvas supplies RGBA directly, so no
     /// lossy JPEG roundtrip is required. Main HUD stays at calibrated 16:9 coordinates.
     pub fn scan_image(&mut self, img: &image::DynamicImage, minimap: Option<&image::RgbImage>, now_ms: u64) -> GameSnapshot {
+        self.scan_inner(img,minimap,now_ms,None)
+    }
+    pub fn scan_located(&mut self,img:&image::DynamicImage,minimap:Option<&image::RgbImage>,now_ms:u64,clock:u32,currency:u32)->GameSnapshot{
+        self.scan_inner(img,minimap,now_ms,Some((clock,currency)))
+    }
+    fn scan_inner(&mut self,img:&image::DynamicImage,minimap:Option<&image::RgbImage>,now_ms:u64,located:Option<(u32,u32)>)->GameSnapshot{
+        self.regions.clear();
         use crate::screen::{self, Screen};
-        let (scr, raw_clock) = screen::classify(&self.ocr, &img, &self.hero_names);
+        let (scr, raw_clock) = screen::classify_hinted(&self.ocr, &img, &self.hero_names,located.map(|p|p.0));
         // Only HUD screens yield data; menus, shop and loading yield an empty snapshot.
         if !scr.has_hud() { return GameSnapshot { screen: Some(format!("{scr:?}")), ..Default::default() }; }
 
@@ -239,7 +252,13 @@ impl Scanner {
             snap.death_cause = self.ocr.read(&hud::crop(&img, crate::Region {
                 x: 1352.0 / 1600.0, y: 276.0 / 900.0, w: 200.0 / 1600.0, h: 22.0 / 900.0 })).ok().and_then(|s| clean_cause(&s));
         } else {
-            let souls = self.text(&img, hud::SOULS).and_then(|s| parse::parse_souls(&s));
+            if scr == Screen::Gameplay {
+                if let Some(v) = self.vitals.read(&self.ocr, img, now_ms) {
+                    snap.hp=Some(v.hp); snap.max_hp=Some(v.max); snap.health_observations=v.observations; snap.health_delta_ratio=v.delta;
+                    self.regions=v.regions;
+                }
+            }
+            let souls = located.map(|p|p.1).or_else(||self.text(&img, hud::SOULS).and_then(|s| parse::parse_souls(&s)));
             snap.souls = self.tracker.accept_souls(souls).or(self.tracker.last_souls());
             // Items: non-flat slots matched against shop art with a confidence gate.
             for row in 0..2 {
@@ -252,6 +271,8 @@ impl Scanner {
                 }
             }
         }
+
+        if scr == Screen::Dead { self.vitals=crate::vitals::Tracker::default(); }
 
         // Heroes: accumulate card scores across frames, assign uniquely to the 12 slots.
         if raw_clock.is_some() {

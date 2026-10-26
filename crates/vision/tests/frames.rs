@@ -25,6 +25,15 @@ fn reads_real_frames() {
     assert_eq!(b.enemy_networth, Some(16000));
     assert!(b.items.contains(&"upgrade_pristine_emblem".to_string()), "items: {:?}", b.items);
     assert!(!b.dead);
+    assert_eq!(b.hp,Some(779));assert_eq!(b.max_hp,Some(964));assert!(b.health_observations>=2);
+    assert!(b.minimap.as_ref().unwrap().you.is_some());
+    assert_eq!(b.minimap.as_ref().unwrap().your_lane,Some(coach_core::Lane::Blue));
+}
+
+#[test]
+fn maximum_health_does_not_include_a_neighboring_stat_digit() {
+    let s=scan_confirmed(&mut scanner(),"00014");
+    assert_eq!(s.hp,Some(413));assert_eq!(s.max_hp,Some(769));
 }
 
 #[test]
@@ -43,6 +52,7 @@ fn reads_death_screen() {
     assert!(snap.dead);
     assert_eq!(snap.respawn_secs, Some(4));
     assert_eq!(snap.death_cause.as_deref(), Some("T2 Walker"));
+    assert!(snap.hp.is_none()&&snap.max_hp.is_none());
 }
 
 #[test]

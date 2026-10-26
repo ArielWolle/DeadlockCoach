@@ -68,3 +68,13 @@ fn lossless_scaled_crop_has_consistent_objective_detection() {
     assert!(m.midboss_up);
     assert!(m.urn_pos.is_some_and(|p| (p.x - 0.204).abs() < 0.02));
 }
+#[test]
+fn green_player_ring_is_confirmed_over_frames_and_not_invented_on_blank_maps() {
+    let root=std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let img=image::open(root.join("samples/frames/00059_1792966931596.jpg")).unwrap();
+    let raw=coach_vision::minimap::Analyzer::new().analyze(&coach_vision::minimap::crop_from_frame(&img));
+    let mut tracker=coach_vision::minimap::Tracker::default();
+    assert!(tracker.observe(raw.clone(),0).you.is_none());
+    assert_eq!(tracker.observe(raw,8000).your_lane,Some(coach_core::Lane::Blue));
+    assert!(tracker.observe(coach_core::MinimapState::default(),16000).you.is_none());
+}

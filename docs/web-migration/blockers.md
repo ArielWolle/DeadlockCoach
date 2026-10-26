@@ -17,6 +17,10 @@
 | Letterboxed captures produced a repeated 16:9 error with percentage-only recovery | Added live visual viewport editing, typed error recovery, conservative automatic four-edge border detection and a manual override |
 | Reusable UI matching was coupled to Deadlock interpretation | Extracted `coach-perception`, profile DAGs, replaceable OCR/custom stages, a JSONL CLI and browser Matching lab. The old game scanner remains a registered adapter |
 | GitHub Actions clean checkout lacked full-frame test images | The unanchored `frames/` ignore rule also excluded `samples/frames`. Anchored it to `/frames/`, added the eight fixtures to Git, and verified tests/asset generation from a tracked-files-only copy |
+| Strategy material was largely reference-only | Added document-quoted lane policy cards, health/player-lane evidence, prioritized wave/poke/camp decisions and source explanations in the Coach UI |
+| Camp/boost reminders assumed fixed recurring match-clock availability | Removed the recurring camp timer and made boost unlock a one-shot event; camp advice now explicitly requires checking whether the camp is up |
+| Full-window capture required users to align the game viewport | Added an automatic default profile with independent minimap, Souls and clock locators; moved/resized video fixtures and independently moved HUD widgets are covered |
+| Viewport adjustment kept consuming live source frames | Added bounded five-frame frozen history, report-driven located/configured overlays, local sample export and same-share resume |
 
 ## External blockers / not claimed complete
 
@@ -30,9 +34,10 @@
    output, voice installation and OS output routing need a human check on the gaming PC.
 4. **Performance target not fully met**: after enabling SIMD, optimizing minimap rings and
    using direct line recognition for team totals, recorded browser OCR frames have taken
-   roughly **6–15 seconds** on this machine. The latest full editor-regression run logged
+    roughly **6–18 seconds** on this machine. The earlier full editor-regression run logged
    **11,728 ms** for its final OCR frame; the later profile-engine regression recorded
-   **5,663 ms** (recorded 1600×900 HUD, not a live game benchmark).
+    **5,663 ms** (recorded 1600×900 HUD, not a live game benchmark).
+    The automatic-HUD/lane-policy run logged **17,844 ms** under concurrent native build load.
    This exceeds the default five-second target.
    The loop skips queueing and samples the current frame when ready; late speech is discarded.
    A 10-second interval is a practical setting to try. Game FPS impact, thermal load and
@@ -40,9 +45,11 @@
 5. **Vision uncertainty retained from native**: arbitrary HUD scales/aspect ratios, tiny scoreboard
    icons, exact K/D/A, camp availability and enemy Urn ownership remain incomplete or heuristic.
    Migration is not a claim that these recognition problems are solved.
-   In particular, inherited `data/timings.json` models Hard camps as a recurring clock
-   event although actual camp respawns depend on clearing; its reminder is not evidence
-   of an available camp. That game-data rule needs a separate correction/verification.
+    Personal HP and a green-ring player/lane estimate now have saved-frame coverage, but
+    other HUD scales, portrait colors, overlays and live movement still need wider validation.
+    Automatic full-window localization has narrow fixture coverage, not broad cross-game
+    evaluation. Health/hero/item/scoreboard searches still use registered compatibility context;
+    missing or rearranged widgets can remain unknown. See [automatic HUD discovery](../automatic-hud.md).
    Stream diagnostics also showed a 1080p clock digit misread after preprocessing (33:29
    read as 33:20); auto-cropping does not establish exact OCR correctness on every source.
 6. **Hosted Actions inspection**: this environment has git but no `gh` CLI (the owner said

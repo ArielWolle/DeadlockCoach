@@ -4,6 +4,8 @@ import { defaults, normalize } from '../src/settings.ts';
 import { snapshotLines } from '../src/storage.ts';
 import { fit, grow, move, normalized, resize, selection, viewport, ViewportError, type Rect } from '../src/crop.ts';
 import { consistentBorders, detectBorders } from '../src/borders.ts';
+import {FrameHistory} from '../src/frame-history.ts';
+import {regionsFromReport} from '../src/region-overlays.ts';
 
 test('settings normalize corrupt input, finite numeric ranges and viewport bounds', () => {
   assert.deepEqual(normalize(null), defaults);
@@ -78,4 +80,19 @@ test('generic profile viewport and field-region geometry support free aspect and
   const taller = resize(small, 'se', 0, 20, size, null, 1, 1);
   assert.equal(taller.w, 40); assert.equal(taller.h, 32);
   viewport(normalized(taller, size), size, null, 1, 1);
+});
+
+test('source history keeps only five frames, closes evicted pixels and returns frozen metadata',()=>{
+  const closed:number[]=[];const history=new FrameHistory();
+  for(let i=1;i<=6;i++)history.add({timestamp:i,image:{close:()=>closed.push(i)} as unknown as ImageBitmap,width:100,height:50,rawWidth:200,rawHeight:100,crop:{x:0,y:0,w:1,h:1}});
+  assert.deepEqual(history.snapshot().map(f=>f.id),[2,3,4,5,6]);assert.deepEqual(closed,[1]);
+  const snapshot=history.snapshot();snapshot[0].crop.x=.5;assert.equal(history.snapshot()[0].crop.x,0);
+  history.clear();assert.deepEqual(closed,[1,2,3,4,5,6]);
+});
+test('region overlays use reported boxes and preserve their provenance across capture transforms',()=>{
+  const report={schema_version:1,profile_id:'any-hud',profile_revision:'a'.repeat(64),frame_id:1,timestamp_ms:1,frame_size:[1000,500] as [number,number],fields:{},stages:[{
+    id:'locator',operation:'custom',inputs:['$frame'],status:'ok' as const,elapsed_ms:1,value:null,score:null,bounds:null,image_size:null,error:null,
+    regions:[{id:'balance',label:'Currency',bounds:{x:100,y:50,w:200,h:30},origin:'detected' as const,score:.9}]}]};
+  const [box]=regionsFromReport(report,{x:.1,y:.2,w:.5,h:.5});assert.equal(box.origin,'detected');
+  assert.ok(Math.abs(box.x-.15)<1e-9);assert.equal(box.y,.25);assert.equal(box.w,.1);assert.equal(box.h,.03);
 });

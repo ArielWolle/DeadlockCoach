@@ -102,6 +102,7 @@ Examples live in `data/profiles/`. This complete no-OCR example measures a color
 | `crop` | `region`, optional `anchor_input`; produces an image packet with original-frame bounds |
 | `preprocess` | `grayscale`, `invert`, `threshold`, `scale`; coordinates remain tied to the original analyzed frame |
 | `ocr` | `mode: detect|line`, `upscale: 1..6`; line mode skips text-layout detection |
+| `locate_text` | `pattern`, optional `index`; selects an actually OCR-located text line, publishing its tight box rather than the search region |
 | `extract` | Rust-regex `pattern`, `group` (default 1); extracts a capture from text |
 | `parse` | `parser: text|number|clock`, optional `min`, `max`, `scale`, `decimal_comma` |
 | `contains` | `text`, optional `case_sensitive`; boolean scene/label test |
@@ -212,6 +213,12 @@ frame-local `frame_id`, producer `timestamp_ms`, `frame_size`, named `fields` an
 Frame counters restart when a pipeline resets; they are not global session identifiers.
 Full reports include per-stage diagnostics; browser history JSONL exports the compact fields.
 Raw pixels are not serialized into reports.
+
+Detectors can also publish `RegionObservation` collections with `configured`/`detected`
+provenance and an optional JSON-pointer `value_path`. Selecting a structured value propagates
+its bound box and `bounds_origin`. OCR backends may return text regions; the bundled detector
+does, while line-only recognition does not pretend its input rectangle was newly located.
+See [automatic HUD discovery and source-frame inspection](../automatic-hud.md).
 
 ```js
 window.addEventListener('coach:perception', event => {

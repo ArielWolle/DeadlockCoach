@@ -1,7 +1,8 @@
 import type { Settings } from './types';
 export const defaults: Settings = {
   muted: false, voice: '', rate: 1, volume: .85, interval: 5, record: false, autoCrop: true,
-  options: { timers: true, economy: true, map: true, counters: true, deaths: true },
+  options: { timers: true, economy: true, map: true, counters: true, deaths: true, laning:true },
+  laneFocus:'auto',
   crop: { x: 0, y: 0, w: 1, h: 1 },
 };
 const number = (n: unknown, lo: number, hi: number, fallback: number) => typeof n === 'number' && Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : fallback;
@@ -10,6 +11,7 @@ export function normalize(input: unknown): Settings {
   const s = structuredClone(defaults);
   s.muted = value.muted === true; s.record = value.record === true;
   s.autoCrop = value.autoCrop !== false;
+  if (['auto','Green','Blue','Yellow'].includes(value.laneFocus || '')) s.laneFocus=value.laneFocus!;
   s.voice = typeof value.voice === 'string' ? value.voice.slice(0, 200) : '';
   s.rate = number(value.rate, .5, 2, defaults.rate); s.volume = number(value.volume, 0, 1, defaults.volume);
   s.interval = number(value.interval, 5, 30, defaults.interval);

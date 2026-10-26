@@ -1,6 +1,5 @@
 [
   { "name": "Soul Urn", "first_spawn_secs": 600, "interval_secs": 300, "warn_ahead_secs": 30 },
   { "name": "Power-ups", "first_spawn_secs": 300, "interval_secs": 300, "warn_ahead_secs": 20 },
-  { "name": "Zipline boost", "first_spawn_secs": 360, "interval_secs": 360, "warn_ahead_secs": 15 },
-  { "name": "Hard camps", "first_spawn_secs": 480, "interval_secs": 335, "warn_ahead_secs": 15 }
+  { "name": "Zipline boost unlock", "first_spawn_secs": 360, "interval_secs": 0, "warn_ahead_secs": 15 }
 ]

@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "id": "deadlock-auto",
+  "name": "Deadlock · automatic HUD discovery",
+  "adapter": "deadlock",
+  "viewport": { "aspect_ratio": null, "max_width": 4096, "auto_crop": false },
+  "nodes": [
+    { "id": "game", "op": { "type": "custom", "name": "deadlock.auto" } },
+    { "id": "clock", "inputs": ["game"], "op": { "type": "select", "path": "/game_clock_secs" } },
+    { "id": "souls", "inputs": ["game"], "op": { "type": "select", "path": "/souls" } },
+    { "id": "map", "inputs": ["game"], "op": { "type": "select", "path": "/minimap" } },
+    { "id": "health", "inputs": ["game"], "op": { "type": "select", "path": "/hp" } },
+    { "id": "max_health", "inputs": ["game"], "op": { "type": "select", "path": "/max_hp" } },
+    { "id": "scene", "inputs": ["game"], "op": { "type": "select", "path": "/screen" } }
+  ],
+  "outputs": { "match.clock_seconds": "clock", "player.currency": "souls", "world.minimap": "map", "player.hp": "health", "player.max_hp":"max_health", "scene":"scene" }
+}

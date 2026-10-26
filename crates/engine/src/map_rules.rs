@@ -18,6 +18,7 @@ impl Rule for MapRule {
         let (Some(map), Some(clock)) = (&snap.minimap, snap.game_clock_secs) else { return vec![] };
         if snap.dead || map.observations < 3 { return vec![]; }
         let mut out = vec![];
+        let poor_health=snap.hp.zip(snap.max_hp).is_some_and(|(hp,max)|max>0 && hp as f32/(max as f32)<0.65);
         let side = map.urn_pos.map(|p| if p.x < 0.45 { "Green side" }
             else if p.x > 0.65 { "Yellow side" } else { "the middle of the map" }).unwrap_or("the map");
         if clock >= 600 {
@@ -39,6 +40,7 @@ impl Rule for MapRule {
         let lanes = [Lane::Green, Lane::Blue, Lane::Yellow];
         let mut urgent = false;
         for l in lanes {
+            if crate::laning::focus(snap).is_some_and(|focus|focus!=l) {continue;}
             let state = map.lane(l);
             // Both colour-front and actual enemy-dot evidence are needed. No visible dots
             // doesn't mean an empty lane; occluded/unseen waves remain unknown.
@@ -53,12 +55,12 @@ impl Rule for MapRule {
         }
         let pushed = lanes.iter().filter(|l| map.lane(**l).push.is_some_and(|p| p > 0.65)).count();
         let no_bad_lane = lanes.iter().all(|l| map.lane(*l).push.is_some_and(|p| p >= 0.35));
-        if !urgent && pushed >= 2 && no_bad_lane && clock >= 300 {
+        if !urgent && !poor_health && pushed >= 2 && no_bad_lane && clock >= 300 && crate::laning::focus(snap).is_none() {
             out.push(cue("map:farm-window".into(),
                 "Two lanes look pushed. There may be time for nearby camps before the next wave. Watch missing enemies.".into(),
                 Priority::Low, 150));
         }
-        if map.midboss_up && clock >= 600 && !urgent && no_bad_lane {
+        if map.midboss_up && clock >= 600 && !urgent && !poor_health && no_bad_lane {
             out.push(cue("map:midboss".into(),
                 "The Midboss icon is lit. Push your lanes and gather teammates before considering it.".into(),
                 Priority::Low, 300));

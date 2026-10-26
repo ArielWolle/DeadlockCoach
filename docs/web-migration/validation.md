@@ -6,25 +6,35 @@
 - `wasm-pack build crates/web --target web --release --out-dir ../../web/wasm --out-name coach_web`:
   existing `ocrs` / RTen compile and execute in a browser worker. SIMD build does not need
   cross-origin isolation or shared-memory threads.
-- `cargo test --release --workspace`: **49 Rust tests passed**, including saved gameplay and
-  minimap regression fixtures, coaching policies, transport extension and asset-pack bounds.
-- `cargo test --locked --release -p coach-perception --no-default-features`: **17 tests passed**
+- `cargo test --release --workspace`: **76 Rust tests passed**, including saved gameplay and
+  minimap regression fixtures, lane policies/source integrity, independent HUD localization,
+  region provenance/field binding, transport extension and asset-pack bounds.
+- `cargo test --locked --release -p coach-perception --no-default-features`: **21 tests passed**
   with the bundled OCR backend disabled (matching, graph execution and the JSONL CLI).
 - `cargo build --locked --release -p coach-agent -p coach-brain -p deadlock-coach`: native
   Agent, Brain and Tauri application all build on Windows after the refactor.
-- `npm run test:unit`: **6 tests passed** using Node's test runner: settings/JSONL validation,
-  bounded 16:9 crop geometry and conservative automatic border detection.
+- `npm run test:unit`: **8 tests passed** using Node's test runner: settings/JSONL validation,
+  crop geometry, conservative border detection, bounded history and overlay transforms.
 - `npm run build`: TypeScript, production Vite build, asset allow-list, manifest integrity and
   static publication checks. App tested under `/DeadlockCoach/`.
-- Playwright: **21 tests passed**. Coverage: navigation/mobile overflow/keyboard skip link, local settings,
+- Playwright: **26 tests passed** across the full run and affected-test reruns after fixes.
+  Coverage: navigation/mobile overflow/keyboard skip link, local settings,
   actual WASM snapshot replay, real OCR matching native clock/souls/inventory, mocked display
   capture pause/stop/track release, model failure visibility, cancellation/retry, recording
   export/import/delete, speech API invocation/muting, offline shell plus cached model replay,
   and axe-core scans of every route.
-- Viewport-editor coverage includes live preview refresh, mouse resize, keyboard movement,
+- Viewport-editor coverage includes frozen-source inspection, mouse resize, keyboard movement,
   touch controls, cancel/apply while retaining the share, automatic top/side border cropping
   feeding real OCR, source-size changes, screenshot imports without changing capture
   preferences, modal accessibility and small-screen layout.
+- Automatic-profile coverage includes offset video in a 1920×1200 source without calibration,
+  located field boxes, disabled compatibility-only crop settings and optional inspection. This
+  test fixes `Date.now()` because its repeated still image cannot advance a game clock; actual
+  timers, WASM inference and screen-stream pixels remain real.
+- History coverage retains five source frames, verifies sampling stays paused while the producer
+  continues, switches frames/overlays, exports an unreviewed sample and resumes the same share.
+- Lane-coaching browser coverage exercises sourced camp advice, poke/back-off priorities and
+  persistent focus/options. Native tests cover the broader policy matrix and missing evidence.
 - Matching-lab coverage includes generic 4:3 capture without model/game-asset downloads,
   portable template assets/anchor search, visual small-field authoring, real clock/currency
   OCR through ordinary profile nodes, profile rejection without losing the active graph,
@@ -34,7 +44,8 @@
 - `npm audit`: dependency audit clean after removing the unnecessary vulnerable test-runner dependency.
 
 The Playwright fixtures use the real WASM/model implementation, not a fake OCR response.
-Only the OS screen picker and speech hardware are mocked. Screenshot outputs/traces are local
+The OS screen picker and speech hardware are mocked; the automatic still-image capture also
+uses a fixed frame wall clock as described above. Screenshot outputs/traces are local
 test artifacts and uploaded as short-lived CI test evidence, not included in the published site.
 
 ## Performance evidence
@@ -48,6 +59,10 @@ not an SLA, and not validation of capture while the game has foreground focus.
 The final profile-engine regression run logged **5,663 ms** for the legacy Deadlock OCR
 fixture's last frame. Generic pipelines process only their configured stages; the color-only
 test uses no neural models. These observations do not establish a fixed live-game latency.
+
+The automatic-HUD/lane-policy validation run logged **17,844 ms** on the saved screenshot
+replay's final OCR frame under concurrent native build/test load. This reinforces that the
+five-second goal is not met reliably; the new health/localization passes also consume time.
 
 ## Remaining acceptance work
 

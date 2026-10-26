@@ -2,15 +2,16 @@ import deadlock from '../../data/profiles/deadlock.json';
 import generic from '../../data/profiles/generic-hud.json';
 import colorBar from '../../data/profiles/color-bar.json';
 import deadlockFields from '../../data/profiles/deadlock-hud-fields.json';
+import automatic from '../../data/profiles/deadlock-auto.json';
 
 export interface ProfileNode { id: string; inputs?: string[]; when?: string; op: { type: string; [key: string]: unknown } }
 export interface GameProfile {
   schema_version: number; id: string; name: string; adapter: 'generic' | 'deadlock';
-  viewport: { aspect_ratio: number | null; max_width: number };
+  viewport: { aspect_ratio: number | null; max_width: number; auto_crop?:boolean };
   templates?: Array<{ id: string; png_base64: string }>;
   nodes: ProfileNode[]; outputs: Record<string, string>;
 }
-export const builtInProfiles = [deadlock, generic, colorBar, deadlockFields] as GameProfile[];
+export const builtInProfiles = [automatic, deadlock, generic, colorBar, deadlockFields] as GameProfile[];
 export const defaultProfile = () => structuredClone(builtInProfiles[0]);
 export function parseProfile(text: string): GameProfile {
   if (text.length > 4 * 1024 * 1024) throw new Error('Profile exceeds 4 MB. Use smaller template images.');

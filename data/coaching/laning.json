@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "threshold_note": "Numeric thresholds are tunable coach heuristics, not sourced game rules. Camp availability and enemy cooldowns are not inferred from absence.",
+  "thresholds": { "low_health": 0.35, "healthy": 0.65, "damage_drop": 0.12, "danger_front": 0.35, "crashed_front": 0.7, "camp_min_clock": 180, "laning_end": 900, "nearby_radius": 0.18 },
+  "cards": [
+    { "id": "last_hit", "speech": "Secure last hits and denies. Do not trade away your wave income.", "rationale": "Lane income takes priority over low-value harassment.", "cooldown_secs": 75,
+      "sources": [{ "path": "strategy/laning-phase.md", "section": "3. Last hitting and denies", "basis": "COMMUNITY", "excerpt": "safe last hits and denies over risky harass" }] },
+    { "id": "catch", "speech": "{lane} is pushing toward you. Catch that wave from cover before taking camps.", "rationale": "Protect lane income before spending time on a neutral camp.", "cooldown_secs": 45,
+      "sources": [{ "path": "jungle/jungle-routes.md", "section": "Core rule set", "basis": "WIKI", "excerpt": "Clearing a Trooper wave is generally faster and pays more than a camp, so camp between waves" }] },
+    { "id": "hold", "speech": "More enemy markers are near you. Hold your side and protect your last hits.", "rationale": "A visible local numbers disadvantage favors a defensive wave position.", "cooldown_secs": 45,
+      "sources": [{ "path": "strategy/laning-phase.md", "section": "10. Solo vs duo (community)", "basis": "COMMUNITY", "excerpt": "1v2: stop pushing, hold wave near own side, give up denies, don't die" }] },
+    { "id": "back_off", "speech": "Health looks low or falling. Back behind cover before trading.", "rationale": "Preserve health and lane uptime instead of taking another low-value trade.", "cooldown_secs": 25,
+      "sources": [{ "path": "strategy/common-mistakes.md", "section": "3. Over-brawling / trading without a reward", "basis": "COMMUNITY", "excerpt": "Don't trade unless it wins you a last hit or a kill. Back off and farm." }] },
+    { "id": "overextended", "speech": "You are ahead of your trooper wave. Step back behind it before trading.", "rationale": "Do not expose yourself ahead of wave cover while an enemy marker is nearby.", "cooldown_secs": 40,
+      "sources": [{ "path": "strategy/laning-phase.md", "section": "5. Trading", "basis": "WIKI", "excerpt": "Troopers deal deceptively high damage if you overextend" }] },
+    { "id": "push", "speech": "Clear the {lane} wave first. Crash it before leaving, and stay behind your troopers.", "rationale": "Wave priority creates the window to rotate without sacrificing lane income.", "cooldown_secs": 45,
+      "sources": [{ "path": "strategy/laning-phase.md", "section": "6. Wave states and lane equilibrium", "basis": "COMMUNITY", "excerpt": "crash (shove) before leaving lane so you don't pay a" }, { "path": "strategy/laning-phase.md", "section": "8. Guardian pressure", "basis": "COMMUNITY", "excerpt": "Pressure the guardian only with a crashed wave tanking" }] },
+    { "id": "poke", "speech": "Your wave has the numbers. Take a short poke from cover between last hits.", "rationale": "Use wave cover for a short trade without giving up farm or assuming enemy cooldowns.", "cooldown_secs": 45,
+      "sources": [{ "path": "strategy/laning-phase.md", "section": "5. Trading", "basis": "WIKI", "excerpt": "peeking from the right side of cover exposes less than left" }, { "path": "strategy/laning-phase.md", "section": "3. Last hitting and denies", "basis": "COMMUNITY", "excerpt": "safe last hits and denies over risky harass" }] },
+    { "id": "jungle", "speech": "{lane} looks pushed. Check one nearby camp if it is up, then return to the wave.", "rationale": "A crashed wave can create a short farming window; actual camp availability remains unknown.", "cooldown_secs": 75,
+      "sources": [{ "path": "jungle/jungle-routes.md", "section": "Clear-order heuristics (checklist for the coach)", "basis": "COMMUNITY", "excerpt": "Push first, then camp, return as waves clash" }, { "path": "jungle/jungle-tactics.md", "section": "Priority guidance", "basis": "COMMUNITY", "excerpt": "Don't be farming when your team is grouping for Midboss/Rift/Urn/push" }] },
+    { "id": "shop", "speech": "Your wave is pushed. Spend your souls, then return before the next wave.", "rationale": "Use a wave window to convert unspent currency into usable power.", "cooldown_secs": 75,
+      "sources": [{ "path": "strategy/laning-phase.md", "section": "9. First item purchases and timing", "basis": "COMMUNITY", "excerpt": "Crash wave then shop, then return" }] },
+    { "id": "objective", "speech": "An objective is approaching. Clear your wave before rotating.", "rationale": "Prepare lane priority before leaving for a scheduled objective.", "cooldown_secs": 60,
+      "sources": [{ "path": "strategy/common-mistakes.md", "section": "11. Ignoring waves before an objective", "basis": "COMMUNITY", "excerpt": "Clear your wave first, then go to the objective" }] },
+    { "id": "rotate", "speech": "Your wave is pushed. Look to group for the objective instead of starting another camp.", "rationale": "Use lane priority to prepare an objective rotation rather than delaying for extra farm.", "cooldown_secs": 60,
+      "sources": [{ "path": "jungle/jungle-tactics.md", "section": "Priority guidance", "basis": "COMMUNITY", "excerpt": "Don't be farming when your team is grouping for Midboss/Rift/Urn/push" }] }
+  ]
+}

@@ -4,6 +4,7 @@ use coach_core::GameSnapshot;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 pub mod map_rules;
+pub mod laning;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Priority { Low, Normal, High }
@@ -17,7 +18,7 @@ pub struct Cue {
     pub cooldown_secs: u32,
 }
 
-/// A recurring objective, loaded from data/timings.json (values are config,
+/// A scheduled objective, loaded from data/timings.json (interval 0 means one-shot; values are config,
 /// not hardcoded; verify them against the current patch).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TimerDef {
@@ -36,9 +37,10 @@ pub struct TimerRule(pub TimerDef);
 impl Rule for TimerRule {
     fn evaluate(&self, snap: &GameSnapshot) -> Vec<Cue> {
         let (Some(t), d) = (snap.game_clock_secs, &self.0) else { return vec![] };
-        if t + d.warn_ahead_secs < d.first_spawn_secs || d.interval_secs == 0 { return vec![]; }
+        if t + d.warn_ahead_secs < d.first_spawn_secs { return vec![]; }
+        if d.interval_secs==0 && t>=d.first_spawn_secs {return vec![];}
         // Next spawn at or after now.
-        let n = if t <= d.first_spawn_secs { 0 } else { (t - d.first_spawn_secs).div_ceil(d.interval_secs) };
+        let n = if t <= d.first_spawn_secs || d.interval_secs==0 { 0 } else { (t - d.first_spawn_secs).div_ceil(d.interval_secs) };
         let next = d.first_spawn_secs + n * d.interval_secs;
         let until = next - t;
         if until <= d.warn_ahead_secs && until > 0 {
@@ -133,9 +135,13 @@ impl Rule for UnspentSoulsRule {
                 cooldown_secs: 90,
             }];
         }
+        if let Some(lane)=laning::focus(snap) {
+            if snap.game_clock_secs.is_some_and(|t|t<900) && snap.minimap.as_ref().is_some_and(|m|
+                m.lane(lane).push.is_none_or(|p|p<0.7)) {return vec![];}
+        }
         vec![Cue {
             key: "unspent".into(),
-            text: format!("You are holding {} souls. Spend them at the shop.", s),
+            text: format!("You are holding {} souls. Shop when the wave and route are safe.", s),
             priority: Priority::Normal,
             cooldown_secs: 120,
         }]
@@ -186,7 +192,7 @@ impl Rule for NetworthLeadRule {
     }
 }
 pub fn default_rules(cfg: RulesConfig) -> Vec<Box<dyn Rule>> {
-    vec![Box::new(map_rules::MapRule), Box::new(UnspentSoulsRule(cfg.clone())), Box::new(DeathCauseRule), Box::new(NetworthLeadRule::new(cfg))]
+    vec![Box::new(laning::LaneCoach::default()), Box::new(map_rules::MapRule), Box::new(UnspentSoulsRule(cfg.clone())), Box::new(DeathCauseRule), Box::new(NetworthLeadRule::new(cfg))]
 }
 
 pub struct Engine {
@@ -204,16 +210,17 @@ impl Engine {
 
     /// Evaluate all rules; returns cues not suppressed by cooldown, highest priority first.
     pub fn step(&mut self, snap: &GameSnapshot) -> Vec<Cue> {
+        if snap.screen.as_deref().is_some_and(|s|!matches!(s,"Gameplay"|"Scoreboard"|"Dead")){return vec![];}
         let Some(now) = snap.game_clock_secs else { return vec![] };
-        if let Some(l) = self.last_cue_at {
-            if now >= l && now - l < self.min_gap_secs { return vec![]; }
-            if now < l { self.last_said.clear(); self.last_cue_at = None; } // new match
-        }
+        if self.last_cue_at.is_some_and(|l|now<l) {self.last_said.clear();self.last_cue_at=None;}
         let mut out: Vec<Cue> = self.rules.iter().flat_map(|r| r.evaluate(snap)).collect();
         out.retain(|c| match self.last_said.get(&c.key) {
             Some(&t) if now >= t && now - t < c.cooldown_secs => false,
             _ => true,
         });
+        if let Some(l)=self.last_cue_at { if now-l<self.min_gap_secs {
+            out.retain(|c| c.priority==Priority::High && now-l>=3);
+        }}
         out.sort_by(|a, b| b.priority.cmp(&a.priority));
         out.truncate(self.max_per_step);
         for c in &out { self.last_said.insert(c.key.clone(), now); }

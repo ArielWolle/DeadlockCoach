@@ -21,6 +21,9 @@ async fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let token = std::env::var("COACH_TOKEN").unwrap_or_default();
     let mut engine = load_engine();
+    let focus=std::env::var("COACH_LANE").ok().and_then(|s|match s.to_lowercase().as_str() {
+        "green"=>Some(coach_core::Lane::Green),"blue"=>Some(coach_core::Lane::Blue),"yellow"=>Some(coach_core::Lane::Yellow),_=>None
+    });
     let piper = coach_audio::Piper::from_env();
 
     if let Some(i) = args.iter().position(|a| a == "--live") {
@@ -48,7 +51,8 @@ async fn main() {
                     }
                     n += 1;
                 }
-                let snap = scanner.scan_with_minimap(&jpeg, &map_png, meta.timestamp_ms);
+                let mut snap = scanner.scan_with_minimap(&jpeg, &map_png, meta.timestamp_ms);
+                snap.coaching_context.focus_lane=focus;
                 println!("snapshot: {:?} clock={:?} souls={:?} items={} allies={} enemies={} nw={:?}/{:?} dead={}", snap.screen, snap.game_clock_secs, snap.souls, snap.items.len(), snap.ally_heroes.len(), snap.enemy_heroes.len(), snap.ally_networth, snap.enemy_networth, snap.dead);
                 if let Ok(line) = serde_json::to_string(&snap) {
                     use std::io::Write;
@@ -68,7 +72,8 @@ async fn main() {
     let speak = args.iter().position(|a| a == "--speak").and_then(|i| args.get(i + 1)).cloned();
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
     for line in std::fs::read_to_string(path).expect("read file").lines().filter(|l| !l.trim().is_empty()) {
-        let snap: GameSnapshot = serde_json::from_str(line).expect("bad snapshot line");
+        let mut snap: GameSnapshot = serde_json::from_str(line).expect("bad snapshot line");
+        snap.coaching_context.focus_lane=focus.or(snap.coaching_context.focus_lane);
         for cue in engine.step(&snap) {
             println!("[{:>5}s] {:?} {}", snap.game_clock_secs.unwrap_or(0), cue.priority, cue.text);
             if speak.is_some() {

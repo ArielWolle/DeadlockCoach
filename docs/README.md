@@ -1,6 +1,8 @@
 # DeadlockCoach knowledge base
 
 Implementation notes: [Minimap detection and coaching](minimap-implementation.md).
+Active policy: [Document-grounded lane coaching](active-laning.md).
+HUD discovery: [Independent locators and frozen-frame inspection](automatic-hud.md).
 
 Searchable markdown for the coach. Each file lists its sources and retrieval date.
 Anything marked UNVERIFIED must be confirmed before it becomes a spoken cue.

@@ -35,7 +35,7 @@ fn rejects_cycles_unknown_inputs_and_bad_imports_atomically() {
 struct MockText { calls: Arc<AtomicUsize>, score: Option<f32> }
 impl TextBackend for MockText {
     fn recognize(&self, _: &DynamicImage, _: OcrMode, _: u32) -> Result<TextResult, String> {
-        self.calls.fetch_add(1, Ordering::SeqCst); Ok(TextResult { text: "HP: 42 / 100".into(), score: self.score })
+        self.calls.fetch_add(1, Ordering::SeqCst); Ok(TextResult { text: "HP: 42 / 100".into(), score: self.score,regions:vec![] })
     }
 }
 
@@ -188,7 +188,7 @@ struct FallbackText { line_good: bool, detects: Arc<AtomicUsize> }
 impl TextBackend for FallbackText {
     fn recognize(&self, _: &DynamicImage, mode: OcrMode, _: u32) -> Result<TextResult,String> {
         if matches!(mode,OcrMode::Detect) { self.detects.fetch_add(1,Ordering::SeqCst); }
-        Ok(TextResult { text:if self.line_good || matches!(mode,OcrMode::Detect) { "5:13".into() } else { "unreadable".into() }, score:None })
+        Ok(TextResult { text:if self.line_good || matches!(mode,OcrMode::Detect) { "5:13".into() } else { "unreadable".into() }, score:None,regions:vec![] })
     }
 }
 
@@ -221,4 +221,33 @@ fn fractional_coordinate_rounding_does_not_extend_past_the_original_image() {
     let frame = DynamicImage::ImageRgb8(RgbImage::from_pixel(3,3,Rgb([0,200,0])));
     let report = Pipeline::new(p,Resources::default()).unwrap().run(&frame,None,0);
     assert_eq!(report.fields["value"].bounds,Some(Bounds { x:2,y:0,w:1,h:3 }));
+}
+
+struct BoxText;
+impl TextBackend for BoxText{
+    fn recognize(&self,_:&DynamicImage,_:OcrMode,_:u32)->Result<TextResult,String>{Ok(TextResult{text:"1732 SOULS".into(),score:None,
+        regions:vec![RegionObservation{id:"currency".into(),label:"1732 SOULS".into(),bounds:Bounds{x:10,y:5,w:30,h:10},origin:RegionOrigin::Detected,score:None,value_path:None}]})}
+}
+#[test]
+fn text_localization_produces_its_own_box_instead_of_relabelling_the_search_region(){
+    let p=profile(json!([
+        {"id":"ocr","op":{"type":"ocr","upscale":1}},
+        {"id":"located","inputs":["ocr"],"op":{"type":"locate_text","pattern":"SOULS"}},
+        {"id":"value","inputs":["located"],"op":{"type":"parse","parser":"number"}}
+    ]),json!({"currency":"value"}));
+    let r=Pipeline::new(p,Resources{ocr:Some(Arc::new(BoxText)),..Default::default()}).unwrap().run(&image(),None,0);
+    assert_eq!(r.fields["currency"].bounds,Some(Bounds{x:10,y:5,w:30,h:10}));assert_eq!(r.fields["currency"].bounds_origin,RegionOrigin::Detected);
+    assert_eq!(r.fields["currency"].value,Some(json!(1732.0)));
+}
+
+struct WidgetDetector;
+impl Stage for WidgetDetector{fn run(&mut self,_:&[Packet],_:&FrameContext<'_>,_:&Value)->Result<Packet,String>{
+    Ok(Packet{value:Some(json!({"balance":42})),regions:vec![RegionObservation{id:"currency".into(),label:"Currency".into(),bounds:Bounds{x:4,y:5,w:20,h:10},origin:RegionOrigin::Detected,score:Some(0.9),value_path:Some("/balance".into())}],..Default::default()})
+}}
+#[test]
+fn a_new_hud_plugin_can_bind_detected_boxes_to_named_values_without_ui_code(){
+    let p=profile(json!([{ "id":"gui","op":{"type":"custom","name":"another.game"}},{"id":"balance","inputs":["gui"],"op":{"type":"select","path":"/balance"}}]),json!({"wallet":"balance"}));
+    let mut resources=Resources::default();resources.stages.insert("another.game".into(),Box::new(WidgetDetector));
+    let r=Pipeline::new(p,resources).unwrap().run(&image(),None,0);assert_eq!(r.fields["wallet"].value,Some(json!(42)));
+    assert_eq!(r.fields["wallet"].bounds,Some(Bounds{x:4,y:5,w:20,h:10}));assert_eq!(r.fields["wallet"].bounds_origin,RegionOrigin::Detected);
 }

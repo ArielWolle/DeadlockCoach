@@ -12,7 +12,11 @@
     { "id": "items", "inputs": ["game"], "op": { "type": "select", "path": "/items" } },
     { "id": "minimap", "inputs": ["game"], "op": { "type": "select", "path": "/minimap" } },
     { "id": "allies", "inputs": ["game"], "op": { "type": "select", "path": "/ally_heroes" } },
-    { "id": "enemies", "inputs": ["game"], "op": { "type": "select", "path": "/enemy_heroes" } }
+    { "id": "enemies", "inputs": ["game"], "op": { "type": "select", "path": "/enemy_heroes" } },
+    { "id": "hp", "inputs": ["game"], "op": { "type": "select", "path": "/hp" } },
+    { "id": "max_hp", "inputs": ["game"], "op": { "type": "select", "path": "/max_hp" } },
+    { "id": "position", "inputs": ["game"], "op": { "type": "select", "path": "/minimap/you" } },
+    { "id": "lane", "inputs": ["game"], "op": { "type": "select", "path": "/minimap/your_lane" } }
   ],
   "outputs": {
     "match.clock_seconds": "clock",
@@ -21,6 +25,10 @@
     "player.items": "items",
     "world.minimap": "minimap",
     "team.heroes": "allies",
-    "opponents.heroes": "enemies"
+    "opponents.heroes": "enemies",
+    "player.hp": "hp",
+    "player.max_hp": "max_hp",
+    "player.map_position": "position",
+    "player.lane_estimate": "lane"
   }
 }

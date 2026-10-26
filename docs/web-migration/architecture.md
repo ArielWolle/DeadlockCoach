@@ -33,8 +33,9 @@ The desktop adapters remain intact; this does not embed a desktop Rust server in
 ## Viewport calibration and black borders
 
 `crop.ts` keeps source-pixel geometry separate from display CSS pixels and normalized saved
-coordinates. The visual `<dialog>` displays a continuously updating full-source canvas, an
-editable 16:9 frame and a clean cropped preview. Pointer capture supports mouse/touch handles;
+coordinates. The optional inspector displays one of up to five frozen full-source frames,
+reported element boxes and an editable selection. Application acquisition/analysis dispatch
+pause during inspection; existing share permission is retained. Pointer capture supports mouse/touch handles;
 keyboard arrows and explicit move/size buttons provide non-drag alternatives. Focus stays in
 the native modal and Escape cancels. Source resizing updates the preview and selection.
 
@@ -45,9 +46,10 @@ Automatic cropping runs at sharing start and source-size changes unless a manual
 overridden that session. An explicit Auto-detect action is also available in the editor.
 This is heuristic border detection, not universal game-window/HUD localization.
 
-Invalid live viewports pause analysis and open the editor. Applying stores precise coordinates,
-resets recognition state and resumes using the same capture stream; cancel restores the prior
-selection or leaves an invalid source paused. Screenshot calibration is local to that import.
+The automatic HUD profile scans the complete source without a user viewport or aspect-ratio
+requirement; missing locator evidence does not open a calibration wizard. Its inspection crop
+does not change live input. Explicit legacy profiles retain viewport editing. Screenshot
+calibration remains local to that import. See [automatic HUD discovery](../automatic-hud.md).
 
 ## Scheduling and cancellation
 
