@@ -38,15 +38,15 @@ async fn main() {
         let piper = piper.expect("piper");
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
         loop {
-            let res = coach_transport::connect(&addr, &token, &mut rx, |_meta, jpeg| {
+            let res = coach_transport::connect(&addr, &token, &mut rx, |meta, jpeg| {
                 if record {
                     let tag = std::fs::read_to_string("tag.txt").unwrap_or_default();
                     let tag: String = tag.trim().chars().filter(|c| c.is_alphanumeric() || *c == '-').collect();
                     let _ = std::fs::write(format!("{frame_dir}/{n:05}_{tag}.jpg"), &jpeg);
                     n += 1;
                 }
-                let snap = scanner.scan(&jpeg);
-                println!("snapshot: clock={:?} souls={:?} items={} allies={} enemies={} nw={:?}/{:?}", snap.game_clock_secs, snap.souls, snap.items.len(), snap.ally_heroes.len(), snap.enemy_heroes.len(), snap.ally_networth, snap.enemy_networth);
+                let snap = scanner.scan_at(&jpeg, meta.timestamp_ms);
+                println!("snapshot: {:?} clock={:?} souls={:?} items={} allies={} enemies={} nw={:?}/{:?} dead={}", snap.screen, snap.game_clock_secs, snap.souls, snap.items.len(), snap.ally_heroes.len(), snap.enemy_heroes.len(), snap.ally_networth, snap.enemy_networth, snap.dead);
                 if let Ok(line) = serde_json::to_string(&snap) {
                     use std::io::Write;
                     if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&log_path) { let _ = writeln!(f, "{line}"); }

@@ -86,7 +86,7 @@ impl Rule for CounterRule {
                 key: format!("counter:{trigger}"),
                 text: format!("Enemy has {who}. Good items against them: {}.", names.join(", ")),
                 priority: Priority::Low,
-                cooldown_secs: 600,
+                cooldown_secs: 1200,
             });
         }
         cues
@@ -109,43 +109,82 @@ pub struct RulesConfig {
     pub unspent_souls: u32,
     pub lead_pct: f32,
     pub lead_min_clock_secs: u32,
+    /// Minimum absolute souls gap for a lead/behind call.
+    pub lead_min_abs: u32,
 }
 impl Default for RulesConfig {
-    fn default() -> Self { RulesConfig { unspent_souls: 1500, lead_pct: 15.0, lead_min_clock_secs: 300 } }
+    fn default() -> Self { RulesConfig { unspent_souls: 1500, lead_pct: 15.0, lead_min_clock_secs: 300, lead_min_abs: 3000 } }
 }
 
 pub struct UnspentSoulsRule(pub RulesConfig);
 impl Rule for UnspentSoulsRule {
     fn evaluate(&self, snap: &GameSnapshot) -> Vec<Cue> {
-        match snap.souls {
-            Some(s) if s >= self.0.unspent_souls => vec![Cue {
-                key: "unspent".into(),
-                text: format!("You are holding {} souls. Spend them at the shop.", s),
-                priority: Priority::Normal,
-                cooldown_secs: 120,
-            }],
-            _ => vec![],
+        let Some(s) = snap.souls else { return vec![] };
+        if s < self.0.unspent_souls { return vec![]; }
+        if snap.dead {
+            // Dead players can still open the shop: best time to spend.
+            let wait = snap.respawn_secs.map(|r| format!(" You respawn in {r} seconds.")).unwrap_or_default();
+            return vec![Cue {
+                key: "unspent-dead".into(),
+                text: format!("You are dead with {s} souls. Buy items now.{wait}"),
+                priority: Priority::High,
+                cooldown_secs: 90,
+            }];
         }
+        vec![Cue {
+            key: "unspent".into(),
+            text: format!("You are holding {} souls. Spend them at the shop.", s),
+            priority: Priority::Normal,
+            cooldown_secs: 120,
+        }]
     }
 }
 
-pub struct NetworthLeadRule(pub RulesConfig);
+/// Explains what killed the player, from the "Incoming damage (last death)" panel.
+pub struct DeathCauseRule;
+impl Rule for DeathCauseRule {
+    fn evaluate(&self, snap: &GameSnapshot) -> Vec<Cue> {
+        let (true, Some(cause)) = (snap.dead, snap.death_cause.as_deref()) else { return vec![] };
+        let c = cause.to_lowercase();
+        let (tag, text) = if c.contains("temple") || c.contains("midboss") || c.contains("mid boss") {
+            ("midboss", "You died to the Midboss. Only take it with your whole team, and wait for its shield to drop.")
+        } else if c.contains("walker") {
+            ("walker", "A Walker killed you. Let troopers tank its shots before you push in.")
+        } else if c.contains("guardian") || c.contains("shrine") || c.contains("patron") {
+            ("structure", "A structure killed you. Stay out of its range unless your troopers are in front.")
+        } else if c.contains("trooper") {
+            ("trooper", "Troopers killed you. Watch your health when you walk into waves.")
+        } else {
+            ("heroes", "Enemy heroes killed you. Check the scoreboard before you re-engage.")
+        };
+        vec![Cue { key: format!("death:{tag}"), text: text.into(), priority: Priority::High, cooldown_secs: 60 }]
+    }
+}
+/// Speaks only after the same state (ahead/behind) is seen on 3 snapshots in a row and the gap
+/// is at least `lead_min_abs` souls, so noisy reads near parity do not flip-flop.
+pub struct NetworthLeadRule { cfg: RulesConfig, streak: std::cell::Cell<(i8, u8)> }
+impl NetworthLeadRule { pub fn new(cfg: RulesConfig) -> Self { NetworthLeadRule { cfg, streak: std::cell::Cell::new((0, 0)) } } }
 impl Rule for NetworthLeadRule {
     fn evaluate(&self, snap: &GameSnapshot) -> Vec<Cue> {
         let (Some(a), Some(e), Some(t)) = (snap.ally_networth, snap.enemy_networth, snap.game_clock_secs) else { return vec![] };
-        if t < self.0.lead_min_clock_secs || a == 0 || e == 0 { return vec![]; }
+        if t < self.cfg.lead_min_clock_secs || a == 0 || e == 0 { return vec![]; }
         let diff = (a as f32 - e as f32) / e as f32 * 100.0;
-        let (key, text) = if diff >= self.0.lead_pct {
+        let state: i8 = if diff >= self.cfg.lead_pct && a.saturating_sub(e) >= self.cfg.lead_min_abs { 1 }
+            else if diff <= -self.cfg.lead_pct && e.saturating_sub(a) >= self.cfg.lead_min_abs { -1 } else { 0 };
+        let (prev, n) = self.streak.get();
+        let n = if state == prev { n.saturating_add(1) } else { 1 };
+        self.streak.set((state, n));
+        if state == 0 || n < 3 { return vec![]; }
+        let (key, text) = if state > 0 {
             ("lead", "Your team is ahead in souls. Take objectives and avoid risky fights.")
-        } else if diff <= -self.0.lead_pct {
+        } else {
             ("behind", "Your team is behind in souls. Farm safely and fight near your structures.")
-        } else { return vec![] };
+        };
         vec![Cue { key: key.into(), text: text.into(), priority: Priority::Normal, cooldown_secs: 240 }]
     }
 }
-
 pub fn default_rules(cfg: RulesConfig) -> Vec<Box<dyn Rule>> {
-    vec![Box::new(UnspentSoulsRule(cfg.clone())), Box::new(NetworthLeadRule(cfg))]
+    vec![Box::new(UnspentSoulsRule(cfg.clone())), Box::new(DeathCauseRule), Box::new(NetworthLeadRule::new(cfg))]
 }
 
 pub struct Engine {
@@ -231,10 +270,23 @@ mod tests {
         let mut s = at(400);
         s.souls = Some(2000); s.ally_networth = Some(20000); s.enemy_networth = Some(15000);
         e.max_per_step = 5;
-        let texts: Vec<String> = e.step(&s).into_iter().map(|c| c.text).collect();
+        e.min_gap_secs = 0;
+        let mut texts: Vec<String> = vec![];
+        for t in [400, 405, 410, 415] { let mut s2 = s.clone(); s2.game_clock_secs = Some(t); texts.extend(e.step(&s2).into_iter().map(|c| c.text)); }
         assert!(texts.iter().any(|t| t.contains("2000 souls")));
-        assert!(texts.iter().any(|t| t.contains("ahead")));
-        assert!(e.step(&s).is_empty());
+        assert!(texts.iter().any(|t| t.contains("ahead")), "needs 3 consistent reads: {texts:?}");
+        assert_eq!(texts.iter().filter(|t| t.contains("ahead")).count(), 1);
+    }
+
+    #[test]
+    fn dead_player_is_told_to_shop_and_why() {
+        let mut e = Engine::new(default_rules(RulesConfig::default()));
+        e.max_per_step = 5;
+        let mut s = at(850);
+        s.dead = true; s.souls = Some(2000); s.respawn_secs = Some(20); s.death_cause = Some("Temple Guardia".into());
+        let t: Vec<String> = e.step(&s).into_iter().map(|c| c.text).collect();
+        assert!(t.iter().any(|x| x.contains("dead with 2000 souls") && x.contains("20 seconds")), "{t:?}");
+        assert!(t.iter().any(|x| x.contains("Midboss")), "{t:?}");
     }
 
     #[test]

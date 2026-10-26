@@ -71,6 +71,33 @@ pub fn parse_team_total(s: &str) -> Option<u32> {
     Some(if v < 1000 { v * 1000 } else { v })
 }
 
+/// Possible readings of a team total such as "21k", "9.2k" or the noisy "231" (= "23k" with the
+/// small "k" read as 1). The caller picks the candidate closest to the previous value.
+pub fn team_total_candidates(s: &str) -> Vec<u32> {
+    let s = s.trim();
+    let mut c = vec![];
+    if let Some(v) = parse_networth(s) { if s.contains('.') { c.push(v); } }
+    let digits: String = s.chars().take_while(|ch| !ch.is_alphabetic() || *ch == 'k').filter(|ch| ch.is_ascii_digit()).collect();
+    if !s.contains('.') && !digits.is_empty() && digits.len() <= 3 {
+        c.push(digits.parse::<u32>().unwrap_or(0) * 1000);
+        if digits.len() == 3 {
+            c.push(digits[..2].parse::<u32>().unwrap_or(0) * 1000);
+            c.push(digits[..1].parse::<u32>().unwrap_or(0) * 1000 + digits[1..2].parse::<u32>().unwrap_or(0) * 100);
+        }
+    }
+    c.retain(|v| *v >= 500 && *v <= 400_000);
+    c
+}
+
+/// Choose the candidate nearest `prev`; without history only an unambiguous reading is taken.
+pub fn pick_total(cands: &[u32], prev: Option<u32>) -> Option<u32> {
+    match (prev, cands) {
+        (Some(p), c) if !c.is_empty() => c.iter().copied().min_by_key(|v| v.abs_diff(p)),
+        (None, [only]) => Some(*only),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -82,5 +109,9 @@ mod tests {
         assert_eq!(parse_networth("x"), None);
         assert_eq!(parse_networth("2.6h"), Some(2600));
         assert_eq!(parse_networth("3.71"), Some(3700));
+        let c = team_total_candidates("231");
+        assert_eq!(pick_total(&c, Some(22000)), Some(23000));
+        assert_eq!(pick_total(&team_total_candidates("921"), Some(9000)), Some(9200));
+        assert_eq!(pick_total(&team_total_candidates("21k"), None), Some(21000));
     }
 }

@@ -51,6 +51,31 @@ pub struct GameSnapshot {
     pub ally_networth: Option<u32>,
     pub enemy_networth: Option<u32>,
     pub hp: Option<u32>,
+    /// True while the player is dead/spectating (personal HUD values are not the player's own).
+    pub dead: bool,
+    pub respawn_secs: Option<u32>,
+    /// Top source in the "Incoming damage (last death)" panel, e.g. "Temple Guardian".
+    pub death_cause: Option<String>,
+    /// Match id from the bottom-right corner; changes between matches.
+    pub match_id: Option<u64>,
+    /// Filled only on frames showing the scoreboard (Tab): 12 rows, own team first.
+    pub players: Vec<PlayerRow>,
+    /// Which screen the frame showed ("Gameplay", "Shop", ...), for debugging.
+    pub screen: Option<String>,
+}
+
+/// One scoreboard column.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PlayerRow {
+    pub ally: bool,
+    /// Hero class name (e.g. "hero_inferno") if recognised.
+    pub hero: Option<String>,
+    pub kills: Option<u32>,
+    pub deaths: Option<u32>,
+    pub assists: Option<u32>,
+    /// Item class names (e.g. "upgrade_clip_size"). Empty for the local player.
+    pub items: Vec<String>,
 }
 
 #[cfg(test)]

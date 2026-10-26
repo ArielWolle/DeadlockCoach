@@ -1,4 +1,4 @@
-use coach_vision::scan::Scanner;
+use coach_vision::{scan::Scanner, screen::Screen};
 use std::path::Path;
 
 fn frame(prefix: &str) -> Vec<u8> {
@@ -7,25 +7,68 @@ fn frame(prefix: &str) -> Vec<u8> {
     std::fs::read(f.path()).unwrap()
 }
 
+fn scanner() -> Scanner { Scanner::load(Path::new("../..")).unwrap() }
+
+/// The first reading of a clock/souls value needs a confirming second reading.
+fn scan_confirmed(s: &mut Scanner, prefix: &str) -> coach_core::GameSnapshot {
+    let f = frame(prefix);
+    s.scan_at(&f, 0);
+    s.scan_at(&f, 0)
+}
+
 #[test]
 fn reads_real_frames() {
-    let mut s = Scanner::load(Path::new("../..")).unwrap();
-    let a = s.scan(&frame("00014"));
-    assert_eq!(a.game_clock_secs, Some(88));
-    assert_eq!(a.souls, Some(900));
-    let mut s = Scanner::load(Path::new("../..")).unwrap();
-    let b = s.scan(&frame("00059"));
+    let b = scan_confirmed(&mut scanner(), "00059");
     assert_eq!(b.game_clock_secs, Some(313));
     assert_eq!(b.souls, Some(1732));
     assert_eq!(b.ally_networth, Some(21000));
     assert_eq!(b.enemy_networth, Some(16000));
     assert!(b.items.contains(&"upgrade_pristine_emblem".to_string()), "items: {:?}", b.items);
+    assert!(!b.dead);
 }
 
 #[test]
-fn classifies_shop_and_gameplay() {
-    use coach_vision::screen::Screen;
-    let s = Scanner::load(Path::new("../..")).unwrap();
+fn classifies_every_screen() {
+    let s = scanner();
     assert_eq!(s.classify(&frame("00048")), Screen::Shop);
     assert_eq!(s.classify(&frame("00014")), Screen::Gameplay);
+    assert_eq!(s.classify(&frame("00184")), Screen::Scoreboard);
+    assert_eq!(s.classify(&frame("00216")), Screen::Dead);
+    assert_eq!(s.classify(&frame("00167")), Screen::Menu);
+}
+
+#[test]
+fn reads_death_screen() {
+    let snap = scanner().scan_at(&frame("00216"), 0);
+    assert!(snap.dead);
+    assert_eq!(snap.respawn_secs, Some(4));
+    assert_eq!(snap.death_cause.as_deref(), Some("T2 Walker"));
+}
+
+#[test]
+fn midboss_death_cause() {
+    let snap = scanner().scan_at(&frame("00262"), 0);
+    assert!(snap.dead);
+    let cause = snap.death_cause.unwrap_or_default().to_lowercase();
+    assert!(cause.contains("temple"), "cause: {cause}");
+}
+
+#[test]
+fn reads_scoreboard_names() {
+    let snap = scanner().scan_at(&frame("00184"), 0);
+    assert_eq!(snap.players.len(), 12);
+    let heroes: Vec<_> = snap.players.iter().map(|p| p.hero.clone().unwrap_or_default()).collect();
+    for want in ["hero_viscous", "hero_ratking", "hero_kelvin", "hero_nurse", "hero_yamato", "hero_wraith"] {
+        assert!(heroes.iter().any(|h| h == want), "missing {want} in {heroes:?}");
+    }
+    assert!(snap.players.iter().take(6).all(|p| p.ally) && snap.players.iter().skip(6).all(|p| !p.ally));
+}
+
+#[test]
+fn menu_and_shop_yield_no_data() {
+    let mut s = scanner();
+    for p in ["00167", "00048"] {
+        let snap = s.scan_at(&frame(p), 0);
+        assert!(snap.game_clock_secs.is_none() && snap.souls.is_none() && !snap.dead, "{p}: {snap:?}");
+    }
 }

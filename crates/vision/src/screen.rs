@@ -7,26 +7,47 @@ use image::DynamicImage;
 pub enum Screen {
     /// Normal play: top bar + clock visible.
     Gameplay,
+    /// Tab scoreboard held open (also has the normal clock).
+    Scoreboard,
+    /// Dead / spectating with the "Respawn in" banner.
+    Dead,
     /// Shop open ("ESC BACK" anchor).
     Shop,
+    /// Pause / Esc menu ("ESC RESUME" anchor).
+    Menu,
     /// Pre-game "GAME STARTING" countdown.
     Countdown,
-    /// Anything not recognised yet (scoreboard, menus, map...). Say nothing.
+    /// Anything not recognised yet. Say nothing.
     Unknown,
+}
+
+impl Screen {
+    /// Screens on which the top bar and clock are read.
+    pub fn has_hud(self) -> bool { matches!(self, Screen::Gameplay | Screen::Scoreboard | Screen::Dead) }
 }
 
 fn px(x: f32, y: f32, w: f32, h: f32) -> Region { Region { x: x / 1600.0, y: y / 900.0, w: w / 1600.0, h: h / 900.0 } }
 
-const BACK_ANCHOR: Region = Region { x: 10.0 / 1600.0, y: 860.0 / 900.0, w: 110.0 / 1600.0, h: 32.0 / 900.0 };
+pub fn back_anchor() -> Region { px(10.0, 860.0, 130.0, 32.0) }
+pub fn respawn_anchor() -> Region { px(675.0, 665.0, 170.0, 40.0) }
+pub fn respawn_number() -> Region { px(845.0, 665.0, 80.0, 40.0) }
+pub fn match_id_region() -> Region { px(1440.0, 868.0, 160.0, 16.0) }
 
 fn has(s: &str, needle: &str) -> bool { s.to_ascii_uppercase().contains(needle) }
 
-pub fn classify(rd: &Reader, img: &DynamicImage) -> Screen {
-    let back = rd.read(&hud::crop(img, BACK_ANCHOR)).unwrap_or_default();
-    if has(&back, "BACK") { return Screen::Shop; }
+/// Returns the screen and the raw parsed clock (if it was read while classifying).
+pub fn classify(rd: &Reader, img: &DynamicImage, hero_names: &[(String, String)]) -> (Screen, Option<u32>) {
+    let back = rd.read(&hud::crop(img, back_anchor())).unwrap_or_default();
+    if has(&back, "RESUME") { return (Screen::Menu, None); }
+    if has(&back, "BACK") { return (Screen::Shop, None); }
     let clock = rd.read(&hud::crop(img, hud::CLOCK)).ok().and_then(|s| parse::parse_clock(&s));
-    if clock.is_some() { return Screen::Gameplay; }
+    if clock.is_some() {
+        if crate::scoreboard::looks_like_scoreboard(rd, img, hero_names) { return (Screen::Scoreboard, clock); }
+        let resp = rd.read(&hud::crop(img, respawn_anchor())).unwrap_or_default();
+        if has(&resp, "RESPAWN") { return (Screen::Dead, clock); }
+        return (Screen::Gameplay, clock);
+    }
     let mid = rd.read(&hud::crop(img, px(620.0, 490.0, 360.0, 45.0))).unwrap_or_default();
-    if has(&mid, "STARTING") || has(&mid, "GAME") { return Screen::Countdown; }
-    Screen::Unknown
+    if has(&mid, "STARTING") || has(&mid, "GAME") { return (Screen::Countdown, None); }
+    (Screen::Unknown, None)
 }

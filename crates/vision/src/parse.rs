@@ -1,24 +1,38 @@
 //! Turn raw OCR strings into typed values, rejecting implausible ones.
-use coach_core::GameSnapshot;
 
 /// "1:28" -> 88. Also accepts "12:05" and "1:02:03".
 pub fn parse_clock(s: &str) -> Option<u32> {
-    let t: String = s.chars().filter(|c| c.is_ascii_digit() || *c == ':').collect();
-    let parts: Vec<u32> = t.split(':').map(|p| p.parse().ok()).collect::<Option<_>>()?;
-    match parts.as_slice() {
-        [m, s] if *s < 60 => Some(m * 60 + s),
-        [h, m, s] if *m < 60 && *s < 60 => Some(h * 3600 + m * 60 + s),
-        _ => None,
+    // Use the first line/token that looks like a clock (OCR sometimes adds stray letters).
+    for tok in s.split(|c: char| c.is_whitespace()) {
+        let t: String = tok.chars().filter(|c| c.is_ascii_digit() || *c == ':').collect();
+        let parts: Option<Vec<u32>> = t.split(':').map(|p| p.parse().ok()).collect();
+        match parts.as_deref() {
+            Some([m, s]) if *s < 60 && t.contains(':') => return Some(m * 60 + s),
+            Some([h, m, s]) if *m < 60 && *s < 60 => return Some(h * 3600 + m * 60 + s),
+            _ => {}
+        }
     }
+    None
 }
 
-/// "$ 1,613 SOULS" -> 1613. Takes the first digit group (commas allowed).
+/// "$ 1,613 SOULS" -> 1613; "$7.139 SOULS" -> 7139. First digit group; ',' or '.'
+/// followed by exactly three digits is a thousands separator.
 pub fn parse_souls(s: &str) -> Option<u32> {
+    let c: Vec<char> = s.chars().collect();
+    let mut i = 0;
     let mut num = String::new();
-    for c in s.chars() {
-        if c.is_ascii_digit() { num.push(c); }
-        else if c == ',' && !num.is_empty() { continue; }
-        else if !num.is_empty() { break; }
+    while i < c.len() {
+        if c[i].is_ascii_digit() {
+            num.push(c[i]);
+        } else if (c[i] == ',' || c[i] == '.') && !num.is_empty()
+            && i + 3 < c.len() + 0 && c[i + 1..].iter().take(3).all(|d| d.is_ascii_digit()) && c[i + 1..].iter().take(3).count() == 3
+            && !c.get(i + 4).map(|d| d.is_ascii_digit()).unwrap_or(false)
+        {
+            // thousands separator: skip
+        } else if !num.is_empty() {
+            break;
+        }
+        i += 1;
     }
     num.parse().ok()
 }
@@ -28,43 +42,126 @@ pub fn parse_hp(s: &str) -> Option<u32> {
     s.lines().next().and_then(|l| l.trim().parse().ok())
 }
 
-/// Keeps snapshots sane across frames.
+/// "MATCH: 124933265" -> 124933265 (needs at least 6 digits).
+pub fn parse_match_id(s: &str) -> Option<u64> {
+    let d: String = s.chars().filter(|c| c.is_ascii_digit()).collect();
+    if d.len() >= 6 { d.parse().ok() } else { None }
+}
+
+/// "Respawn in: 11" -> 11.
+pub fn parse_respawn(s: &str) -> Option<u32> {
+    let after = s.split(':').next_back()?;
+    let d: String = after.chars().filter(|c| c.is_ascii_digit()).collect();
+    if d.is_empty() || d.len() > 3 { None } else { d.parse().ok() }
+}
+
+/// Up to three small integers from "5 0 6" / "4 6 8".
+pub fn parse_kda(s: &str) -> Option<(u32, u32, u32)> {
+    let nums: Vec<u32> = s.split(|c: char| !c.is_ascii_digit()).filter(|t| !t.is_empty() && t.len() <= 3)
+        .filter_map(|t| t.parse().ok()).collect();
+    match nums.as_slice() {
+        [k, d, a] => Some((*k, *d, *a)),
+        _ => None,
+    }
+}
+
+/// A reading is accepted when it agrees with elapsed wall time, or when two
+/// consecutive readings agree with each other (re-sync after a pause/shop/menu).
 #[derive(Default)]
-pub struct Tracker { last_clock: Option<u32>, last_souls: Option<u32> }
+pub struct Tracker {
+    clock: Option<(u32, u64)>,
+    clock_pending: Option<(u32, u64)>,
+    souls: Option<u32>,
+    souls_pending: Option<u32>,
+}
+
+const CLOCK_TOL: i64 = 6;
+const SOULS_RISE_OK: u32 = 700;
 
 impl Tracker {
-    /// Accept a reading only if the clock moves forward by a plausible amount.
-    pub fn accept(&mut self, clock: Option<u32>, souls: Option<u32>) -> GameSnapshot {
-        let mut snap = GameSnapshot::default();
-        if let Some(c) = clock {
-            let ok = match self.last_clock { Some(l) => c >= l && c - l <= 60, None => true };
-            if ok { self.last_clock = Some(c); snap.game_clock_secs = Some(c); }
+    pub fn reset(&mut self) { *self = Tracker::default(); }
+
+    /// Returns the accepted clock in seconds, if any. `now_ms` is wall time of the frame.
+    pub fn accept_clock(&mut self, c: Option<u32>, now_ms: u64) -> Option<u32> {
+        let c = c?;
+        let near = |base: (u32, u64)| {
+            let expect = base.0 as i64 + (now_ms.saturating_sub(base.1) / 1000) as i64;
+            (c as i64 - expect).abs() <= CLOCK_TOL
+        };
+        if let Some(l) = self.clock {
+            if near(l) { self.clock = Some((c, now_ms)); self.clock_pending = None; return Some(c); }
         }
-        if let Some(s) = souls {
-            // Souls can drop when spending, but a huge jump either way is likely misread.
-            let ok = match self.last_souls { Some(l) => s <= l + 5000, None => s < 100_000 };
-            if ok { self.last_souls = Some(s); snap.souls = Some(s); }
+        match self.clock_pending {
+            Some(p) if near(p) => {
+                self.clock = Some((c, now_ms));
+                self.clock_pending = None;
+                Some(c)
+            }
+            _ => { self.clock_pending = Some((c, now_ms)); None }
         }
-        snap
     }
+
+    /// Souls rise by small steps; big rises or any drop must be seen twice.
+    pub fn accept_souls(&mut self, s: Option<u32>) -> Option<u32> {
+        let s = s?;
+        let ok_now = match self.souls { Some(l) => s >= l && s - l <= SOULS_RISE_OK, None => false };
+        if ok_now { self.souls = Some(s); self.souls_pending = None; return Some(s); }
+        if let Some(p) = self.souls_pending {
+            if s.abs_diff(p) <= SOULS_RISE_OK {
+                self.souls = Some(s);
+                self.souls_pending = None;
+                return Some(s);
+            }
+        }
+        self.souls_pending = Some(s);
+        None
+    }
+
+    pub fn last_souls(&self) -> Option<u32> { self.souls }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[test]
     fn parses() {
         assert_eq!(parse_clock("1:28"), Some(88));
+        assert_eq!(parse_clock("C\n13:53"), Some(833));
         assert_eq!(parse_clock("garbage"), None);
         assert_eq!(parse_souls("$ 1,613 SDULS"), Some(1613));
+        assert_eq!(parse_souls("$7.139 SDULS"), Some(7139));
         assert_eq!(parse_souls("$900 SOuLS"), Some(900));
+        assert_eq!(parse_souls("6,032/$6,032 SDULS"), Some(6032));
         assert_eq!(parse_hp("413\n1769"), Some(413));
+        assert_eq!(parse_match_id("MATCH: 124933265"), Some(124933265));
+        assert_eq!(parse_respawn("Respawn in: 11"), Some(11));
+        assert_eq!(parse_kda("5 0 6"), Some((5, 0, 6)));
+        assert_eq!(parse_kda("4"), None);
     }
+
     #[test]
-    fn rejects_backwards_clock() {
+    fn clock_follows_wall_time_and_resyncs() {
         let mut t = Tracker::default();
-        assert_eq!(t.accept(Some(100), Some(900)).game_clock_secs, Some(100));
-        assert_eq!(t.accept(Some(40), Some(900)).game_clock_secs, None);
-        assert_eq!(t.accept(Some(105), Some(90000)).souls, None);
+        assert_eq!(t.accept_clock(Some(100), 0), None, "first read needs confirmation");
+        assert_eq!(t.accept_clock(Some(105), 5000), Some(105));
+        assert_eq!(t.accept_clock(Some(170), 10000), None, "glitch +60");
+        assert_eq!(t.accept_clock(Some(115), 15000), Some(115), "back in line");
+        // wall time passing (e.g. shop open 150 s) is not a jump
+        assert_eq!(t.accept_clock(Some(265), 165000), Some(265));
+        // a real discontinuity needs a confirming second read
+        assert_eq!(t.accept_clock(Some(400), 170000), None);
+        assert_eq!(t.accept_clock(Some(405), 175000), Some(405));
+    }
+
+    #[test]
+    fn souls_reject_misreads_but_accept_spending() {
+        let mut t = Tracker::default();
+        assert_eq!(t.accept_souls(Some(600)), None);
+        assert_eq!(t.accept_souls(Some(606)), Some(606));
+        assert_eq!(t.accept_souls(Some(3656)), None, "'$' misread as 3");
+        assert_eq!(t.accept_souls(Some(768)), Some(768));
+        assert_eq!(t.accept_souls(Some(120)), None, "spend needs confirmation");
+        assert_eq!(t.accept_souls(Some(130)), Some(130));
     }
 }

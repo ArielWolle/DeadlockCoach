@@ -18,15 +18,44 @@ pub struct Scanner {
     sums: Vec<HashMap<String, Vec<f32>>>,
     frames: u32,
     last_totals: (Option<u32>, Option<u32>),
+    pending_totals: (Option<u32>, Option<u32>),
+    hero_names: Vec<(String, String)>,
+    match_id: Option<u64>,
+    pending_match: Option<u64>,
+    virt_ms: u64,
+    last_board: Vec<coach_core::PlayerRow>,
+    board_history: Vec<Vec<coach_core::PlayerRow>>,
 }
 
-/// Team totals only grow (mostly), and not by leaps: reject OCR glitches.
-fn plausible(prev: Option<u32>, v: Option<u32>) -> Option<u32> {
+/// Team totals only grow (mostly), and not by leaps. A value outside that band is accepted
+/// only if the next reading agrees with it (so one misread cannot poison later frames).
+fn plausible(prev: &mut Option<u32>, pending: &mut Option<u32>, v: Option<u32>) -> Option<u32> {
     let v = v?;
-    match prev {
-        Some(p) if v + p / 10 < p || v > p + p / 2 + 3000 => None,
-        _ => Some(v),
-    }
+    let in_band = match *prev { Some(p) => v + p / 10 >= p && v <= p + p / 2 + 3000, None => false };
+    let confirmed = pending.map(|q| v.abs_diff(q) <= q / 10 + 1000).unwrap_or(false);
+    if in_band || confirmed { *prev = Some(v); *pending = None; Some(v) } else { *pending = Some(v); None }
+}
+
+fn load_hero_names(root: &Path) -> Vec<(String, String)> {
+    let Ok(s) = std::fs::read_to_string(root.join("data/heroes.json")) else { return vec![] };
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(s.trim_start_matches('\u{feff}')) else { return vec![] };
+    v.as_array().map(|a| a.iter().filter_map(|h| Some((h["class_name"].as_str()?.to_string(), h["name"].as_str()?.to_string()))).collect()).unwrap_or_default()
+}
+
+/// Number of differing digit positions between two ids (OCR noise flips 1-2 digits).
+fn digit_diff(a: u64, b: u64) -> usize {
+    let (a, b) = (a.to_string(), b.to_string());
+    if a.len() != b.len() { return 9; }
+    a.chars().zip(b.chars()).filter(|(x, y)| x != y).count()
+}
+
+/// "T2 Walker Killing Blow x30" -> "T2 Walker".
+fn clean_cause(s: &str) -> Option<String> {
+    let first = s.lines().next()?;
+    let cut = first.to_lowercase().find("killing").unwrap_or(first.len());
+    let t: String = first[..cut].chars().filter(|c| c.is_alphanumeric() || *c == ' ').collect();
+    let t = t.trim().to_string();
+    if t.len() >= 3 { Some(t) } else { None }
 }
 
 impl Scanner {
@@ -35,13 +64,20 @@ impl Scanner {
         let e = |x: std::io::Error| x.to_string();
         Ok(Scanner {
             ocr: Reader::load(&root.join("data/models"))?,
-            items: ColorLibrary::load(&root.join("data/icons/shop"), false).map_err(e)?,
+            items: ColorLibrary::load_centered(&root.join("data/icons/shop")).map_err(e)?,
             heroes: ColorLibrary::load(&root.join("data/icons/h_card"), true).map_err(e)?,
             heroes_crit: ColorLibrary::load(&root.join("data/icons/h_crit"), true).map_err(e)?,
             tracker: parse::Tracker::default(),
             sums: vec![HashMap::new(); 12],
             frames: 0,
             last_totals: (None, None),
+            pending_totals: (None, None),
+            hero_names: load_hero_names(root),
+            match_id: None,
+            pending_match: None,
+            virt_ms: 0,
+            last_board: vec![],
+            board_history: vec![],
         })
     }
 
@@ -51,6 +87,9 @@ impl Scanner {
         self.sums = vec![HashMap::new(); 12];
         self.frames = 0;
         self.last_totals = (None, None);
+        self.pending_totals = (None, None);
+        self.last_board.clear();
+        self.board_history.clear();
     }
 
     fn text(&self, img: &image::DynamicImage, r: crate::Region) -> Option<String> {
@@ -82,34 +121,85 @@ impl Scanner {
     /// Classify the screen only (used by tools).
     pub fn classify(&self, jpeg: &[u8]) -> crate::screen::Screen {
         match image::load_from_memory(jpeg) {
-            Ok(img) => crate::screen::classify(&self.ocr, &img),
+            Ok(img) => crate::screen::classify(&self.ocr, &img, &self.hero_names).0,
             Err(_) => crate::screen::Screen::Unknown,
         }
     }
 
-    pub fn scan(&mut self, jpeg: &[u8]) -> GameSnapshot {
-        let Ok(img) = image::load_from_memory(jpeg) else { return GameSnapshot::default() };
-        // Only read gameplay HUD on gameplay frames; other screens yield an empty snapshot.
-        if crate::screen::classify(&self.ocr, &img) != crate::screen::Screen::Gameplay { return GameSnapshot::default(); }
-        let clock = self.text(&img, hud::CLOCK).and_then(|s| parse::parse_clock(&s));
-        let souls = self.text(&img, hud::SOULS).and_then(|s| parse::parse_souls(&s));
-        let mut snap = self.tracker.accept(clock, souls);
+    /// Items per column that appear in at least 2 of the last 5 scoreboard reads
+    /// (or in every read while fewer than 2 exist), so single-frame misreads vanish.
+    fn voted_board(&self) -> Vec<coach_core::PlayerRow> {
+        let n = self.board_history.len();
+        let need = if n < 2 { 1 } else { 2 };
+        let latest = self.board_history.last().cloned().unwrap_or_default();
+        latest.into_iter().enumerate().map(|(i, mut row)| {
+            let mut counts: HashMap<&String, usize> = HashMap::new();
+            for b in &self.board_history { if let Some(r) = b.get(i) { for it in &r.items { *counts.entry(it).or_default() += 1; } } }
+            let mut items: Vec<String> = counts.into_iter().filter(|(_, c)| *c >= need).map(|(k, _)| k.clone()).collect();
+            items.sort();
+            row.items = items;
+            row
+        }).collect()
+    }
 
-        // Items: non-flat slots matched against shop art with a confidence gate.
-        for row in 0..2 {
-            for col in 0..6 {
-                let r = hud::item_slot(col, row);
-                let c = hud::crop(&img, r);
-                if hud::contrast(&c) < 18.0 { continue; }
-                if let Some((name, score, margin)) = self.items.identify(&c) {
-                    if score >= 0.7 && margin >= 0.15 { snap.items.push(name); }
+    /// Scan with a virtual clock (5 s per call). Use `scan_at` with real frame times in live use.
+    pub fn scan(&mut self, jpeg: &[u8]) -> GameSnapshot {
+        let t = self.virt_ms;
+        self.virt_ms += 5000;
+        self.scan_at(jpeg, t)
+    }
+
+    pub fn scan_at(&mut self, jpeg: &[u8], now_ms: u64) -> GameSnapshot {
+        use crate::screen::{self, Screen};
+        let Ok(img) = image::load_from_memory(jpeg) else { return GameSnapshot::default() };
+        let (scr, raw_clock) = screen::classify(&self.ocr, &img, &self.hero_names);
+        // Only HUD screens yield data; menus, shop and loading yield an empty snapshot.
+        if !scr.has_hud() { return GameSnapshot { screen: Some(format!("{scr:?}")), ..Default::default() }; }
+
+        // New match? Reset all per-match memory.
+        let mid = self.text(&img, screen::match_id_region()).and_then(|s| parse::parse_match_id(&s));
+        // OCR of the id is noisy, so a different id must be seen twice in a row to count.
+        match (self.match_id, mid) {
+            (None, Some(n)) => self.match_id = Some(n),
+            (Some(old), Some(n)) if digit_diff(old, n) >= 3 => {
+                if self.pending_match == Some(n) {
+                    self.reset();
+                    self.match_id = Some(n);
+                    self.pending_match = None;
+                } else { self.pending_match = Some(n); }
+            }
+            (Some(_), Some(_)) => self.pending_match = None, // same id, or single-digit OCR noise
+            _ => {}
+        }
+
+        let mut snap = GameSnapshot { match_id: self.match_id, screen: Some(format!("{scr:?}")), ..Default::default() };
+        snap.game_clock_secs = self.tracker.accept_clock(raw_clock, now_ms);
+
+        if scr == Screen::Dead {
+            // While dead the HUD shows the spectated player, so personal values are not ours.
+            snap.dead = true;
+            snap.souls = self.tracker.last_souls();
+            snap.respawn_secs = self.ocr.read(&hud::crop(&img, crate::Region {
+                x: 675.0 / 1600.0, y: 665.0 / 900.0, w: 250.0 / 1600.0, h: 40.0 / 900.0 })).ok().and_then(|s| parse::parse_respawn(&s));
+            snap.death_cause = self.ocr.read(&hud::crop(&img, crate::Region {
+                x: 1352.0 / 1600.0, y: 276.0 / 900.0, w: 200.0 / 1600.0, h: 22.0 / 900.0 })).ok().and_then(|s| clean_cause(&s));
+        } else {
+            let souls = self.text(&img, hud::SOULS).and_then(|s| parse::parse_souls(&s));
+            snap.souls = self.tracker.accept_souls(souls).or(self.tracker.last_souls());
+            // Items: non-flat slots matched against shop art with a confidence gate.
+            for row in 0..2 {
+                for col in 0..6 {
+                    let c = hud::crop(&img, hud::item_slot(col, row));
+                    if hud::contrast(&c) < 18.0 { continue; }
+                    if let Some((name, score, margin)) = self.items.identify(&c) {
+                        if score >= 0.5 && margin >= 0.1 && !name.contains("non_player") { snap.items.push(name); }
+                    }
                 }
             }
         }
 
-        // Heroes: accumulate scores across frames, then assign heroes to slots uniquely
-        // (a hero can appear only once). Skip frames where the top bar is hidden (no clock).
-        if snap.game_clock_secs.is_some() {
+        // Heroes: accumulate card scores across frames, assign uniquely to the 12 slots.
+        if raw_clock.is_some() {
             self.frames += 1;
             for (i, cx) in hud::ALLY_CENTERS.iter().chain(hud::ENEMY_CENTERS.iter()).enumerate() {
                 let c = hud::crop(&img, hud::portrait(*cx));
@@ -123,14 +213,31 @@ impl Scanner {
                 }
             }
         }
-        let assign = self.assign_heroes();
+        let mut assign = self.assign_heroes();
+
+        // Scoreboard: names are far more reliable than portraits, so they win.
+        if scr == Screen::Scoreboard {
+            let rows = crate::scoreboard::read(&self.ocr, &self.items, &self.hero_names, &img);
+            for (i, r) in rows.iter().enumerate() { if r.hero.is_some() { assign[i] = r.hero.clone(); } }
+            self.board_history.push(rows.clone());
+            if self.board_history.len() > 5 { self.board_history.remove(0); }
+            self.last_board = self.voted_board();
+            snap.players = self.last_board.clone();
+        }
+        for (i, r) in self.last_board.iter().enumerate() {
+            if let Some(h) = &r.hero { if assign[i].is_none() { assign[i] = Some(h.clone()); } }
+        }
         snap.ally_heroes = assign[..6].iter().flatten().cloned().collect();
         snap.enemy_heroes = assign[6..].iter().flatten().cloned().collect();
-        let a = self.text(&img, hud::ALLY_TOTAL).and_then(|s| hud::parse_team_total(&s));
-        let e = self.text(&img, hud::ENEMY_TOTAL).and_then(|s| hud::parse_team_total(&s));
-        snap.ally_networth = plausible(self.last_totals.0, a);
-        snap.enemy_networth = plausible(self.last_totals.1, e);
-        if snap.ally_networth.is_some() { self.last_totals.0 = snap.ally_networth; }
-        if snap.enemy_networth.is_some() { self.last_totals.1 = snap.enemy_networth; }        snap
+        // Enemy items seen on the most recent scoreboard.
+        for r in self.last_board.iter().filter(|r| !r.ally) {
+            for it in &r.items { if !snap.enemy_items.contains(it) { snap.enemy_items.push(it.clone()); } }
+        }
+
+        let a = self.text(&img, hud::ALLY_TOTAL).and_then(|s| hud::pick_total(&hud::team_total_candidates(&s), self.last_totals.0));
+        let e = self.text(&img, hud::ENEMY_TOTAL).and_then(|s| hud::pick_total(&hud::team_total_candidates(&s), self.last_totals.1));
+        snap.ally_networth = plausible(&mut self.last_totals.0, &mut self.pending_totals.0, a);
+        snap.enemy_networth = plausible(&mut self.last_totals.1, &mut self.pending_totals.1, e);
+        snap
     }
 }

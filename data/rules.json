@@ -1,1 +1,1 @@
-{ "unspent_souls": 1500, "lead_pct": 15.0, "lead_min_clock_secs": 300 }
+{ "unspent_souls": 1500, "lead_pct": 15.0, "lead_min_clock_secs": 300, "lead_min_abs": 3000 }

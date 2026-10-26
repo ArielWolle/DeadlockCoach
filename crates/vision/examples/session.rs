@@ -1,9 +1,14 @@
 use coach_vision::scan::Scanner;
 fn main() {
+    let dir = std::env::args().nth(1).unwrap();
+    let out_path = std::env::args().nth(2).unwrap();
     let mut s = Scanner::load(std::path::Path::new(".")).unwrap();
-    let mut files: Vec<_> = std::fs::read_dir("frames").unwrap().filter_map(|e| e.ok()).map(|e| e.path()).filter(|p| p.extension().map(|x| x == "jpg").unwrap_or(false) && p.file_name().unwrap().to_string_lossy().starts_with("0")).collect();
+    let mut files: Vec<_> = std::fs::read_dir(&dir).unwrap().filter_map(|e| e.ok()).map(|e| e.path()).filter(|p| p.extension().map(|x| x == "jpg").unwrap_or(false)).collect();
     files.sort();
     let mut out = String::new();
-    for p in &files { out += &serde_json::to_string(&s.scan(&std::fs::read(p).unwrap())).unwrap(); out.push(char::from(10)); }
-    std::fs::write("samples/session1.jsonl", out).unwrap();
+    for p in &files {
+        let snap = s.scan(&std::fs::read(p).unwrap());
+        out += &serde_json::to_string(&snap).unwrap(); out.push(char::from(10));
+    }
+    std::fs::write(&out_path, out).unwrap();
 }

@@ -21,8 +21,11 @@ impl Reader {
     }
 
     /// OCR an image region (upscaled 3x for small HUD text). Returns the text found.
-    pub fn read(&self, img: &DynamicImage) -> Result<String, String> {
-        let big = img.resize(img.width() * 3, img.height() * 3, FilterType::CatmullRom).to_rgb8();
+    pub fn read(&self, img: &DynamicImage) -> Result<String, String> { self.read_scaled(img, 3) }
+
+    /// Like `read` with an explicit upscale factor (tiny text benefits from more).
+    pub fn read_scaled(&self, img: &DynamicImage, k: u32) -> Result<String, String> {
+        let big = img.resize(img.width() * k, img.height() * k, FilterType::CatmullRom).to_rgb8();
         let src = ImageSource::from_bytes(big.as_raw(), big.dimensions()).map_err(|e| e.to_string())?;
         let input = self.engine.prepare_input(src).map_err(|e| e.to_string())?;
         self.engine.get_text(&input).map_err(|e| e.to_string())

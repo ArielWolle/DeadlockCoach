@@ -3,6 +3,7 @@ pub mod hud;
 pub mod ocr;
 pub mod parse;
 pub mod scan;
+pub mod scoreboard;
 pub mod screen;
 use image::{imageops::{crop_imm, resize, FilterType}, GrayImage, RgbaImage};
 use std::path::Path;
@@ -137,7 +138,30 @@ fn variants(img: &image::DynamicImage, top_square: bool) -> Vec<Vec<f32>> {
     out
 }
 
+/// Centered crops at several zoom levels, for icons whose framing differs between sources.
+fn variants_center(img: &image::DynamicImage) -> Vec<Vec<f32>> {
+    let (w, h) = (img.width(), img.height());
+    [100u32, 90, 80, 70].iter().map(|p| {
+        let (cw, ch) = (w * p / 100, h * p / 100);
+        color_vec(&img.crop_imm((w - cw) / 2, (h - ch) / 2, cw, ch))
+    }).collect()
+}
+
 impl ColorLibrary {
+    /// Like `load` but each template gets centered zoom variants (for inventory/shop item icons).
+    pub fn load_centered(dir: &Path) -> std::io::Result<ColorLibrary> {
+        let mut templates = vec![];
+        for e in std::fs::read_dir(dir)? {
+            let p = e?.path();
+            if p.extension().map(|x| x == "png").unwrap_or(false) {
+                if let Ok(img) = image::open(&p) {
+                    templates.push((p.file_stem().unwrap().to_string_lossy().into(), variants_center(&img)));
+                }
+            }
+        }
+        Ok(ColorLibrary { templates })
+    }
+
     pub fn load(dir: &Path, top_square: bool) -> std::io::Result<ColorLibrary> {
         let mut templates = vec![];
         for e in std::fs::read_dir(dir)? {
