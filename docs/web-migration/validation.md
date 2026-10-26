@@ -6,7 +6,7 @@
 - `wasm-pack build crates/web --target web --release --out-dir ../../web/wasm --out-name coach_web`:
   existing `ocrs` / RTen compile and execute in a browser worker. SIMD build does not need
   cross-origin isolation or shared-memory threads.
-- `cargo test --release --workspace`: **81 Rust tests passed**, including saved gameplay and
+- `cargo test --release --workspace`: **84 Rust tests passed**, including saved gameplay and
   minimap regression fixtures, lane policies/source integrity, independent HUD localization,
   region provenance/field binding, transport extension and asset-pack bounds.
 - `cargo test --locked --release -p coach-perception --no-default-features`: **21 tests passed**
@@ -18,7 +18,7 @@
   verified-asset cache recovery/offline/corruption rejection.
 - `npm run build`: TypeScript, production Vite build, asset allow-list, manifest integrity and
   static publication checks. App tested under `/DeadlockCoach/`.
-- Playwright: **28 tests passed** in the live-coaching full-suite run.
+- Playwright: **30 tests passed** across the full live suite and affected recovery/counter groups.
   Coverage: navigation/mobile overflow/keyboard skip link, local settings,
   actual WASM snapshot replay, real OCR matching native clock/souls/inventory, mocked display
   capture pause/stop/track release, model failure visibility, cancellation/retry, recording
@@ -71,7 +71,7 @@ See [Twitch stream smoke tests](stream-tests.md) for an additional real 1080p st
 check: clock and souls matched the visible HUD; totals/roster/items/minimap still need wider
 coverage. This check used screenshot replay and does not satisfy the live-capture gate.
 
-See [blockers.md](blockers.md). Pages is gated off, hosted CI status needs verification in GitHub,
+See [blockers.md](blockers.md). Pages now uses GitHub Actions from `main`; hosted results are checked in GitHub,
 and live OS capture/headphones/background/game performance require a real gaming session.
 No whole-site WCAG conformance claim is made from automated checks and keyboard smoke tests alone.
 
@@ -118,3 +118,21 @@ Tests cover sampling during busy full inference, paused inspection, twelve criti
 health slots, native death/menu/stale-geometry rejection, gank prerequisites, earned-souls
 pace abstention/reinforcement, immediate health priority, aged/queued countdown expiry and
 normal speech preemption. See [live coaching](../live-coaching.md) for the evidence limits.
+
+## Full-scan recovery and deployment preparation
+
+The recovery regression deliberately withholds a full-worker frame result while using real
+WASM for both other paths. It verifies automatic reconstruction, continuing screenshots and
+fast results, and exactly one screen-share permission request. Native tests cover conservative
+health/clock-only output after rich context expires, plus menu/death rejection. Minimap/text
+budget changes and batched scoreboard names retain the image regression results.
+
+The recovery/automatic/fast browser group passed all 3 tests; the other general app, crop,
+cache, profile, lane and item-counter group passed 26 tests. The pure generic history regression
+also passed again alongside the final recovery test.
+The suite now contains 30 scenarios. One loaded run measured a 995 ms fast update and an
+11,385 ms full-scene replay, reinforcing that those timings must be displayed separately.
+
+The public repository's previous feature commit `b6de20f` passed hosted CI run `40392883640`.
+Pages configuration was changed from legacy root publishing to the Actions artifact workflow,
+and the explicit `PAGES_ENABLED=true` repository variable was verified before promoting the app.

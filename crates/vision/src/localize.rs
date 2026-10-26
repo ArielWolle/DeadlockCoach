@@ -34,6 +34,7 @@ impl MapLocator {
         let score=self.template.similarity(frame,b);(score>=0.48).then_some(Located{bounds:b,score})
     }
     pub fn locate(&self,frame:&DynamicImage)->Option<Located> {
+        let gray=frame.to_luma8();
         let reference_box=Bounds{x:0,y:0,w:self.reference.width(),h:self.reference.height()};
         let rt=landmark(&self.reference,reference_box,true)?;let rb=landmark(&self.reference,reference_box,false)?;
         let white_blobs=|image:&DynamicImage|{
@@ -49,7 +50,7 @@ impl MapLocator {
                 let x=b.cx-reference.cx*scale;let y=b.cy-reference.cy*scale;let w=self.reference.width() as f32*scale;let h=self.reference.height() as f32*scale;
                 if w<100.||w>1000.||x<0.||y<0.||x+w>frame.width() as f32||y+h>frame.height() as f32{continue;}
                 let bounds=Bounds{x:x as u32,y:y as u32,w:w as u32,h:h as u32};
-                if landmark(frame,bounds,true).is_some()&&landmark(frame,bounds,false).is_some(){proposals.push(Located{bounds,score:self.template.similarity(frame,bounds)});}
+                if landmark(frame,bounds,true).is_some()&&landmark(frame,bounds,false).is_some(){proposals.push(Located{bounds,score:self.template.similarity_gray(&gray,bounds)});}
             }
         }
         proposals.sort_by(|a,b|b.score.total_cmp(&a.score));
@@ -88,8 +89,11 @@ fn text_proposals(frame:&DynamicImage,mint:bool)->Vec<Bounds>{
     }).collect()
 }
 pub fn locate_currency(frame:&DynamicImage,reader:&Reader)->Option<(u32,RegionObservation)>{
+    locate_currency_limited(frame,reader,12)
+}
+pub fn locate_currency_limited(frame:&DynamicImage,reader:&Reader,limit:usize)->Option<(u32,RegionObservation)>{
     let mut proposals=text_proposals(frame,true);proposals.sort_by(|a,b|(b.w*b.h).cmp(&(a.w*a.h)));
-    for b in proposals.into_iter().take(12){
+    for b in proposals.into_iter().take(limit){
         let Ok(spans)=reader.read_spans(&frame.crop_imm(b.x,b.y,b.w,b.h),3)else{continue};
         for mut span in spans {
             let Some(value)=currency_value(&span.label)else{continue};
@@ -116,6 +120,9 @@ pub fn track_currency(frame:&DynamicImage,reader:&Reader,b:Bounds)->Option<(u32,
     }None
 }
 pub fn locate_clock(frame:&DynamicImage,reader:&Reader,hint:Option<Bounds>)->Option<(u32,RegionObservation)>{
+    locate_clock_limited(frame,reader,hint,16)
+}
+pub fn locate_clock_limited(frame:&DynamicImage,reader:&Reader,hint:Option<Bounds>,limit:usize)->Option<(u32,RegionObservation)>{
     let mut proposals=text_proposals(frame,false);
     proposals.retain(|b|b.w as f32/(b.h as f32)>1.5&&b.w<350);
     if let Some(hint)=hint {proposals.sort_by(|a,b|{
@@ -126,7 +133,7 @@ pub fn locate_clock(frame:&DynamicImage,reader:&Reader,hint:Option<Bounds>)->Opt
         let x=hint.x.saturating_sub(hint.w/2);let y=hint.y.saturating_sub(hint.h/3);
         proposals.insert(0,Bounds{x,y,w:hint.w.min(frame.width()-x),h:hint.h.min(frame.height()-y)});
     }
-    for b in proposals.into_iter().take(16){
+    for b in proposals.into_iter().take(limit){
         let Ok(spans)=reader.read_spans(&frame.crop_imm(b.x,b.y,b.w,b.h),3)else{continue};
         for mut span in spans {
             let text=span.label.trim();if text.matches(':').count()!=1{continue;}

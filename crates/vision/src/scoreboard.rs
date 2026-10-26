@@ -21,11 +21,17 @@ pub fn item_cell(cx: f32, col: usize, row: usize) -> Region {
 /// Quick check used by the screen classifier: do the probe columns show hero names?
 /// (K/D/A digits are too small for the OCR model, but names read reliably.)
 pub fn looks_like_scoreboard(rd: &Reader, img: &DynamicImage, hero_names: &[(String, String)]) -> bool {
-    let mut matches=0;
-    for (i,cx) in [hud::ALLY_CENTERS[1],hud::ALLY_CENTERS[3],hud::ENEMY_CENTERS[1],hud::ENEMY_CENTERS[4]].iter().enumerate(){
-        if rd.read(&hud::crop(img,name_region(*cx))).ok().and_then(|s|match_hero(&s,hero_names)).is_some(){matches+=1;}
-        if matches>=3{return true;}if matches+3-i<3{return false;}
-    }false
+    names(rd,img,&[hud::ALLY_CENTERS[1],hud::ALLY_CENTERS[3],hud::ENEMY_CENTERS[1],hud::ENEMY_CENTERS[4]],false,hero_names).iter().filter(|h|h.is_some()).count()>=3
+}
+fn names(rd:&Reader,img:&DynamicImage,centers:&[f32],big:bool,heroes:&[(String,String)])->Vec<Option<String>>{
+    let mut bank=image::RgbImage::new(96,36*centers.len() as u32);
+    for(i,cx)in centers.iter().enumerate(){let cell=hud::crop(img,if big{big_name_region(*cx)}else{name_region(*cx)}).resize_exact(72,16,image::imageops::FilterType::Triangle).to_rgb8();
+        image::imageops::overlay(&mut bank,&cell,12,(i*36+10) as i64);}
+    let mut result=vec![None;centers.len()];
+    if let Ok(lines)=rd.read_spans(&DynamicImage::ImageRgb8(bank),3){for line in lines{
+        let row=((line.bounds.y+line.bounds.h/2)/36) as usize;
+        if let Some(slot)=result.get_mut(row){if slot.is_none(){*slot=match_hero(&line.label,heroes);}}
+    }}result
 }
 /// Normalised Levenshtein-ish match of OCR text against hero display names.
 pub fn match_hero(text: &str, names: &[(String, String)]) -> Option<String> {
@@ -56,13 +62,11 @@ fn lev(a: &str, b: &str) -> usize {
 /// Read all 12 columns. `hero_names` = (class_name, display name).
 pub fn read(rd: &Reader, items: &ColorLibrary, hero_names: &[(String, String)], img: &DynamicImage) -> Vec<PlayerRow> {
     let mut rows = vec![];
+    let centers:Vec<_>=hud::ALLY_CENTERS.into_iter().chain(hud::ENEMY_CENTERS).collect();
+    let mut identified=names(rd,img,&centers,false,hero_names);
+    if identified.iter().any(|h|h.is_none()){let alternative=names(rd,img,&centers,true,hero_names);for(i,h)in identified.iter_mut().enumerate(){if h.is_none(){*h=alternative[i].clone();}}}
     for (i, cx) in hud::ALLY_CENTERS.iter().chain(hud::ENEMY_CENTERS.iter()).enumerate() {
-        let mut row = PlayerRow { ally: i < 6, ..Default::default() };
-        for r in [name_region(*cx), big_name_region(*cx)] {
-            if row.hero.is_none() {
-                row.hero = rd.read(&hud::crop(img, r)).ok().and_then(|s| match_hero(&s, hero_names));
-            }
-        }
+        let mut row = PlayerRow { ally: i < 6,hero:identified[i].clone(), ..Default::default() };
         for r in 0..ITEM_ROWS {
             for c in 0..2 {
                 let cell = hud::crop(img, item_cell(*cx, c, r));

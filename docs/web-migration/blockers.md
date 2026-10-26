@@ -23,12 +23,14 @@
 | Viewport adjustment kept consuming live source frames | Added bounded five-frame frozen history, report-driven located/configured overlays, local sample export and same-share resume |
 | Fresh manifest could be paired with stale shell-cached timings | Verified asset URLs include their expected SHA-256, corrupt entries get one checked network refetch, and new service workers honor reload requests and restrict lookups to their own shell cache |
 | Slow full scans delayed health, waves and last-second timing cues | Independent one-second acquisition and recognition-only HP/map worker; early timing windows, age-aware speech expiry and immediate health priority. Headless fast monitoring measured about 0.5–0.8 seconds, not a live-game benchmark |
+| A stalled full scan paused the entire live session | Replace only the full worker with two bounded retries while retaining the share and screenshot loop; fast output stays freshness-gated. A real-WASM test deliberately drops a full result and verifies recovery |
+| Full-window and scoreboard work had expensive repeated searches | 1920-wide automatic browser cap, bounded minimap/text proposals, grayscale reuse and batched scoreboard-name OCR with saved-frame parity checks |
 
 ## External blockers / not claimed complete
 
-1. **GitHub Pages availability**: per owner, private repository is not currently hosting a Pages
-   site. Deployment stays explicitly gated off; CI and downloadable `web-dist` are independent.
-   No hosting settings, repository visibility or paid plan are changed automatically.
+1. **GitHub Pages delivery**: the owner made the repository public and requested publication.
+   Pages now uses GitHub Actions with `PAGES_ENABLED=true`; the browser application is deployed
+   from `main`. Deployment still requires a successful hosted build and artifact publication.
 2. **Actual game capture while foregrounded/fullscreen**: automated tests inject a canvas-based
    MediaStream with real saved game pixels. They do not interact with an OS share picker or
    prove capture continuity during a match. Needs a live 20–30 minute Chrome/Edge game session.
@@ -40,10 +42,10 @@
    **11,728 ms** for its final OCR frame; the later profile-engine regression recorded
     **5,663 ms** (recorded 1600×900 HUD, not a live game benchmark).
     The automatic-HUD/lane-policy run logged **17,844 ms** under concurrent native build load.
-   This exceeds the default five-second target.
-   The loop skips queueing and samples the current frame when ready; late speech is discarded.
-   A 10-second interval is a practical setting to try. Game FPS impact, thermal load and
-   background scheduling remain unmeasured. A guaranteed five-second cycle requires more work.
+    This is the full-scene path, not the independent one-second screenshot sampler. The fast
+    worker has measured about 0.5–1 second in headless fixtures, but game FPS impact, thermal
+    load and background scheduling remain unmeasured. There is no guaranteed one-second full
+    OCR cycle. See [live monitoring and recovery](../live-coaching.md).
 5. **Vision uncertainty retained from native**: arbitrary HUD scales/aspect ratios, tiny scoreboard
    icons, exact K/D/A, camp availability and enemy Urn ownership remain incomplete or heuristic.
    Migration is not a claim that these recognition problems are solved.

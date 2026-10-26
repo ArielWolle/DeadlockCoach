@@ -3,7 +3,7 @@
   "id": "deadlock-auto",
   "name": "Deadlock · automatic HUD discovery",
   "adapter": "deadlock",
-  "viewport": { "aspect_ratio": null, "max_width": 4096, "auto_crop": false },
+  "viewport": { "aspect_ratio": null, "max_width": 1920, "auto_crop": false },
   "nodes": [
     { "id": "game", "op": { "type": "custom", "name": "deadlock.auto" } },
     { "id": "clock", "inputs": ["game"], "op": { "type": "select", "path": "/game_clock_secs" } },

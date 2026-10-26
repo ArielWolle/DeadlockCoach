@@ -28,3 +28,11 @@ fn monitor_rejects_death_menu_stale_context_and_resized_sources(){
     assert!(monitor.scan(&fixture("00216_dead-respawn.jpg"),&context,5000).is_none());
     assert!(monitor.scan(&fixture("00167_scoreboard-mid.jpg"),&context,5000).is_none());
 }
+#[test]
+fn recovery_context_retains_only_current_health_and_clock_after_thirty_seconds(){
+    let(mut monitor,mut context,frame)=seeded();context.snapshot.game_clock_secs=Some(283);
+    let snapshot=monitor.scan(&frame,&context,35001).expect("fresh clock and health can support conservative monitoring during recovery");
+    assert_eq!(snapshot.hp,Some(779));assert_eq!(snapshot.game_clock_secs,Some(313));
+    assert!(snapshot.minimap.is_none());assert!(snapshot.hero_status.is_empty());assert!(snapshot.souls.is_none());assert!(snapshot.own_networth.is_none());
+    assert!(monitor.scan(&frame,&context,95001).is_none());
+}

@@ -73,10 +73,10 @@ capture stability; see [validation and blockers](docs/web-migration/blockers.md)
 ### GitHub Actions and hosting
 
 CI runs on pushes/PRs and uploads `web-dist` plus browser-test evidence. Windows checks retain
-native compatibility. **Pages deployment is off by default**, so a private repository with no
-available Pages hosting does not make CI fail.
+native compatibility. The repository is now public and Pages is configured for **GitHub Actions**
+with **`PAGES_ENABLED=true`**. Production publication uses the validated `web-dist` from `main`.
 
-When hosting becomes available:
+To configure Pages in another copy of the repository:
 1. Enable Settings → Pages → Source: **GitHub Actions**.
 2. Set repository Actions variable **`PAGES_ENABLED=true`**.
 3. Merge this branch to `main`, or manually run **Publish website (opt-in)** on `main`.

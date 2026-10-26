@@ -8,9 +8,12 @@ pub struct TemplateLocator {values:Vec<f32>,mask:Vec<bool>,aspect:f32}
 pub struct Located {pub bounds:Bounds,pub score:f32}
 impl TemplateLocator {
     pub fn similarity(&self,frame:&DynamicImage,bounds:Bounds)->f32{
+        self.similarity_gray(&frame.to_luma8(),bounds)
+    }
+    pub fn similarity_gray(&self,frame:&GrayImage,bounds:Bounds)->f32{
         if bounds.w==0||bounds.h==0||bounds.x.checked_add(bounds.w).is_none_or(|x|x>frame.width())
             ||bounds.y.checked_add(bounds.h).is_none_or(|y|y>frame.height()){return 0.;}
-        self.score(&frame.to_luma8(),bounds.x as f32,bounds.y as f32,bounds.w as f32)
+        self.score(frame,bounds.x as f32,bounds.y as f32,bounds.w as f32)
     }
     pub fn new(image:&DynamicImage,mask:Option<&GrayImage>) -> Self {
         let gray=image::imageops::resize(&image.to_luma8(),24,24,FilterType::Triangle);
@@ -32,10 +35,15 @@ impl TemplateLocator {
         if frame.width()==0||frame.height()==0||!min_width.is_finite()||!max_width.is_finite()||min_width<1.||max_width<min_width{return vec![];}
         let factor=(480./frame.width() as f32).min(480./frame.height() as f32).min(1.);
         let gray=image::imageops::resize(&frame.to_luma8(),(frame.width() as f32*factor).round().max(1.) as u32,(frame.height() as f32*factor).round().max(1.) as u32,FilterType::Triangle);
+        let range=gray.pixels().fold((255u8,0u8),|(lo,hi),p|(lo.min(p[0]),hi.max(p[0])));
+        if range.1.saturating_sub(range.0)<8{return vec![];}
         let mut widths=vec![];let mut width=min_width;while width<=max_width {widths.push(width*factor);width*=1.10;}
         let mut peaks:Vec<(f32,f32,f32,f32)>=vec![];
         for w in widths {let h=w/self.aspect;if w>=gray.width() as f32 || h>=gray.height() as f32{continue;}
-            for y in (0..=(gray.height() as f32-h) as u32).step_by(4) {for x in (0..=(gray.width() as f32-w) as u32).step_by(4) {
+            // Spread a fixed proposal budget across scales instead of scanning every pixel.
+            let placements=(gray.width() as f32-w+1.)*(gray.height() as f32-h+1.);
+            let step=(placements/3000.).sqrt().ceil().max(4.) as usize;
+            for y in (0..=(gray.height() as f32-h) as u32).step_by(step) {for x in (0..=(gray.width() as f32-w) as u32).step_by(step) {
                 let score=self.score(&gray,x as f32,y as f32,w);
                 if peaks.len()<32 || score>peaks.last().unwrap().0 {
                     peaks.push((score,x as f32,y as f32,w));peaks.sort_by(|a,b|b.0.total_cmp(&a.0));
@@ -44,11 +52,12 @@ impl TemplateLocator {
             }}
         }
         let full=frame.to_luma8();let mut results=vec![];
-        for (_,x,y,w) in peaks.into_iter().filter(|p|p.0>=min_score-0.25).take(24) {
+        for (_,x,y,w) in peaks.into_iter().filter(|p|p.0>=min_score-0.25).take(6) {
             let mut best=None;
             let (cx,cy,cw)=(x/factor,y/factor,w/factor);let radius=(5./factor).ceil() as i32;
+            let stride=(1./factor).round().max(1.) as usize;
             for size in -8..=8 {let width=cw*(1.+size as f32*0.01);let height=width/self.aspect;
-                for dy in (-radius..=radius).step_by(2) {for dx in (-radius..=radius).step_by(2) {
+                for dy in (-radius..=radius).step_by(stride) {for dx in (-radius..=radius).step_by(stride) {
                     let x=cx+dx as f32;let y=cy+dy as f32;
                     if x<0. || y<0. || x+width>frame.width() as f32 || y+height>frame.height() as f32{continue;}
                     let score=self.score(&full,x,y,width);

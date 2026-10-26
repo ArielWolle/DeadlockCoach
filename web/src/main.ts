@@ -40,6 +40,7 @@ let initResolve: (() => void) | undefined, initReject: ((e: Error) => void) | un
 let initTimer: ReturnType<typeof setTimeout> | undefined;
 let id = 0, generation = 0, busy = false, running = false, paused = false, replaying = false;
 let timer: ReturnType<typeof setTimeout> | undefined;
+let recoveryTimer:ReturnType<typeof setTimeout>|undefined,recoveringFull=false,recoveryAttempts=0;
 let lastResultAt = 0, lastElapsed = 0, assetVersion = 'Not loaded';
 let needsViewport = false, manualViewport = false, automaticViewport = false, sourceGeometry = '';
 let latest: Snapshot = {}, latestFrame: ImageData | undefined, latestMap: ImageData | undefined;
@@ -83,6 +84,27 @@ function failWorker(message: string) {
   if (running) { paused = true; speaker.cancel(); status('Analysis paused', 'Restart the engine in Settings, then resume.'); }
   diagnostics(); notice(message, true);
 }
+function analysisFailure(message:string){
+  if(!running||replaying||profileChanging||!isDeadlock(activeProfile)){failWorker(message);return;}
+  // A blocked WASM call cannot be interrupted cooperatively. Replace only that worker;
+  // the capture stream and the independent, freshness-gated fast worker stay alive.
+  ready=false;worker?.terminate();worker=undefined;initializing=undefined;clearTimeout(initTimer);
+  const error=new Error(message);initReject?.(error);initReject=undefined;initResolve=undefined;
+  if(pending){clearTimeout(pending.timer);pending.reject(error);pending=undefined;}
+  if(pendingProfile){clearTimeout(pendingProfile.timer);pendingProfile.reject(error);pendingProfile=undefined;}
+  busy=false;recoveringFull=true;recoveryAttempts++;clearTimeout(recoveryTimer);
+  text('engine-state','FULL SCAN RECOVERY · CAPTURE ACTIVE');text('analysis-time','Full scene: failed · capture retained');$('load-panel').hidden=true;
+  status('Full scene analysis recovering','Screenshots continue. Fast monitoring continues while its HUD context is fresh.');
+  notice(`${message} ${recoveryAttempts<=2?'Rebuilding the full worker automatically.':'Automatic retries exhausted; use Restart analysis engine in Settings for full scans.'}`,true);
+  window.dispatchEvent(new CustomEvent('coach:recovery',{detail:{attempt:recoveryAttempts,captureRetained:capture.active}}));
+  if(recoveryAttempts>2)return;
+  const current=generation;
+  recoveryTimer=setTimeout(async()=>{
+    if(current!==generation||!running||!capture.active)return;
+    try{await initialize();if(current===generation&&running){recoveringFull=false;status(paused?'Coaching paused':'Coaching live','Full worker rebuilt; waiting for a fresh scene.');}}
+    catch{/* The failed initializer's error handler schedules the next bounded retry. */}
+  },recoveryAttempts*2000);
+}
 
 async function initialize(profile = activeProfile) {
   if (ready) return;
@@ -90,7 +112,7 @@ async function initialize(profile = activeProfile) {
   $('load-panel').hidden = false; text('engine-state', 'ENGINE LOADING');
   initializing = new Promise<void>((resolve, reject) => { initResolve = resolve; initReject = reject; });
   worker = new Worker(new URL('./coach.worker.ts', import.meta.url), { type: 'module' });
-  worker.onerror = event => { event.preventDefault(); failWorker(`Analysis worker failed: ${event.message || 'unknown worker error'}`); };
+  worker.onerror = event => { event.preventDefault(); analysisFailure(`Analysis worker failed: ${event.message || 'unknown worker error'}`); };
   worker.onmessage = event => {
     const reply: WorkerReply | ProfileReply = event.data;
     if (reply.type === 'profile_ready' || reply.type === 'profile_error') {
@@ -109,14 +131,14 @@ async function initialize(profile = activeProfile) {
       initResolve?.(); initResolve = undefined; initReject = undefined; diagnostics();
     } else if (reply.type === 'error') {
       // WASM traps may leave the instance unusable; rebuild rather than replaying bad state.
-      failWorker(reply.message);
+      analysisFailure(reply.message);
     } else if (reply.type === 'result' && pending?.id === reply.id) {
       clearTimeout(pending.timer); const task = pending; pending = undefined;
       if (reply.generation !== generation) task.reject(new Error('Analysis canceled'));
       else task.resolve({ analysis: reply.analysis, elapsed: reply.elapsed });
     }
   };
-  initTimer = setTimeout(() => failWorker('Model initialization timed out. Check connectivity, then restart the engine.'), 120000);
+  initTimer = setTimeout(() => analysisFailure('Model initialization timed out.'), 120000);
   worker.postMessage({ type: 'init', base, profile });
   return initializing;
 }
@@ -125,13 +147,15 @@ function request(message: Record<string, unknown>, transfer: Transferable[] = []
   if (!ready || !worker) return Promise.reject(new Error('Engine is not ready'));
   if (pending) return Promise.reject(new Error('Another analysis is still running'));
   const requestId = ++id;
+  const budget=running&&message.type==='frame'&&quick.usable?20000:45000;
   return new Promise<{ analysis: Analysis; elapsed: number }>((resolve, reject) => {
-    pending = { id: requestId, resolve, reject, timer: setTimeout(() => failWorker('Frame analysis exceeded 45 seconds. Capture is paused; restart the engine to recover.'), 45000) };
+    pending = { id: requestId, resolve, reject, timer: setTimeout(() => analysisFailure(`Full scene analysis exceeded ${budget/1000} seconds.`), budget) };
     worker!.postMessage({ ...message, id: requestId, generation }, transfer);
   });
 }
 
 function cancelMode() {
+  clearTimeout(recoveryTimer);recoveringFull=false;recoveryAttempts=0;
   generation++; running = false; paused = false; replaying = false; clearTimeout(timer);
   cropEditor.cancel(); needsViewport = false; button('fix-viewport').hidden = true;
   capture.stop(); speaker.cancel();quick.reset(); button('cancel-replay').disabled = true;
@@ -284,6 +308,7 @@ quick.onResult=(analysis,current,timestamp,elapsed,sourceId,context)=>{
   }));
   text('quick-time',`${Math.round(elapsed)} ms fast monitor`);
   text('fast-analysis-time',`Fast HP/map: ${Math.round(elapsed)} ms`);
+  if(recoveringFull)text('engine-state','FAST MONITOR · FULL SCAN RECOVERING');
   for(const cue of result.cues){cues.unshift({...cue,at:latest.game_clock_secs});text('current-advice',cue.text);text('advice-context',`Live health/map evidence · ${clock(latest.game_clock_secs)}`);}
   cues=cues.slice(0,60);renderCues();diagnostics();
   window.dispatchEvent(new CustomEvent('coach:quick',{detail:{timestamp,elapsed,snapshot:structuredClone(latest),cues:result.cues}}));
@@ -310,7 +335,7 @@ async function tick() {
     text('capture-time',`Screenshot ${new Date(pixels.timestamp).toLocaleTimeString()} · ${settings.interval}s cadence`);
     window.dispatchEvent(new CustomEvent('coach:capture',{detail:{timestamp:pixels.timestamp,sourceId:pixels.sourceId}}));
     quick.sample(pixels,current);
-    if(!busy&&!pending){busy=true;void analyzeLiveFrame(pixels,current);}
+    if(ready&&!recoveringFull&&!busy&&!pending){busy=true;void analyzeLiveFrame(pixels,current);}
   } catch (e) {
     if (current === generation) {
       speaker.cancel(); notice(e instanceof Error ? e.message : String(e), true);
@@ -326,6 +351,7 @@ async function analyzeLiveFrame(pixels:Pixels,current:number){
   try{
     const result=await analyzePixels(pixels);capture.attachReport(pixels.sourceId,result.analysis.perception);
     if(current!==generation||!running||paused)return;
+    recoveryAttempts=0;
     if(result.analysis.perception)quick.seed(result.analysis.snapshot,result.analysis.perception);
     const delivered=deliver(result.analysis,timestamp);
     apply(delivered,result.elapsed);status('Coaching live');

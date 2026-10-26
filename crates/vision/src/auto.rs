@@ -3,7 +3,7 @@
 //! boxes come from the individual template/text detectors, never from that estimate.
 use coach_core::GameSnapshot;
 use coach_perception::{Bounds,RegionObservation,RegionOrigin};
-use crate::{localize::{MapLocator,locate_clock,locate_currency,track_currency,detected_map},ocr::Reader,scan::Scanner};
+use crate::{localize::{MapLocator,locate_clock_limited,locate_currency_limited,track_currency,detected_map},ocr::Reader,scan::Scanner};
 use image::DynamicImage;
 
 pub struct AutoScanner {legacy:Scanner,reader:Reader,map:MapLocator,clock:crate::parse::Tracker,regions:Vec<RegionObservation>,previous_map:Option<Bounds>,previous_currency:Option<Bounds>,map_tracker:crate::minimap::Tracker}
@@ -15,12 +15,13 @@ impl AutoScanner {
         self.regions.clear();
         let map=self.previous_map.and_then(|b|self.map.track(frame,b)).or_else(||self.map.locate(frame));self.previous_map=map.map(|m|m.bounds);
         if let Some(m)=map{self.regions.push(detected_map(m));}
-        let currency=self.previous_currency.and_then(|b|track_currency(frame,&self.reader,b)).or_else(||locate_currency(frame,&self.reader));self.previous_currency=currency.as_ref().map(|(_,r)|r.bounds);
+        let budget=if map.is_some(){6}else{2};
+        let currency=self.previous_currency.and_then(|b|track_currency(frame,&self.reader,b)).or_else(||locate_currency_limited(frame,&self.reader,budget));self.previous_currency=currency.as_ref().map(|(_,r)|r.bounds);
         if let Some((_,r))=&currency{self.regions.push(r.clone());}
         let hint=map.map(|m|Bounds{x:(m.bounds.x as f32-m.bounds.w as f32*455./335.).max(0.) as u32,
             y:(m.bounds.y as f32-m.bounds.h as f32*505./350.).max(0.) as u32,
             w:(m.bounds.w as f32*160./335.).max(60.) as u32,h:(m.bounds.h as f32*50./350.).max(24.) as u32});
-        let clock=locate_clock(frame,&self.reader,hint);
+        let clock=locate_clock_limited(frame,&self.reader,hint,budget);
         if let Some((_,r))=&clock{self.regions.push(r.clone());}
         let mut independent=GameSnapshot{screen:Some("Unknown".into()),..Default::default()};
         independent.game_clock_secs=self.clock.accept_clock(clock.as_ref().map(|(n,_)|*n),now);

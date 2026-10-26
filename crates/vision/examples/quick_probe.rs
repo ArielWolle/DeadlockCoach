@@ -2,6 +2,8 @@
 fn main(){
     let reader=coach_vision::ocr::Reader::load(std::path::Path::new("data/models")).unwrap();
     for path in std::env::args().skip(1){let frame=image::open(&path).unwrap();
+        if let Some((value,region))=coach_vision::localize::locate_clock(&frame,&reader,None){let b=region.bounds;println!("located clock {value} {b:?}: {:?}",reader.read_line(&frame.crop_imm(b.x,b.y,b.w,b.h)));}
+        for(x,y,w,h)in [(685,674,120,25),(680,670,150,30)]{println!("respawn {x},{y},{w},{h}: {:?}",reader.read_line(&frame.crop_imm(x,y,w,h)));}
         for(x,y,w,h)in [(775,12,50,16),(782,15,36,12),(780,16,40,10)]{println!("clock {x},{y},{w},{h}: {:?}",reader.read_line(&frame.crop_imm(x,y,w,h)));}
         let mut tracker=coach_vision::vitals::Tracker::default();
         if let Some(v)=tracker.read(&reader,&frame,0){let b=v.regions[0].bounds;

@@ -6,6 +6,7 @@ interface Context{snapshot:Snapshot;timestamp_ms:number;frame_size:[number,numbe
 export class QuickMonitor{
   private worker?:Worker;private ready=false;private busy=false;private context?:Context;private pendingContext?:Context;private deadline?:ReturnType<typeof setTimeout>;
   lastResultAt=0;elapsed=0;
+  get usable(){return this.ready&&this.context?.snapshot.game_clock_secs!=null&&Date.now()-this.context.timestamp_ms<=90000;}
   onResult: (analysis:Analysis,generation:number,timestamp:number,elapsed:number,sourceId:number|undefined,context:Context)=>void=()=>{};
   onError:(message:string)=>void=()=>{};
   start(base:string,options:unknown){
@@ -31,7 +32,7 @@ export class QuickMonitor{
       ?{snapshot:structuredClone(snapshot),timestamp_ms:report.timestamp_ms,frame_size:report.frame_size,game,hp,map}:undefined;
   }
   sample(p:Pixels,generation:number){
-    if(!this.ready||this.busy||!this.context||p.timestamp-this.context.timestamp_ms>30000)return;
+    if(!this.ready||this.busy||!this.context||p.timestamp-this.context.timestamp_ms>90000)return;
     this.busy=true;this.pendingContext=this.context;const rgba=new Uint8ClampedArray(p.rgba.data);
     this.deadline=setTimeout(()=>{this.stop();this.onError('Quick monitor exceeded its five-second budget');},5000);
     this.worker!.postMessage({type:'frame',rgba:rgba.buffer,width:p.rgba.width,height:p.rgba.height,context:this.context,timestamp:p.timestamp,sourceId:p.sourceId,generation},[rgba.buffer]);

@@ -30,6 +30,7 @@ fn px(x: f32, y: f32, w: f32, h: f32) -> Region { Region { x: x / 1600.0, y: y /
 
 pub fn back_anchor() -> Region { px(10.0, 860.0, 130.0, 32.0) }
 pub fn respawn_anchor() -> Region { px(675.0, 665.0, 170.0, 40.0) }
+pub fn respawn_text_line() -> Region { px(680.0,670.0,150.0,30.0) }
 pub fn respawn_number() -> Region { px(845.0, 665.0, 80.0, 40.0) }
 pub fn match_id_region() -> Region { px(1440.0, 868.0, 160.0, 16.0) }
 
@@ -40,13 +41,13 @@ pub fn classify(rd: &Reader, img: &DynamicImage, hero_names: &[(String, String)]
     classify_hinted(rd,img,hero_names,None)
 }
 pub fn classify_hinted(rd:&Reader,img:&DynamicImage,hero_names:&[(String,String)],known_clock:Option<u32>)->(Screen,Option<u32>){
-    let back = rd.read(&hud::crop(img, back_anchor())).unwrap_or_default();
+    let back = rd.read_line(&hud::crop(img, back_anchor())).unwrap_or_default();
     if has(&back, "RESUME") { return (Screen::Menu, None); }
     if has(&back, "BACK") { return (Screen::Shop, None); }
     let clock = known_clock.or_else(||rd.read(&hud::crop(img, hud::CLOCK)).ok().and_then(|s| parse::parse_clock(&s)));
     if clock.is_some() {
         if crate::scoreboard::looks_like_scoreboard(rd, img, hero_names) { return (Screen::Scoreboard, clock); }
-        let resp = rd.read(&hud::crop(img, respawn_anchor())).unwrap_or_default();
+        let resp = rd.read_line(&hud::crop(img, respawn_text_line())).unwrap_or_default();
         if has(&resp, "RESPAWN") { return (Screen::Dead, clock); }
         return (Screen::Gameplay, clock);
     }
