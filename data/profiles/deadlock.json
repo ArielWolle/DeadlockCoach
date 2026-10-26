@@ -16,7 +16,9 @@
     { "id": "hp", "inputs": ["game"], "op": { "type": "select", "path": "/hp" } },
     { "id": "max_hp", "inputs": ["game"], "op": { "type": "select", "path": "/max_hp" } },
     { "id": "position", "inputs": ["game"], "op": { "type": "select", "path": "/minimap/you" } },
-    { "id": "lane", "inputs": ["game"], "op": { "type": "select", "path": "/minimap/your_lane" } }
+    { "id": "lane", "inputs": ["game"], "op": { "type": "select", "path": "/minimap/your_lane" } },
+    { "id": "hero_status", "inputs": ["game"], "op": { "type": "select", "path": "/hero_status" } },
+    { "id": "earned", "inputs": ["game"], "op": { "type": "select", "path": "/own_networth" } }
   ],
   "outputs": {
     "match.clock_seconds": "clock",
@@ -29,6 +31,8 @@
     "player.hp": "hp",
     "player.max_hp": "max_hp",
     "player.map_position": "position",
-    "player.lane_estimate": "lane"
+    "player.lane_estimate": "lane",
+    "world.hero_status": "hero_status",
+    "player.earned_souls": "earned"
   }
 }

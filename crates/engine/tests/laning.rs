@@ -12,7 +12,7 @@ fn crashed(s:&mut GameSnapshot) {let l=&mut s.minimap.as_mut().unwrap().blue;l.p
 #[test]
 fn policy_cards_quote_real_document_guidance_without_unverified_claims() {
     let catalog:Catalog=serde_json::from_str(include_str!("../../../data/coaching/laning.json")).unwrap();
-    assert_eq!(catalog.schema_version,1);assert_eq!(catalog.cards.len(),11);
+    assert_eq!(catalog.schema_version,1);assert_eq!(catalog.cards.len(),13);
     for c in catalog.cards {
         assert!(!c.sources.is_empty());assert!(c.cooldown_secs>=20);
         for source in c.sources {
@@ -110,3 +110,17 @@ fn unlock_timers_are_one_shot_and_camps_are_not_a_fixed_respawn_clock() {
 }
 #[test]
 fn visible_ui_values_do_not_authorize_coaching_when_game_state_is_unknown(){let mut s=state();s.screen=Some("Unknown".into());s.souls=Some(3000);let mut e=Engine::new(coach_engine::default_rules(RulesConfig::default()));assert!(e.step(&s).is_empty());}
+
+#[test]fn gank_requires_matched_critical_target_and_confirmed_support(){
+    let mut s=state();crashed(&mut s);
+    s.hero_status=vec![coach_core::HeroStatus{ally:false,hero:Some("target".into()),critical:Some(true),observations:3,position:Some(Pt{x:0.7,y:0.5}),position_observations:3,lane:Some(Lane::Yellow),..Default::default()},
+        coach_core::HeroStatus{ally:true,critical:Some(false),observations:3,position:Some(Pt{x:0.72,y:0.5}),position_observations:3,..Default::default()}];
+    assert_eq!(action(&s),Action::Gank);
+    s.hero_status[0].position=None;assert_ne!(action(&s),Action::Gank);
+    s.hero_status[0].position=Some(Pt{x:0.7,y:0.5});s.hero_status[1].critical=None;assert_ne!(action(&s),Action::Gank);
+    s.hero_status[1].critical=Some(true);assert_ne!(action(&s),Action::Gank);
+}
+#[test]fn health_warning_interrupts_immediately_and_starts_before_critical_hp(){
+    let mut e=Engine::new(vec![Box::new(LaneCoach::default())]);let mut s=state();assert!(!e.step(&s).is_empty());
+    s.game_clock_secs=Some(401);s.hp=Some(440);assert_eq!(e.step(&s)[0].key,"lane:back_off");
+}

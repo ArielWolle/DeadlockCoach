@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 pub mod map_rules;
 pub mod laning;
+pub mod economy;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Priority { Low, Normal, High }
@@ -192,7 +193,7 @@ impl Rule for NetworthLeadRule {
     }
 }
 pub fn default_rules(cfg: RulesConfig) -> Vec<Box<dyn Rule>> {
-    vec![Box::new(laning::LaneCoach::default()), Box::new(map_rules::MapRule), Box::new(UnspentSoulsRule(cfg.clone())), Box::new(DeathCauseRule), Box::new(NetworthLeadRule::new(cfg))]
+    vec![Box::new(laning::LaneCoach::default()), Box::new(map_rules::MapRule), Box::new(UnspentSoulsRule(cfg.clone())), Box::new(DeathCauseRule), Box::new(NetworthLeadRule::new(cfg)),Box::new(economy::PaceRule),Box::new(economy::WaveReportRule)]
 }
 
 pub struct Engine {
@@ -219,7 +220,7 @@ impl Engine {
             _ => true,
         });
         if let Some(l)=self.last_cue_at { if now-l<self.min_gap_secs {
-            out.retain(|c| c.priority==Priority::High && now-l>=3);
+            out.retain(|c| c.priority==Priority::High && (now-l>=3 || c.key=="lane:back_off"));
         }}
         out.sort_by(|a, b| b.priority.cmp(&a.priority));
         out.truncate(self.max_per_step);

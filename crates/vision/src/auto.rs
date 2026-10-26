@@ -50,6 +50,7 @@ impl AutoScanner {
         let map_image=frame.crop_imm(map.bounds.x,map.bounds.y,map.bounds.w,map.bounds.h).to_rgb8();
         let mut snapshot=self.legacy.scan_located(&DynamicImage::ImageRgba8(canonical),Some(&map_image),now,time,souls);
         if snapshot.screen.as_deref()==Some("Unknown"){return independent;}
+        self.regions.push(RegionObservation{id:"game_context".into(),label:"Registered game context · compatibility".into(),bounds:Bounds{x:left,y:top,w,h},origin:RegionOrigin::Configured,score:None,value_path:None});
         snapshot.game_clock_secs=independent.game_clock_secs;
         if !snapshot.dead{snapshot.souls=independent.souls;}else{if let Some(r)=self.regions.iter_mut().find(|r|r.id=="souls"){r.value_path=None;r.label.push_str(" · ownership unconfirmed while spectating");}}
         for mut r in self.legacy.regions(){r.bounds=Bounds{x:left+(r.bounds.x as f32/1600.*w as f32).round() as u32,

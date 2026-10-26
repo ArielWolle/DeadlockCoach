@@ -17,7 +17,7 @@ pub struct Catalog { pub schema_version:u32, pub thresholds:Thresholds, pub card
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all="snake_case")]
-pub enum Action { LastHit, CatchWave, HoldWave, BackOff, PushWave, Poke, Jungle, Shop, PrepareObjective, NeedEvidence }
+pub enum Action { LastHit, CatchWave, HoldWave, BackOff, PushWave, Poke, Jungle, Gank, Shop, PrepareObjective, NeedEvidence }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Decision {
     pub action:Action, pub text:String, pub rationale:String, pub lane:Option<Lane>, pub lane_source:String,
@@ -101,10 +101,24 @@ impl LaneCoach {
         if crashed && healthy && in_lane && s.souls.is_some_and(|v| v>=1500) {
             return Some(self.plan("shop",Action::Shop,s,Priority::Normal,evidence,missing,true));
         }
+        if crashed&&healthy&&in_lane&&!endangered&&!objective_soon {
+            let target=s.hero_status.iter().find(|p|!p.ally&&p.critical==Some(true)&&p.observations>=2&&p.position_observations>=2
+                &&p.lane.is_some_and(|l|l!=lane)&&p.position.is_some_and(|target|map.you.is_some_and(|me|(target.x-me.x).hypot(target.y-me.y)<0.45))
+                &&s.hero_status.iter().any(|ally|ally.ally&&ally.critical==Some(false)&&ally.observations>=2&&ally.position_observations>=2
+                    &&ally.position.zip(p.position).is_some_and(|(a,b)|(a.x-b.x).hypot(a.y-b.y)<0.2)));
+            if let Some(target)=target {
+                evidence.push(format!("{} has a confirmed critical-health label and a matched minimap position",target.hero.as_deref().unwrap_or("Enemy")));
+                missing.push("Exact enemy/ally HP, cooldowns, hidden enemies and the rotation path are not fully observed".into());
+                let mut d=self.plan("gank",Action::Gank,s,Priority::Normal,evidence,missing,true);
+                d.text=d.text.replace("{target}",target.hero.as_deref().unwrap_or("the critical enemy")).replace("{target_lane}",lane_name(target.lane.unwrap()));return Some(d);
+            }
+        }
         if crashed && healthy && in_lane && nearby.is_some_and(|(_,e)|e==0) && !endangered && clock>=cfg.camp_min_clock && !objective_soon {
+            missing.push("No vulnerable enemy has a confirmed matching health label, position and nearby support for a specific gank".into());
             missing.push("Camp availability, enemy cooldowns and unseen enemies are unknown".into());
             return Some(self.plan("jungle",Action::Jungle,s,Priority::Normal,evidence,missing,true));
         }
+        if crashed&&healthy&&in_lane {return Some(self.plan("wave_good",Action::HoldWave,s,Priority::Low,evidence,missing,true));}
         let behind_wave=map.your_progress.zip(state.ally_progress).is_some_and(|(you,wave)| you<=wave+0.06 && you<=0.65);
         if healthy && in_lane && behind_wave && nearby.is_some_and(|(_,e)| e>=1)
             && state.ally_troopers>=2 && state.ally_troopers>state.enemy_troopers

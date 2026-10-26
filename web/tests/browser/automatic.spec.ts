@@ -28,6 +28,7 @@ test('automatic HUD discovery accepts a video inside an arbitrary window without
     for(let i=0;i<pixels.length;i+=4)if(pixels[i]>50||pixels[i+1]>50||pixels[i+2]>50)nonBackground++;
     return nonBackground/(canvas.width*canvas.height);
   })).toBeGreaterThan(.05);
+  await expect(page.locator('#quick-time')).toContainText('ms fast monitor',{timeout:30000});
   await page.getByRole('button',{name:'Adjust viewport',exact:true}).click();
   await expect(page.locator('#crop-region-status')).toContainText('located boxes');
   await expect(page.locator('#crop-history-status')).toContainText('Sampling paused');

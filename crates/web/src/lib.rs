@@ -6,11 +6,11 @@ use coach_perception::{Pipeline, Resources, Profile, Packet, FrameContext, Stage
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(default)]
-struct Options { timers: bool, economy: bool, map: bool, counters: bool, deaths: bool, laning:bool, focus_lane:Option<coach_core::Lane> }
+struct Options { timers: bool, economy: bool, map: bool, counters: bool, deaths: bool, laning:bool, focus_lane:Option<coach_core::Lane>,focus_hero:Option<String> }
 impl Default for Options {
-    fn default() -> Self { Self { timers: true, economy: true, map: true, counters: true, deaths: true, laning:true, focus_lane:None } }
+    fn default() -> Self { Self { timers: true, economy: true, map: true, counters: true, deaths: true, laning:true, focus_lane:None,focus_hero:None } }
 }
 
 #[derive(Serialize)]
@@ -30,6 +30,7 @@ impl Stage for DeadlockStage {
         let snapshot = self.scanner.scan_image(frame.frame, frame.auxiliary, frame.timestamp_ms);
         let mut regions=vec![];
         regions.extend(self.scanner.regions());
+        regions.push(coach_perception::RegionObservation{id:"game_context".into(),label:"Game context · compatibility".into(),origin:coach_perception::RegionOrigin::Configured,score:None,value_path:None,bounds:coach_perception::Bounds{x:0,y:0,w:frame.frame.width(),h:frame.frame.height()}});
         for (id,label,r) in [("clock_search","Clock search",coach_vision::hud::CLOCK),("souls_search","Souls search",coach_vision::hud::SOULS),
             ("map_search","Minimap search",coach_vision::Region{x:coach_vision::minimap::FRAC_X,y:coach_vision::minimap::FRAC_Y,w:coach_vision::minimap::FRAC_W,h:coach_vision::minimap::FRAC_H})]{
             regions.push(coach_perception::RegionObservation{id:id.into(),label:label.into(),origin:coach_perception::RegionOrigin::Configured,score:None,value_path:None,
@@ -94,9 +95,11 @@ impl Coach {
         if self.options.timers { rules.extend(coach_engine::rules_from_timings(&self.timings).map_err(js_error)?); }
         if self.options.laning {rules.push(Box::new(self.lane_coach.clone()));}
         if self.options.map { rules.push(Box::new(coach_engine::map_rules::MapRule)); }
+        if self.options.map { rules.push(Box::new(coach_engine::economy::WaveReportRule)); }
         if self.options.economy {
             rules.push(Box::new(coach_engine::UnspentSoulsRule(self.rules.clone())));
             rules.push(Box::new(coach_engine::NetworthLeadRule::new(self.rules.clone())));
+            rules.push(Box::new(coach_engine::economy::PaceRule));
         }
         if self.options.deaths { rules.push(Box::new(coach_engine::DeathCauseRule)); }
         if self.options.counters { rules.push(coach_engine::counter_rule_from_json(&self.counters).map_err(js_error)?); }
@@ -109,6 +112,45 @@ impl Coach {
         if snap.match_id.is_some() { self.match_id = snap.match_id; }
         if snap.game_clock_secs.is_some() { self.last_clock = snap.game_clock_secs; }
         Ok(self.engine.step(snap))
+    }
+}
+
+fn set_personal_identity(snapshot:&mut GameSnapshot,options:&Options){
+    if let Some(hero)=options.focus_hero.as_ref().filter(|h|!h.is_empty()){snapshot.hero=Some(hero.clone());}
+    snapshot.own_networth=snapshot.hero.as_ref().and_then(|hero|snapshot.hero_status.iter().find(|p|p.ally&&p.hero.as_ref()==Some(hero))).and_then(|p|p.networth);
+}
+
+/// Independent, recognition-only worker. Full model inference cannot block its mailbox.
+#[wasm_bindgen]
+pub struct QuickCoach {monitor:coach_vision::quick::Monitor,engine:Engine,options:Options,lane:coach_engine::laning::LaneCoach}
+#[wasm_bindgen]
+impl QuickCoach {
+    #[wasm_bindgen(constructor)]
+    pub fn new(recognition:Vec<u8>,assets:Vec<u8>)->Result<QuickCoach,JsValue>{
+        console_error_panic_hook::set_once();
+        let reader=Reader::recognition_only(recognition).map_err(js_error)?;
+        let mut monitor=coach_vision::quick::Monitor::new(reader);
+        let [_,heroes,_]=unpack(&assets).map_err(js_error)?;
+        monitor.library=Some(std::sync::Arc::new(ColorLibrary::from_images(heroes,false,true).map_err(js_error)?));
+        let mut q=Self{monitor,engine:Engine::new(vec![]),options:Options::default(),lane:Default::default()};q.configure("{}")?;Ok(q)
+    }
+    pub fn configure(&mut self,options:&str)->Result<(),JsValue>{
+        self.options=json(options)?;let mut rules:Vec<Box<dyn Rule>>=vec![];
+        if self.options.timers{rules.extend(coach_engine::rules_from_timings(include_str!("../../../data/timings.json")).map_err(js_error)?);}
+        if self.options.laning{rules.push(Box::new(self.lane.clone()));}
+        if self.options.map{rules.push(Box::new(coach_engine::economy::WaveReportRule));rules.push(Box::new(coach_engine::map_rules::MapRule));}
+        if self.options.economy{rules.push(Box::new(coach_engine::economy::PaceRule));rules.push(Box::new(coach_engine::UnspentSoulsRule(RulesConfig::default())));}
+        self.engine=Engine::new(rules);Ok(())
+    }
+    pub fn reset(&mut self)->Result<(),JsValue>{self.monitor.reset();let options=serde_json::to_string(&self.options).map_err(js_error)?;self.configure(&options)}
+    pub fn observe(&mut self,rgba:Vec<u8>,width:u32,height:u32,context:&str,now:f64)->Result<JsValue,JsValue>{
+        if width==0||height==0||width>4096||height>2304||!now.is_finite()||now<0.{return Err(js_error("invalid quick frame"));}
+        let image=image::RgbaImage::from_raw(width,height,rgba).ok_or_else(||js_error("invalid quick RGBA"))?;
+        let context:coach_vision::quick::Context=json(context)?;
+        let Some(mut snapshot)=self.monitor.scan(&image::DynamicImage::ImageRgba8(image),&context,now as u64)else{return Ok(JsValue::NULL)};
+        snapshot.coaching_context.focus_lane=self.options.focus_lane;set_personal_identity(&mut snapshot,&self.options);
+        let tactics=if self.options.laning{self.lane.decide(&snapshot)}else{None};let cues=self.engine.step(&snapshot);
+        to_js(&Analysis{snapshot,cues,perception:None,tactics})
     }
 }
 
@@ -185,6 +227,7 @@ impl Coach {
                 .and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default()
         } else { GameSnapshot::default() };
         snapshot.coaching_context.focus_lane=self.options.focus_lane;
+        set_personal_identity(&mut snapshot,&self.options);
         let tactics=if self.options.laning && self.pipeline.profile().adapter=="deadlock" {self.lane_coach.decide(&snapshot)} else {None};
         let cues = self.step(&snapshot)?;
         to_js(&Analysis { snapshot, cues, perception: Some(perception), tactics })
@@ -194,6 +237,7 @@ impl Coach {
     pub fn replay(&mut self, snapshot_json: &str) -> Result<JsValue, JsValue> {
         let mut snapshot: GameSnapshot = json(snapshot_json)?;
         snapshot.coaching_context.focus_lane=self.options.focus_lane.or(snapshot.coaching_context.focus_lane);
+        set_personal_identity(&mut snapshot,&self.options);
         let tactics=if self.options.laning && self.pipeline.profile().adapter=="deadlock" {self.lane_coach.decide(&snapshot)} else {None};
         let cues = self.step(&snapshot)?;
         to_js(&Analysis { snapshot, cues, perception: None, tactics })

@@ -21,6 +21,12 @@ impl Reader {
         let rec = rten::Model::load(recognition).map_err(|e| e.to_string())?;
         Self::from_models(det, rec)
     }
+    /// Lightweight monitor: line recognition only, without a second detection model.
+    pub fn recognition_only(recognition:Vec<u8>)->Result<Reader,String>{
+        let rec=rten::Model::load(recognition).map_err(|e|e.to_string())?;
+        let engine=OcrEngine::new(OcrEngineParams{recognition_model:Some(rec),..Default::default()}).map_err(|e|e.to_string())?;
+        Ok(Reader{engine:std::sync::Arc::new(engine)})
+    }
 
     fn from_models(det: rten::Model, rec: rten::Model) -> Result<Reader, String> {
         let engine = OcrEngine::new(OcrEngineParams {

@@ -38,6 +38,9 @@ pub struct FrameMeta {
 pub struct GameSnapshot {
     pub game_clock_secs: Option<u32>,
     pub souls: Option<u32>,
+    /// Earned net worth from the identified own top-bar slot, never unspent balance.
+    pub own_networth:Option<u32>,
+    pub hero_status:Vec<HeroStatus>,
     pub kills: Option<u32>,
     pub deaths: Option<u32>,
     pub assists: Option<u32>,
@@ -80,6 +83,15 @@ pub enum Lane { Green, Blue, Yellow }
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct CoachingContext { pub focus_lane: Option<Lane> }
+
+/// Top-bar health evidence for all twelve slots. "Not critical" does not mean full HP.
+#[derive(Debug,Clone,Default,Serialize,Deserialize)]
+#[serde(default)]
+pub struct HeroStatus {
+    pub ally:bool,pub slot:usize,pub hero:Option<String>,pub critical:Option<bool>,
+    pub health_ratio:Option<f32>,pub networth:Option<u32>,pub networth_observations:u32,pub observations:u32,
+    pub position:Option<Pt>,pub position_observations:u32,pub lane:Option<Lane>,
+}
 
 /// Positions are normalised minimap coordinates, (0,0) top-left, (1,1) bottom-right.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]

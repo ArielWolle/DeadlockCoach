@@ -3,7 +3,7 @@ import type {PerceptionReport} from './types';
 export interface OverlayRegion {id:string;label:string;origin:'configured'|'detected';x:number;y:number;w:number;h:number;score?:number|null}
 /** Every box is normalized to the captured source frame; the editor knows no game names. */
 export function reportRegions(frame:SourceFrame):OverlayRegion[]{
-  return frame.report?regionsFromReport(frame.report,frame.crop):[];
+  return frame.report?regionsFromReport(frame.report,frame.crop):frame.regions||[];
 }
 export function regionsFromReport(report:PerceptionReport,crop={x:0,y:0,w:1,h:1}):OverlayRegion[]{
   const [w,h]=report.frame_size;if(!w||!h)return[];

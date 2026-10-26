@@ -119,7 +119,7 @@ export class CropEditor {
   open(source: Source): Promise<Crop | undefined> {
     if (this.opening) return this.opening;
     this.source = source; this.size = { width: source.width, height: source.height };
-    this.history=source.frames||[];this.selected=this.history.length-1;for(let i=this.history.length-1;i>=0;i--){if(this.history[i].report){this.selected=i;break;}}
+    this.history=source.frames||[];this.selected=this.history.length-1;for(let i=this.history.length-1;i>=0;i--){if(this.history[i].report||this.history[i].regions?.length){this.selected=i;break;}}
     const chosen=this.history[this.selected];if(chosen){this.source={...source,image:chosen.image,width:chosen.width,height:chosen.height};this.size={width:chosen.width,height:chosen.height};}
     this.aspect = source.aspect === undefined ? 16 / 9 : source.aspect;
     this.minimum = source.minimum || { width: 320, height: 180 };

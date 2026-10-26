@@ -1,5 +1,5 @@
 export type Priority = 'Low' | 'Normal' | 'High';
-export interface Cue { key: string; text: string; priority: Priority; cooldown_secs: number }
+export interface Cue { key: string; text: string; priority: Priority; cooldown_secs: number; timer_spawn_ms?:number }
 export interface Point { x: number; y: number }
 export interface LaneState { ally_troopers: number; enemy_troopers: number; ally_progress?: number | null; enemy_progress?: number | null; push?: number | null }
 export interface MinimapState {
@@ -9,6 +9,7 @@ export interface MinimapState {
   you?:Point|null; your_lane?:'Green'|'Blue'|'Yellow'|null; your_progress?:number|null;
 }
 export interface Snapshot {
+  hero?:string|null;own_networth?:number|null;hero_status?:HeroStatus[];
   game_clock_secs?: number | null; souls?: number | null; screen?: string | null;
   dead?: boolean; respawn_secs?: number | null; death_cause?: string | null; match_id?: number | null;
   items?: string[]; enemy_items?: string[]; ally_heroes?: string[]; enemy_heroes?: string[];
@@ -17,6 +18,7 @@ export interface Snapshot {
   hp?:number|null; max_hp?:number|null; health_observations?:number; health_delta_ratio?:number|null;
   coaching_context?:{focus_lane?:'Green'|'Blue'|'Yellow'|null};
 }
+export interface HeroStatus {ally:boolean;slot:number;hero?:string|null;critical?:boolean|null;health_ratio?:number|null;networth?:number|null;networth_observations:number;observations:number;position?:Point|null;position_observations:number;lane?:string|null}
 export interface Reading { status: 'ok' | 'missing' | 'pending' | 'skipped' | 'error'; value: unknown; score: number | null;
   bounds: { x: number; y: number; w: number; h: number } | null; source: string; bounds_origin?:'configured'|'detected' }
 export interface StageTrace extends Omit<Reading, 'source'> { id: string; operation: string; inputs: string[]; elapsed_ms: number;
@@ -32,6 +34,7 @@ export interface Settings {
   muted: boolean; voice: string; rate: number; volume: number; interval: number; record: boolean; autoCrop: boolean;
   options: Options; crop: { x: number; y: number; w: number; h: number };
   laneFocus:'auto'|'Green'|'Blue'|'Yellow';
+  heroFocus:string;
 }
 export interface RecordedFrame { id?: number; created: number; timestamp: number; snapshot: Snapshot; cues: Cue[]; image: Blob; perception?: PerceptionReport | null; profile_id?: string }
 export interface Manifest { schema: number; version: string; files: Record<string, { bytes: number; sha256: string }> }

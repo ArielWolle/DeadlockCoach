@@ -7,13 +7,36 @@ import { consistentBorders, detectBorders } from '../src/borders.ts';
 import {FrameHistory} from '../src/frame-history.ts';
 import {regionsFromReport} from '../src/region-overlays.ts';
 import {loadVerifiedAsset} from '../src/assets.ts';
+import {freshCue} from '../src/live-cues.ts';
+import {Speaker} from '../src/speech.ts';
 
 test('settings normalize corrupt input, finite numeric ranges and viewport bounds', () => {
   assert.deepEqual(normalize(null), defaults);
   const s = normalize({ rate: Infinity, volume: -10, interval: 1, crop: { x: .7, y: .7, w: 1, h: 1 }, options: { map: false } });
-  assert.equal(s.rate, 1); assert.equal(s.volume, 0); assert.equal(s.interval, 5);
+  assert.equal(s.rate, 1); assert.equal(s.volume, 0); assert.equal(s.interval, 1);
   assert.ok(s.crop.x + s.crop.w <= 1); assert.ok(s.crop.y + s.crop.h <= 1);
   assert.equal(s.options.map, false); assert.equal(s.options.timers, true);
+});
+test('live countdowns account for processing age and discard unusably late rotation or health calls',()=>{
+  const cue={key:'timer:Power-ups:300',text:'Power-ups in 45 seconds',priority:'Normal' as const,cooldown_secs:300};
+  assert.equal(freshCue(cue,255,10000)?.text,'Power-ups in about 35 seconds');
+  assert.equal(freshCue(cue,280,17000),undefined);
+  assert.equal(freshCue({...cue,key:'lane:back_off'},255,3000),undefined);
+  assert.ok(freshCue({...cue,key:'lane:back_off'},255,400));
+});
+test('queued timer speech expires before becoming a late call and health speech preempts',t=>{
+  const globals=globalThis as unknown as {window:unknown;SpeechSynthesisUtterance:unknown};
+  const oldWindow=Object.getOwnPropertyDescriptor(globalThis,'window'),oldUtterance=Object.getOwnPropertyDescriptor(globalThis,'SpeechSynthesisUtterance'),oldNow=Date.now;
+  let now=100000,canceled=0;const calls:Array<{text:string;onend?:()=>void}>=[];
+  globals.window={speechSynthesis:{getVoices:()=>[],speak:(u:{text:string})=>calls.push(u),cancel:()=>canceled++}};
+  globals.SpeechSynthesisUtterance=class{text:string;constructor(text:string){this.text=text;}};
+  Date.now=()=>now;const speaker=new Speaker(defaults);
+  t.after(()=>{speaker.cancel();Date.now=oldNow;if(oldWindow)Object.defineProperty(globalThis,'window',oldWindow);else Reflect.deleteProperty(globalThis,'window');if(oldUtterance)Object.defineProperty(globalThis,'SpeechSynthesisUtterance',oldUtterance);else Reflect.deleteProperty(globalThis,'SpeechSynthesisUtterance');});
+  const cue={key:'normal',text:'Current advice',priority:'Normal' as const,cooldown_secs:30};speaker.say(cue);
+  speaker.say({...cue,key:'timer:Power-ups:300',text:'Power-ups in about 20 seconds',timer_spawn_ms:now+20000});
+  now+=10000;calls[0].onend?.();assert.equal(calls.length,1,'queued timer is too late now');
+  speaker.say(cue);speaker.say({...cue,key:'lane:back_off',text:'Back to cover',priority:'High'});
+  assert.equal(canceled,1);assert.equal(calls.at(-1)?.text,'Back to cover');
 });
 
 async function assetFixture() {

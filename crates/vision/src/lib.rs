@@ -7,6 +7,8 @@ pub mod scan;
 pub mod scoreboard;
 pub mod screen;
 pub mod vitals;
+pub mod team;
+pub mod quick;
 pub mod localize;
 pub mod auto;
 pub use coach_perception::matching::{ColorLibrary, Library, Region, Template, ncc};

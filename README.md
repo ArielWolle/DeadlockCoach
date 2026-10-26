@@ -25,6 +25,8 @@ worker using the same Rust vision and rule engine as the native app.
 - Active lane plans: catch/clear waves, hold, take short poke windows, use a conditional
   one-camp window, shop or prepare a rotation—with evidence and document citations.
 - Browser speech, voice/category settings, mute, pause and stop controls.
+- One-second screenshots and a separate fast HP/minimap worker; earlier objective reminders,
+  wave reports, positive farm-pace feedback and conditional gank checks.
 - Optional frozen five-frame HUD inspector with located/configured overlays and sample export.
 - Optional legacy-profile black-border detection and manual viewport adjustment.
 - Screenshot and JSONL replay through the actual WASM engine.
@@ -46,6 +48,8 @@ npm --prefix web run preview
 ```
 
 Open **http://127.0.0.1:4173/DeadlockCoach/**. Localhost is a secure context for capture.
+For existing installations, choose **Screenshot interval: 1** in Settings to replace a saved
+five-second preference. See [live cadence, health and farming evidence](docs/live-coaching.md).
 For frontend development use `npm --prefix web run dev` after `prepare:app`.
 
 The WASM build uses SIMD, supported by modern desktop Chrome and Edge. It does not require

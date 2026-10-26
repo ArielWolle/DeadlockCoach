@@ -11,7 +11,9 @@
     { "id": "map", "inputs": ["game"], "op": { "type": "select", "path": "/minimap" } },
     { "id": "health", "inputs": ["game"], "op": { "type": "select", "path": "/hp" } },
     { "id": "max_health", "inputs": ["game"], "op": { "type": "select", "path": "/max_hp" } },
-    { "id": "scene", "inputs": ["game"], "op": { "type": "select", "path": "/screen" } }
+    { "id": "scene", "inputs": ["game"], "op": { "type": "select", "path": "/screen" } },
+    { "id": "hero_status", "inputs": ["game"], "op": { "type": "select", "path": "/hero_status" } },
+    { "id": "earned", "inputs": ["game"], "op": { "type": "select", "path": "/own_networth" } }
   ],
-  "outputs": { "match.clock_seconds": "clock", "player.currency": "souls", "world.minimap": "map", "player.hp": "health", "player.max_hp":"max_health", "scene":"scene" }
+  "outputs": { "match.clock_seconds": "clock", "player.currency": "souls", "world.minimap": "map", "player.hp": "health", "player.max_hp":"max_health", "scene":"scene", "world.hero_status":"hero_status", "player.earned_souls":"earned" }
 }

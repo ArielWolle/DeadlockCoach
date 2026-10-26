@@ -53,8 +53,11 @@ calibration remains local to that import. See [automatic HUD discovery](../autom
 
 ## Scheduling and cancellation
 
-One frame job at a time; no queued frames. Processing longer than the configured interval
-causes the next sample to use current video. Stop releases capture tracks and cancels speech;
+Screenshot acquisition runs independently, with a one-second default. Each of the full and
+recognition-only fast workers allows one job at a time with no queued frames. Full scans skip
+busy frames; the fast worker refreshes HP, map and top-bar health from recent registered context.
+See [live coaching](../live-coaching.md) for measured latency and evidence limits.
+Stop releases capture tracks and cancels speech;
 in-flight WASM is terminated when switching modes rather than allowed to leak stale results.
 Generation ids reject stale results. Worker timeouts pause coaching and expose a restart path.
 Late results may update the inspector but their speech is discarded. Capture stream freshness

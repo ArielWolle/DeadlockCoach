@@ -6,19 +6,19 @@
 - `wasm-pack build crates/web --target web --release --out-dir ../../web/wasm --out-name coach_web`:
   existing `ocrs` / RTen compile and execute in a browser worker. SIMD build does not need
   cross-origin isolation or shared-memory threads.
-- `cargo test --release --workspace`: **76 Rust tests passed**, including saved gameplay and
+- `cargo test --release --workspace`: **81 Rust tests passed**, including saved gameplay and
   minimap regression fixtures, lane policies/source integrity, independent HUD localization,
   region provenance/field binding, transport extension and asset-pack bounds.
 - `cargo test --locked --release -p coach-perception --no-default-features`: **21 tests passed**
   with the bundled OCR backend disabled (matching, graph execution and the JSONL CLI).
 - `cargo build --locked --release -p coach-agent -p coach-brain -p deadlock-coach`: native
   Agent, Brain and Tauri application all build on Windows after the refactor.
-- `npm run test:unit`: **11 tests passed** using Node's test runner: settings/JSONL validation,
+- `npm run test:unit`: **13 tests passed** using Node's test runner: settings/JSONL validation,
   crop geometry, conservative border detection, bounded history, overlay transforms and
   verified-asset cache recovery/offline/corruption rejection.
 - `npm run build`: TypeScript, production Vite build, asset allow-list, manifest integrity and
   static publication checks. App tested under `/DeadlockCoach/`.
-- Playwright: **26 tests passed** across the full run and affected-test reruns after fixes.
+- Playwright: **28 tests passed** in the live-coaching full-suite run.
   Coverage: navigation/mobile overflow/keyboard skip link, local settings,
   actual WASM snapshot replay, real OCR matching native clock/souls/inventory, mocked display
   capture pause/stop/track release, model failure visibility, cancellation/retry, recording
@@ -107,3 +107,14 @@ passed (**4 targeted browser tests**). Three additional unit tests cover corrupt
 offline cached bytes, quota failure and persistent corruption rejection. The production build,
 TypeScript and publication-integrity checks pass. The browser suite now contains 27 scenarios;
 the unrelated scenarios were not repeated for this cache-only fix.
+
+## One-second acquisition and independent fast monitoring
+
+The subsequent live-coaching run passed all 81 workspace Rust tests, 21 no-OCR perception
+tests, 13 Node tests and 28 browser tests, plus native/WASM builds and publication checks.
+The fast real-WASM regression logged **543 ms** for its final quick update and **20 captures
+during two full scans**. The saved full-OCR replay logged **9,643 ms** on its last frame.
+Tests cover sampling during busy full inference, paused inspection, twelve critical/unknown
+health slots, native death/menu/stale-geometry rejection, gank prerequisites, earned-souls
+pace abstention/reinforcement, immediate health priority, aged/queued countdown expiry and
+normal speech preemption. See [live coaching](../live-coaching.md) for the evidence limits.

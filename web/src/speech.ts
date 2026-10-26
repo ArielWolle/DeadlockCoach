@@ -15,12 +15,18 @@ export class Speaker {
   }
   say(cue: Cue, test = false) {
     if ((!test && this.settings.muted) || !window.speechSynthesis) return;
+    let text=cue.text;
+    if(cue.timer_spawn_ms!=null){
+      const remaining=Math.ceil((cue.timer_spawn_ms-Date.now())/1000);
+      if(remaining<15)return;
+      text=text.replace(/in (?:about )?\d+ seconds/,`in about ${remaining} seconds`);
+    }
     if (this.talking) {
       if (cue.priority === 'High') this.cancel();
       else { this.pending = { cue, at: Date.now() }; return; }
     }
     const generation = this.generation;
-    const u = new SpeechSynthesisUtterance(cue.text);
+    const u = new SpeechSynthesisUtterance(text);
     const voices = this.voices();
     const voice = voices.find(v => v.voiceURI === this.settings.voice)
       || voices.find(v => v.localService && v.lang.startsWith('en'));

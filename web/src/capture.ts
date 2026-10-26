@@ -3,6 +3,7 @@ import { viewport } from './crop';
 import type { GameProfile } from './profiles';
 import {FrameHistory} from './frame-history';
 import type {PerceptionReport} from './types';
+import type {OverlayRegion} from './region-overlays';
 
 export interface Pixels { rgba: ImageData; map: ImageData; timestamp: number; preview: Blob | null;sourceId?:number }
 export class Capture {
@@ -60,6 +61,7 @@ export class Capture {
     return this.history.add({image,width,height,rawWidth:canvas.width,rawHeight:canvas.height,timestamp,crop:{...crop}});
   }
   attachReport(id:number|undefined,report?:PerceptionReport|null){if(id!==undefined)this.history.attach(id,report);}
+  attachRegions(id:number|undefined,regions:OverlayRegion[]){if(id!==undefined)this.history.attachRegions(id,regions);}
   async freeze(crop:Settings['crop']){
     this.frozen=true;this.video.pause();if(this.inflight)await this.inflight.catch(()=>{});
     if(!this.history.snapshot().length&&this.active&&this.video.readyState>=2)await this.remember(this.sourceCanvas(),crop,Date.now(),this.epoch);

@@ -8,6 +8,8 @@ import { sampleBorders } from './borders';
 import { loadProfile, saveProfile, isDeadlock, type GameProfile } from './profiles';
 import { ProfilePanel } from './profile-panel';
 import {regionsFromReport,drawRegions} from './region-overlays';
+import {QuickMonitor} from './quick';
+import {freshCue} from './live-cues';
 import { clearFrames, download, listFrames, recordFrame, snapshotLines } from './storage';
 import type { Analysis, Cue, GameItem, Knowledge, Options, Settings, Snapshot, WorkerReply, ProfileReply, PerceptionReport, TacticalDecision } from './types';
 
@@ -18,9 +20,14 @@ const text = (id: string, value: string) => { $(id).textContent = value; };
 const format = (n?: number | null) => n == null ? '—' : n.toLocaleString();
 export const clock = (n?: number | null) => n == null ? '—:—' : `${Math.floor(n / 60)}:${String(n % 60).padStart(2, '0')}`;
 const base = new URL(import.meta.env.BASE_URL, location.origin).href;
+input('interval').min='1';
+document.querySelector('label[for="interval"]')!.textContent='Screenshot interval (seconds)';
+input('interval').nextElementSibling!.textContent='One-second screenshots are supported. The fast health/map worker is independent; full scans skip busy frames instead of queueing old images.';
 let settings = loadSettings();
 let activeProfile = loadProfile();
 const capture = new Capture(), speaker = new Speaker(settings);
+const quick=new QuickMonitor();
+const spokenAt=new Map<string,number>();
 capture.configure(activeProfile);
 const cropEditor = new CropEditor();
 let profilePanel: ProfilePanel | undefined, profileChanging = false, referenceTimestamp = 0;
@@ -44,7 +51,8 @@ function notice(message: string, error = false) {
   text('notice', message); $('notice').hidden = !message; $('notice').classList.toggle('error', error);
   if (!message) button('fix-viewport').hidden = true;
 }
-function configureOptions() { worker?.postMessage({type:'configure',options:{...settings.options,focus_lane:settings.laneFocus==='auto'?null:settings.laneFocus}}); }
+function engineOptions(){return {...settings.options,focus_lane:settings.laneFocus==='auto'?null:settings.laneFocus,focus_hero:settings.heroFocus||null};}
+function configureOptions() { const options=engineOptions();worker?.postMessage({type:'configure',options});quick.configure(options); }
 function status(value: string, source?: string) {
   text('session-state', value); if (source) text('source-label', source);
   $('status-dot').classList.toggle('active', running && !paused);
@@ -57,7 +65,8 @@ function diagnostics() {
   const values = { 'Engine': ready ? 'Local WASM · single-thread worker' : 'Not initialized', 'Asset version': assetVersion,
     'Secure context': String(window.isSecureContext), 'Screen capture': typeof navigator.mediaDevices?.getDisplayMedia === 'function' ? 'Available' : 'Unavailable',
     'Voice API': window.speechSynthesis ? 'Available' : 'Unavailable', 'Cross-origin isolation': String(window.crossOriginIsolated),
-    'Last processing time': lastElapsed ? `${Math.round(lastElapsed)} ms` : '—', 'Recording': settings.record ? 'Local · bounded' : 'Off' };
+    'Last processing time': lastElapsed ? `${Math.round(lastElapsed)} ms` : '—', 'Fast health/map monitor':quick.elapsed?`${Math.round(quick.elapsed)} ms · separate worker`:'Waiting for registered gameplay',
+    'Screenshot cadence':`${settings.interval}s · full scans skip busy frames`, 'Recording': settings.record ? 'Local · bounded' : 'Off' };
   $('diagnostics').replaceChildren(...Object.entries(values).flatMap(([key, value]) => {
     const dt = document.createElement('dt'), dd = document.createElement('dd'); dt.textContent = key; dd.textContent = value; return [dt, dd];
   }));
@@ -94,6 +103,7 @@ async function initialize(profile = activeProfile) {
     } else if (reply.type === 'ready') {
       clearTimeout(initTimer); ready = true; assetVersion = reply.version; $('load-panel').hidden = true;
       text('engine-state', 'LOCAL ENGINE READY'); configureOptions();
+      if(isDeadlock(profile))quick.start(base,engineOptions());else quick.stop();
       initResolve?.(); initResolve = undefined; initReject = undefined; diagnostics();
     } else if (reply.type === 'error') {
       // WASM traps may leave the instance unusable; rebuild rather than replaying bad state.
@@ -122,7 +132,7 @@ function request(message: Record<string, unknown>, transfer: Transferable[] = []
 function cancelMode() {
   generation++; running = false; paused = false; replaying = false; clearTimeout(timer);
   cropEditor.cancel(); needsViewport = false; button('fix-viewport').hidden = true;
-  capture.stop(); speaker.cancel(); button('cancel-replay').disabled = true;
+  capture.stop(); speaker.cancel();quick.reset(); button('cancel-replay').disabled = true;
   for (const key of ['demo', 'demo-replay', 'replay-import']) button(key).disabled = false;
   // A worker cannot cancel synchronous WASM inference. Terminate an in-flight instance
   // rather than allowing old frames/reset commands to race with the next session.
@@ -139,6 +149,7 @@ function cancelMode() {
 function resetEngine() {
   worker?.postMessage({ type: 'reset' }); latest = {}; lastResultAt = 0;
   latestReport = undefined; profilePanel?.clear();
+  quick.reset();spokenAt.clear();
   renderTactics(null,{});
   renderSnapshot(latest);
 }
@@ -243,6 +254,31 @@ async function start(forceEditor = false) {
   } catch (e) { capture.stop(); status('Ready to connect'); notice(String(e instanceof Error ? e.message : e), true); }
 }
 function schedule(delay = settings.interval * 1000) { clearTimeout(timer); if (running) timer = setTimeout(() => { void tick(); }, delay); }
+function deliver(analysis:Analysis,timestamp:number,fast=false){
+  const now=Date.now(),age=Math.max(0,now-timestamp);const delivered:Cue[]=[];
+  for(const original of analysis.cues){
+    if(!fast&&now-quick.lastResultAt<3000&&!original.key.startsWith('counter:')&&!original.key.startsWith('death'))continue;
+    const cue=freshCue(original,analysis.snapshot.game_clock_secs,age);if(!cue)continue;
+    if(now-(spokenAt.get(cue.key)??-Infinity)<cue.cooldown_secs*1000)continue;
+    spokenAt.set(cue.key,now);if(spokenAt.size>200)spokenAt.delete(spokenAt.keys().next().value!);
+    cue.text=cue.text.replace(/hero_[a-z_]+/g,id=>heroNames[id]||id.replace('hero_','').replaceAll('_',' '));
+    speaker.say(cue);delivered.push(cue);
+  }
+  return {...analysis,cues:delivered};
+}
+quick.onError=message=>notice(`Fast monitor unavailable: ${message}. Full analysis continues.`,true);
+quick.onResult=(analysis,current,timestamp,elapsed,sourceId,context)=>{
+  if(current!==generation||!running||paused||Date.now()-timestamp>2500)return;
+  const result=deliver(analysis,timestamp,true);latest=result.snapshot;renderSnapshot(latest);renderTactics(result.tactics||null,latest);
+  const crop=settings.crop;const [w,h]=context.frame_size;
+  capture.attachRegions(sourceId,[['hp','Tracked HP search',context.hp],['minimap','Tracked minimap search',context.map]].map(([id,label,b])=>{
+    const bounds=b as {x:number;y:number;w:number;h:number};return {id:String(id),label:String(label),origin:'configured' as const,x:crop.x+bounds.x/w*crop.w,y:crop.y+bounds.y/h*crop.h,w:bounds.w/w*crop.w,h:bounds.h/h*crop.h};
+  }));
+  text('quick-time',`${Math.round(elapsed)} ms fast monitor`);
+  for(const cue of result.cues){cues.unshift({...cue,at:latest.game_clock_secs});text('current-advice',cue.text);text('advice-context',`Live health/map evidence · ${clock(latest.game_clock_secs)}`);}
+  cues=cues.slice(0,60);renderCues();diagnostics();
+  window.dispatchEvent(new CustomEvent('coach:quick',{detail:{timestamp,elapsed,snapshot:structuredClone(latest),cues:result.cues}}));
+};
 async function analyzePixels(p: Pixels) {
   drawPixels(p);
   return request({ type: 'frame', rgba: p.rgba.data.buffer, width: p.rgba.width, height: p.rgba.height,
@@ -251,8 +287,8 @@ async function analyzePixels(p: Pixels) {
 }
 async function tick() {
   if (!running) return;
-  if (paused || busy || pending) { schedule(); return; }
-  busy = true; const current = generation; const begin = performance.now();
+  if (paused) { schedule(); return; }
+  const current = generation; const begin = performance.now();
   try {
     const geometry = `${capture.video.videoWidth}x${capture.video.videoHeight}`;
     if (geometry !== sourceGeometry && capture.video.videoWidth && capture.video.videoHeight) {
@@ -262,19 +298,10 @@ async function tick() {
     }
     const pixels = await capture.frame(settings.crop, settings.record);
     if(current!==generation||paused||!running)return;
-    const timestamp = pixels.timestamp; const recording = settings.record; const preview = pixels.preview;
-    const result = await analyzePixels(pixels);
-    capture.attachReport(pixels.sourceId,result.analysis.perception);
-    if (current !== generation || !running || paused) return;
-    if (Date.now() - timestamp > Math.max(15000, settings.interval * 2000)) {
-      speaker.cancel(); notice('Analysis is behind the game. This frame’s speech was discarded. Try a longer interval.');
-    } else { for (const cue of result.analysis.cues) speaker.say(cue); }
-    apply(result.analysis, result.elapsed); status('Coaching live');
-    if (recording && preview) {
-      try { await recordFrame({ created: Date.now(), timestamp, snapshot: result.analysis.snapshot, cues: result.analysis.cues, image: preview,
-        perception: result.analysis.perception, profile_id: activeProfile.id }); }
-      catch (e) { settings.record = false; input('record').checked = false; saveSettings(settings); notice(`Local recording paused: ${String(e)}. Coaching continues.`, true); }
-    }
+    text('capture-time',`Screenshot ${new Date(pixels.timestamp).toLocaleTimeString()} · ${settings.interval}s cadence`);
+    window.dispatchEvent(new CustomEvent('coach:capture',{detail:{timestamp:pixels.timestamp,sourceId:pixels.sourceId}}));
+    quick.sample(pixels,current);
+    if(!busy&&!pending){busy=true;void analyzeLiveFrame(pixels,current);}
   } catch (e) {
     if (current === generation) {
       speaker.cancel(); notice(e instanceof Error ? e.message : String(e), true);
@@ -282,15 +309,27 @@ async function tick() {
       else status('Waiting for a readable frame');
     }
   } finally {
-    busy = false;
-    if (current === generation) schedule(Math.max(200, settings.interval * 1000 - (performance.now() - begin)));
+    if (current === generation) schedule(Math.max(50, settings.interval * 1000 - (performance.now() - begin)));
   }
+}
+async function analyzeLiveFrame(pixels:Pixels,current:number){
+  const timestamp=pixels.timestamp,recording=settings.record,preview=pixels.preview;
+  try{
+    const result=await analyzePixels(pixels);capture.attachReport(pixels.sourceId,result.analysis.perception);
+    if(current!==generation||!running||paused)return;
+    if(result.analysis.perception)quick.seed(result.analysis.snapshot,result.analysis.perception);
+    const delivered=deliver(result.analysis,timestamp);
+    apply(delivered,result.elapsed);status('Coaching live');
+    if(recording&&preview)try{await recordFrame({created:Date.now(),timestamp,snapshot:result.analysis.snapshot,cues:delivered.cues,image:preview,perception:result.analysis.perception,profile_id:activeProfile.id});}
+      catch(e){settings.record=false;input('record').checked=false;saveSettings(settings);notice(`Local recording paused: ${String(e)}. Coaching continues.`,true);}
+  }catch(e){if(current===generation)notice(e instanceof Error?e.message:String(e),true);}
+  finally{busy=false;}
 }
 
 function drawPixels(p: Pixels) {
   // Save a copy before transferring the analysis buffers to the worker.
   latestFrame = new ImageData(new Uint8ClampedArray(p.rgba.data), p.rgba.width, p.rgba.height);
-  latestMap = p.map.width>1 ? new ImageData(new Uint8ClampedArray(p.map.data), p.map.width, p.map.height) : undefined;
+  if(p.map.width>1)latestMap = new ImageData(new Uint8ClampedArray(p.map.data), p.map.width, p.map.height);
   latestReport=undefined;
   $('preview-empty').hidden = true; drawPreview(); drawMap(latest);
   text('frame-info', `${p.rgba.width}×${p.rgba.height} frame${isDeadlock(activeProfile)&&p.map.width>1 ? ` · ${p.map.width}×${p.map.height} minimap` : ` · ${activeProfile.name}`}`);
@@ -353,7 +392,7 @@ function apply(analysis: Analysis, elapsed: number) {
 }
 
 function renderTactics(decision:TacticalDecision|null,s:Snapshot) {
-  const labels:Record<string,string>={last_hit:'Secure lane income',catch_wave:'Catch the wave',hold_wave:'Hold your side',back_off:'Back off',push_wave:'Push the wave',poke:'Short poke window',jungle:'One-camp window',shop:'Shop and return',prepare_objective:'Prepare your rotation',need_evidence:'Need more evidence'};
+  const labels:Record<string,string>={last_hit:'Secure lane income',catch_wave:'Catch the wave',hold_wave:'Hold your side',back_off:'Back off',push_wave:'Push the wave',poke:'Short poke window',jungle:'One-camp window',gank:'Check a gank window',shop:'Shop and return',prepare_objective:'Prepare your rotation',need_evidence:'Need more evidence'};
   text('lane-action',decision ? labels[decision.action] || decision.action : 'WAITING FOR GAMEPLAY');
   text('lane-call',decision?.text || (settings.options.laning?(s.screen==='Unknown'&&s.game_clock_secs!=null?'HUD elements found; waiting for game-state evidence.':'Waiting for a readable gameplay clock and lane evidence.'):'Active lane coaching is disabled in Settings.'));
   text('lane-reason',decision ? `${decision.rationale} ${decision.conditional?'This is a conditional plan, not a claim that the area is safe.':''}` : 'Recommendations use strategy guidance plus current observations.');
@@ -385,6 +424,10 @@ function renderItems(id: string, items: string[] = []) {
   for (const item of items.length ? items : ['Nothing confidently observed.']) { const li = document.createElement('li'); li.textContent = label(item, itemNames); list.append(li); }
 }
 function renderSnapshot(s: Snapshot) {
+  const knownWorth=(s.hero_status||[]).filter(p=>p.networth!=null&&p.networth_observations>=2).map(p=>p.networth!).sort((a,b)=>a-b);
+  text('earned-pace',s.own_networth!=null?`Earned souls: ${format(s.own_networth)} · ${s.game_clock_secs?Math.round(s.own_networth*60/s.game_clock_secs).toLocaleString():'—'} per minute over the match${knownWorth.length>=6?` · observed lobby median ${format(knownWorth[Math.floor(knownWorth.length/2)])}`:' · waiting for stable comparison reads'}.`
+    :'Earned souls need a confirmed own hero and readable top-bar label. Unspent balance is not earned income.');
+  $('team-health').replaceChildren(...(s.hero_status||[]).map(p=>{const el=document.createElement('p');el.textContent=`${p.ally?'Ally':'Enemy'} ${p.slot+1} · ${p.hero?label(p.hero,heroNames):'identity unknown'} · ${p.critical===true?'CRITICAL':p.critical===false?'not marked critical · exact HP unknown':'health unknown'} · ${p.position?'located':'position unknown'} · ${format(p.networth)} earned souls`;return el;}));
   text('metric-clock', clock(s.game_clock_secs)); text('metric-souls', format(s.souls));
   text('metric-screen', s.dead ? `Dead · respawn ${s.respawn_secs ?? '?'}s` : s.screen || 'Waiting for gameplay');
   const a = s.ally_networth, e = s.enemy_networth;
@@ -420,6 +463,8 @@ async function loadNames() {
     if (!items.ok || !heroes.ok) throw new Error('Game data is unavailable; run the asset build.');
     itemNames = Object.fromEntries((await items.json() as GameItem[]).map(i => [i.class_name, i.name]));
     heroNames = Object.fromEntries((await heroes.json() as { class_name: string; name: string }[]).map(h => [h.class_name, h.name]));
+    const select=$<HTMLSelectElement>('hero-focus');
+    for(const [id,name]of Object.entries(heroNames).sort((a,b)=>a[1].localeCompare(b[1]))){const option=document.createElement('option');option.value=id;option.textContent=name;select.append(option);}select.value=settings.heroFocus;
   } catch (e) { notice(String(e), true); }
 }
 
@@ -578,6 +623,7 @@ function populateSettings() {
   input('interval').value = String(settings.interval); input('record').checked = settings.record;
   input('auto-crop').checked = settings.autoCrop;
   $<HTMLSelectElement>('lane-focus').value=settings.laneFocus;
+  $<HTMLSelectElement>('hero-focus').value=settings.heroFocus;
   for (const key of Object.keys(settings.options) as Array<keyof Options>) input(`opt-${key}`).checked = settings.options[key];
   for (const key of ['x', 'y', 'w', 'h'] as const) input(`crop-${key}`).value = String(Math.round(settings.crop[key] * 1000000) / 10000);
   text('rate-value', `${settings.rate.toFixed(1)}×`); text('volume-value', `${Math.round(settings.volume * 100)}%`);
@@ -612,6 +658,7 @@ function refreshGameLayout() {
   document.querySelector<HTMLElement>('.metrics')!.hidden = !legacy;
   $('generic-observations').hidden = legacy;
   $('lane-plan').hidden=!legacy;
+  $('live-observations').hidden=!legacy;
   text('active-game-profile', `${activeProfile.name} · game-independent perception outputs`);
   document.querySelector('.visual-calibration-controls p')!.textContent = activeProfile.viewport.auto_crop===false
     ?'Automatic element discovery scans the full source. The frozen-frame inspector is optional for reviewing locator results and exporting samples.'
@@ -643,6 +690,7 @@ async function applyGameProfile(profile: GameProfile) {
       worker!.postMessage({ type: 'profile', profile, base, requestId });
     });
     activeProfile = profile; capture.configure(profile); manualViewport = false; automaticViewport = false;
+    if(isDeadlock(profile))quick.start(base,engineOptions());else quick.stop();
     if(profile.viewport.auto_crop===false){settings.crop={x:0,y:0,w:1,h:1};saveSettings(settings);populateSettings();}
     configureOptions();
     resetEngine(); refreshGameLayout();
@@ -731,6 +779,11 @@ $<HTMLSelectElement>('lane-focus').onchange=()=>{
   if(running&&!paused)schedule(0);
   notice(`Lane focus: ${settings.laneFocus==='auto'?'minimap estimate':settings.laneFocus}. New calls will use the next analyzed frame.`);
 };
+$<HTMLSelectElement>('hero-focus').onchange=()=>{
+  settings.heroFocus=$<HTMLSelectElement>('hero-focus').value;saveSettings(settings);generation++;speaker.cancel();configureOptions();
+  if(running&&!paused)schedule(0);
+  notice(settings.heroFocus?'Own hero confirmed for earned-souls comparisons.':'Using confirmed minimap identity for earned-souls comparisons.');
+};
 speaker.onStatus = s => text('voice-state', s);
 button('test-voice').onclick = () => speaker.say({ key: 'test', text: 'Coach audio test. Your next move starts here.', priority: 'High', cooldown_secs: 0 }, true);
 button('clear-cues').onclick = () => { cues = []; renderCues(); };
@@ -769,7 +822,7 @@ button('reload-engine').onclick = async () => {
 };
 button('clear-cache').onclick = async () => { try { for (const key of await caches.keys()) if (key.startsWith('deadlock-assets-')) await caches.delete(key); notice('Model cache cleared. The next initialization will download models again.'); } catch (e) { notice(String(e), true); } };
 window.addEventListener('hashchange', () => { route(); $('main').focus(); });
-window.addEventListener('beforeunload', () => { capture.stop(); speaker.cancel(); });
+window.addEventListener('beforeunload', () => { capture.stop(); speaker.cancel();quick.stop(); });
 window.speechSynthesis?.addEventListener('voiceschanged', voices);
 // Detect browser scheduling stalls. Never synthesize stale cues while the game has moved on.
 setInterval(() => {

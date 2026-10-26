@@ -22,6 +22,7 @@
 | Full-window capture required users to align the game viewport | Added an automatic default profile with independent minimap, Souls and clock locators; moved/resized video fixtures and independently moved HUD widgets are covered |
 | Viewport adjustment kept consuming live source frames | Added bounded five-frame frozen history, report-driven located/configured overlays, local sample export and same-share resume |
 | Fresh manifest could be paired with stale shell-cached timings | Verified asset URLs include their expected SHA-256, corrupt entries get one checked network refetch, and new service workers honor reload requests and restrict lookups to their own shell cache |
+| Slow full scans delayed health, waves and last-second timing cues | Independent one-second acquisition and recognition-only HP/map worker; early timing windows, age-aware speech expiry and immediate health priority. Headless fast monitoring measured about 0.5–0.8 seconds, not a live-game benchmark |
 
 ## External blockers / not claimed complete
 
@@ -51,6 +52,10 @@
     Automatic full-window localization has narrow fixture coverage, not broad cross-game
     evaluation. Health/hero/item/scoreboard searches still use registered compatibility context;
     missing or rearranged widgets can remain unknown. See [automatic HUD discovery](../automatic-hud.md).
+    All twelve hero slots now expose critical/unknown status and optional matched positions;
+    numeric enemy/friendly HP fractions remain unknown. Specific ganks require confirmed
+    identity/position/support evidence. Personal farming comparisons need own-hero identity
+    and stable earned-net-worth readings; unspent balance is never a substitute.
    Stream diagnostics also showed a 1080p clock digit misread after preprocessing (33:29
    read as 33:20); auto-cropping does not establish exact OCR correctness on every source.
 6. **Hosted Actions inspection**: this environment has git but no `gh` CLI (the owner said

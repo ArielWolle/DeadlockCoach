@@ -30,6 +30,7 @@ pub struct Scanner {
     map_tracker: crate::minimap::Tracker,
     vitals: crate::vitals::Tracker,
     regions:Vec<coach_perception::RegionObservation>,
+    team_status:Vec<coach_core::HeroStatus>,
 }
 
 /// Team totals only grow (mostly), and not by leaps. A value outside that band is accepted
@@ -100,6 +101,7 @@ impl Scanner {
             map_tracker: crate::minimap::Tracker::default(),
             vitals: crate::vitals::Tracker::default(),
             regions:vec![],
+            team_status:vec![],
         }
     }
 
@@ -114,6 +116,7 @@ impl Scanner {
         self.board_history.clear();
         self.map_tracker = crate::minimap::Tracker::default();
         self.vitals = crate::vitals::Tracker::default();
+        self.team_status.clear();
     }
 
     fn text(&self, img: &image::DynamicImage, r: crate::Region) -> Option<String> {
@@ -305,6 +308,14 @@ impl Scanner {
         }
         snap.ally_heroes = assign[..6].iter().flatten().cloned().collect();
         snap.enemy_heroes = assign[6..].iter().flatten().cloned().collect();
+        if scr==Screen::Gameplay {
+            self.team_status=crate::team::health(&self.ocr,img,&self.team_status);
+            for(i,status)in self.team_status.iter_mut().enumerate(){status.hero=assign[i].clone();}
+            crate::team::networth(&self.ocr,img,raw_clock.unwrap_or(0),&mut self.team_status);
+            snap.hero_status=self.team_status.clone();
+            crate::team::positions(&mut snap,map_crop,&self.heroes);
+            self.team_status=snap.hero_status.clone();
+        }
         // Enemy items seen on the most recent scoreboard.
         for r in self.last_board.iter().filter(|r| !r.ally) {
             for it in &r.items { if !snap.enemy_items.contains(it) { snap.enemy_items.push(it.clone()); } }
