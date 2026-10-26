@@ -16,3 +16,4 @@
 .crop-history{display:flex;gap:8px;overflow:auto;margin:10px 0}.crop-history-frame{flex:0 0 120px;padding:5px;background:#142527;min-width:0}.crop-history-frame canvas{display:block;width:100%;max-height:70px;object-fit:contain}.crop-history-frame span{display:block;font-size:10px;color:#bdd8ca;padding:5px 0}.crop-history-frame[aria-pressed=true]{border:2px solid #82d2c1;background:#24453a}#crop-history-status{font-size:11px;color:#b9dfcd;line-height:1.7}#crop-history-controls{margin-bottom:15px}#crop-export-sample{font-size:11px}
 .team-health { display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:.5rem 1rem; }
 .team-health p { margin:0;padding:.6rem;border:1px solid var(--line,#354a48);border-radius:6px; }
+.preview-footer { flex-wrap:wrap;gap:6px 12px; }

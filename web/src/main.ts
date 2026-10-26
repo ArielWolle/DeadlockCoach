@@ -20,6 +20,8 @@ const text = (id: string, value: string) => { $(id).textContent = value; };
 const format = (n?: number | null) => n == null ? '—' : n.toLocaleString();
 export const clock = (n?: number | null) => n == null ? '—:—' : `${Math.floor(n / 60)}:${String(n % 60).padStart(2, '0')}`;
 const base = new URL(import.meta.env.BASE_URL, location.origin).href;
+const fastMetric=document.createElement('span');fastMetric.id='fast-analysis-time';fastMetric.textContent='Fast HP/map: waiting for registered gameplay';$('analysis-time').before(fastMetric);
+text('analysis-time','Full scene analysis: waiting');
 input('interval').min='1';
 document.querySelector('label[for="interval"]')!.textContent='Screenshot interval (seconds)';
 input('interval').nextElementSibling!.textContent='One-second screenshots are supported. The fast health/map worker is independent; full scans skip busy frames instead of queueing old images.';
@@ -65,7 +67,7 @@ function diagnostics() {
   const values = { 'Engine': ready ? 'Local WASM · single-thread worker' : 'Not initialized', 'Asset version': assetVersion,
     'Secure context': String(window.isSecureContext), 'Screen capture': typeof navigator.mediaDevices?.getDisplayMedia === 'function' ? 'Available' : 'Unavailable',
     'Voice API': window.speechSynthesis ? 'Available' : 'Unavailable', 'Cross-origin isolation': String(window.crossOriginIsolated),
-    'Last processing time': lastElapsed ? `${Math.round(lastElapsed)} ms` : '—', 'Fast health/map monitor':quick.elapsed?`${Math.round(quick.elapsed)} ms · separate worker`:'Waiting for registered gameplay',
+    'Full scene analysis': lastElapsed ? `${Math.round(lastElapsed)} ms` : '—', 'Fast health/map monitor':quick.elapsed?`${Math.round(quick.elapsed)} ms · separate worker`:'Waiting for registered gameplay',
     'Screenshot cadence':`${settings.interval}s · full scans skip busy frames`, 'Recording': settings.record ? 'Local · bounded' : 'Off' };
   $('diagnostics').replaceChildren(...Object.entries(values).flatMap(([key, value]) => {
     const dt = document.createElement('dt'), dd = document.createElement('dd'); dt.textContent = key; dd.textContent = value; return [dt, dd];
@@ -150,6 +152,7 @@ function resetEngine() {
   worker?.postMessage({ type: 'reset' }); latest = {}; lastResultAt = 0;
   latestReport = undefined; profilePanel?.clear();
   quick.reset();spokenAt.clear();
+  text('fast-analysis-time','Fast HP/map: waiting for registered gameplay');text('quick-time','Fast monitor waiting for located HUD');
   renderTactics(null,{});
   renderSnapshot(latest);
 }
@@ -260,13 +263,18 @@ function deliver(analysis:Analysis,timestamp:number,fast=false){
     if(!fast&&now-quick.lastResultAt<3000&&!original.key.startsWith('counter:')&&!original.key.startsWith('death'))continue;
     const cue=freshCue(original,analysis.snapshot.game_clock_secs,age);if(!cue)continue;
     if(now-(spokenAt.get(cue.key)??-Infinity)<cue.cooldown_secs*1000)continue;
+    if(cue.key.startsWith('counter:')){
+      const item=`$counter-item:${cue.key.slice(cue.key.lastIndexOf(':')+1)}`;
+      if(now-(spokenAt.get('$counter-category')??-Infinity)<180000||now-(spokenAt.get(item)??-Infinity)<1200000)continue;
+      spokenAt.set('$counter-category',now);spokenAt.set(item,now);
+    }
     spokenAt.set(cue.key,now);if(spokenAt.size>200)spokenAt.delete(spokenAt.keys().next().value!);
     cue.text=cue.text.replace(/hero_[a-z_]+/g,id=>heroNames[id]||id.replace('hero_','').replaceAll('_',' '));
     speaker.say(cue);delivered.push(cue);
   }
   return {...analysis,cues:delivered};
 }
-quick.onError=message=>notice(`Fast monitor unavailable: ${message}. Full analysis continues.`,true);
+quick.onError=message=>{text('fast-analysis-time','Fast HP/map: unavailable · full analysis only');notice(`Fast monitor unavailable: ${message}. Full analysis continues.`,true);};
 quick.onResult=(analysis,current,timestamp,elapsed,sourceId,context)=>{
   if(current!==generation||!running||paused||Date.now()-timestamp>2500)return;
   const result=deliver(analysis,timestamp,true);latest=result.snapshot;renderSnapshot(latest);renderTactics(result.tactics||null,latest);
@@ -275,6 +283,7 @@ quick.onResult=(analysis,current,timestamp,elapsed,sourceId,context)=>{
     const bounds=b as {x:number;y:number;w:number;h:number};return {id:String(id),label:String(label),origin:'configured' as const,x:crop.x+bounds.x/w*crop.w,y:crop.y+bounds.y/h*crop.h,w:bounds.w/w*crop.w,h:bounds.h/h*crop.h};
   }));
   text('quick-time',`${Math.round(elapsed)} ms fast monitor`);
+  text('fast-analysis-time',`Fast HP/map: ${Math.round(elapsed)} ms`);
   for(const cue of result.cues){cues.unshift({...cue,at:latest.game_clock_secs});text('current-advice',cue.text);text('advice-context',`Live health/map evidence · ${clock(latest.game_clock_secs)}`);}
   cues=cues.slice(0,60);renderCues();diagnostics();
   window.dispatchEvent(new CustomEvent('coach:quick',{detail:{timestamp,elapsed,snapshot:structuredClone(latest),cues:result.cues}}));
@@ -376,7 +385,7 @@ function apply(analysis: Analysis, elapsed: number) {
     const canvas=document.createElement('canvas');canvas.width=bounds.w;canvas.height=bounds.h;
     const ctx=canvas.getContext('2d')!;ctx.putImageData(latestFrame,-bounds.x,-bounds.y);latestMap=ctx.getImageData(0,0,bounds.w,bounds.h);
   }
-  renderSnapshot(latest); text('analysis-time', `${Math.round(elapsed)} ms · ${replaying ? 'replay' : 'local processing'}`);
+  renderSnapshot(latest); text('analysis-time', `Full scene: ${Math.round(elapsed)} ms · ${replaying ? 'replay' : 'local processing'}`);
   renderTactics(analysis.tactics || null,latest);
   if (analysis.perception) {
     latestReport = analysis.perception; profilePanel?.render(analysis.perception); drawPreview();
@@ -659,6 +668,7 @@ function refreshGameLayout() {
   $('generic-observations').hidden = legacy;
   $('lane-plan').hidden=!legacy;
   $('live-observations').hidden=!legacy;
+  $('fast-analysis-time').hidden=!legacy;
   text('active-game-profile', `${activeProfile.name} · game-independent perception outputs`);
   document.querySelector('.visual-calibration-controls p')!.textContent = activeProfile.viewport.auto_crop===false
     ?'Automatic element discovery scans the full source. The frozen-frame inspector is optional for reviewing locator results and exporting samples.'

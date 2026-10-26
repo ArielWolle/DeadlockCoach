@@ -6,6 +6,7 @@ use std::collections::HashMap;
 pub mod map_rules;
 pub mod laning;
 pub mod economy;
+mod counter_explanations;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Priority { Low, Normal, High }
@@ -72,8 +73,14 @@ pub struct CounterDef {
 pub struct CounterRule(pub Vec<CounterDef>);
 
 impl Rule for CounterRule {
-    /// One cue per enemy hero/item, listing up to 3 suggestions not already owned.
+    /// One explained item, deferred during combat and gated by observed shopping budget.
     fn evaluate(&self, snap: &GameSnapshot) -> Vec<Cue> {
+        if snap.hp.zip(snap.max_hp).is_some_and(|(hp,max)|max>0&&(hp as f32)/(max as f32)<0.65)
+            ||snap.health_delta_ratio.is_some_and(|d|d < -0.05){return vec![];}
+        if snap.screen.as_deref()==Some("Gameplay") {
+            if snap.game_clock_secs.unwrap_or(0)<180||snap.souls.unwrap_or(0)<800{return vec![];}
+            if snap.minimap.as_ref().is_some_and(|m|m.you.is_some_and(|me|m.enemies.iter().any(|p|(me.x-p.x).hypot(me.y-p.y)<0.18))){return vec![];}
+        }
         let mut seen: Vec<&str> = vec![];
         let mut cues = vec![];
         for trigger in snap.enemy_items.iter().chain(snap.enemy_heroes.iter()) {
@@ -81,14 +88,16 @@ impl Rule for CounterRule {
             seen.push(trigger);
             let mine: Vec<&CounterDef> = self.0.iter()
                 .filter(|c| &c.when_enemy_has == trigger
-                    && !snap.items.iter().any(|i| i == &c.suggest || i == &c.suggest_class))
-                .take(3).collect();
+                    && !snap.items.iter().any(|i| i == &c.suggest || i == &c.suggest_class)
+                    && counter_explanations::cost(&c.suggest_class).is_none_or(|cost|snap.souls.is_none_or(|souls|souls>=cost)))
+                .take(1).collect();
             let Some(first) = mine.first() else { continue };
             let who = if first.label.is_empty() { trigger.as_str() } else { first.label.as_str() };
-            let names: Vec<&str> = mine.iter().map(|c| c.suggest.as_str()).collect();
+            let explanation=counter_explanations::summary(&first.suggest_class).map(str::to_string)
+                .unwrap_or_else(||counter_explanations::statistical_reason(&first.reason));
             cues.push(Cue {
-                key: format!("counter:{trigger}"),
-                text: format!("Enemy has {who}. Good items against them: {}.", names.join(", ")),
+                key: format!("counter:{trigger}:{}",if first.suggest_class.is_empty(){&first.suggest}else{&first.suggest_class}),
+                text: format!("Statistical option against {who}: {}. {explanation}",first.suggest),
                 priority: Priority::Low,
                 cooldown_secs: 1200,
             });
@@ -97,7 +106,7 @@ impl Rule for CounterRule {
     }
 }
 pub fn counter_rule_from_json(json: &str) -> Result<Box<dyn Rule>, String> {
-    Ok(Box::new(CounterRule(serde_json::from_str(json).map_err(|e| e.to_string())?)))
+    Ok(Box::new(CounterRule(serde_json::from_str(json.trim_start_matches('\u{feff}')).map_err(|e| e.to_string())?)))
 }
 
 /// Parse data/timings.json into timer rules.
@@ -213,18 +222,28 @@ impl Engine {
     pub fn step(&mut self, snap: &GameSnapshot) -> Vec<Cue> {
         if snap.screen.as_deref().is_some_and(|s|!matches!(s,"Gameplay"|"Scoreboard"|"Dead")){return vec![];}
         let Some(now) = snap.game_clock_secs else { return vec![] };
-        if self.last_cue_at.is_some_and(|l|now<l) {self.last_said.clear();self.last_cue_at=None;}
+        if let Some(last)=self.last_cue_at {if now<last {
+            if last-now>120 {self.last_said.clear();self.last_cue_at=None;}
+            else {return vec![];} // small OCR backsteps are not a new match
+        }}
         let mut out: Vec<Cue> = self.rules.iter().flat_map(|r| r.evaluate(snap)).collect();
         out.retain(|c| match self.last_said.get(&c.key) {
             Some(&t) if now >= t && now - t < c.cooldown_secs => false,
             _ => true,
         });
+        out.retain(|c|!c.key.starts_with("counter:")||(
+            self.last_said.get("$counter-category").is_none_or(|t|now.saturating_sub(*t)>=180)
+            &&self.last_said.get(&format!("$counter-item:{}",c.key.rsplit(':').next().unwrap_or(""))).is_none_or(|t|now.saturating_sub(*t)>=1200)));
         if let Some(l)=self.last_cue_at { if now-l<self.min_gap_secs {
             out.retain(|c| c.priority==Priority::High && (now-l>=3 || c.key=="lane:back_off"));
         }}
         out.sort_by(|a, b| b.priority.cmp(&a.priority));
         out.truncate(self.max_per_step);
         for c in &out { self.last_said.insert(c.key.clone(), now); }
+        for c in out.iter().filter(|c|c.key.starts_with("counter:")){
+            self.last_said.insert("$counter-category".into(),now);
+            self.last_said.insert(format!("$counter-item:{}",c.key.rsplit(':').next().unwrap_or("")),now);
+        }
         if !out.is_empty() { self.last_cue_at = Some(now); }
         out.sort_by(|a, b| b.priority.cmp(&a.priority));
         out
@@ -268,7 +287,7 @@ mod tests {
         let r = counter_rule_from_json(r#"[{"when_enemy_has":"A","suggest":"B","reason":"test."}]"#).unwrap();
         let mut e = Engine::new(vec![r]);
         let mut s = at(100); s.enemy_items = vec!["A".into()];
-        assert_eq!(e.step(&s)[0].text, "Enemy has A. Good items against them: B.");
+        assert_eq!(e.step(&s)[0].text, "Statistical option against A: B. test.");
         assert!(e.step(&s).is_empty());
         let mut s2 = at(1000); s2.enemy_items = vec!["A".into()]; s2.items = vec!["B".into()];
         assert!(e.step(&s2).is_empty());

@@ -1,0 +1,5 @@
+[
+  {"class_name":"upgrade_health_nova","summary":"It heals you and nearby allies, helping recover health between exchanges.","source":"https://deadlock.wiki/Healing_Nova","quote":"Heal yourself and nearby allies.","checked_on":"2026-10-26"},
+  {"class_name":"upgrade_guardian_ward","summary":"Its barrier absorbs damage and its movement speed helps you or an ally disengage.","source":"https://deadlock.wiki/Guardian_Ward","quote":"Provide the target with a Barrier and temporary Move Speed.","checked_on":"2026-10-26"},
+  {"class_name":"upgrade_arcane_surge","summary":"Dash-jump before casting to boost the next ability's range, duration and Spirit Power.","source":"https://deadlock.wiki/Arcane_Surge","quote":"After you Dash-Jump, the next ability you use within 7s will have bonus Range, Duration, and Spirit Power.","checked_on":"2026-10-26"}
+]
