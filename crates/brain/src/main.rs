@@ -27,11 +27,24 @@ async fn main() {
         let addr = args.get(i + 1).expect("--live <addr>").clone();
         let mut scanner = Scanner::load(std::path::Path::new(".")).expect("assets (run from repo root)");
         std::fs::create_dir_all("sessions").ok();
-        let log_path = format!("sessions/{}.jsonl", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0));
+        let sid = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+        let log_path = format!("sessions/{sid}.jsonl");
+        // Record EVERY frame for later calibration. Write a label into tag.txt (e.g. "scoreboard")
+        // and it is put in the filenames of the following frames. Disable with COACH_NO_RECORD=1.
+        let frame_dir = format!("sessions/{sid}_frames");
+        let record = std::env::var("COACH_NO_RECORD").is_err();
+        if record { std::fs::create_dir_all(&frame_dir).ok(); }
+        let mut n = 0u32;
         let piper = piper.expect("piper");
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
         loop {
             let res = coach_transport::connect(&addr, &token, &mut rx, |_meta, jpeg| {
+                if record {
+                    let tag = std::fs::read_to_string("tag.txt").unwrap_or_default();
+                    let tag: String = tag.trim().chars().filter(|c| c.is_alphanumeric() || *c == '-').collect();
+                    let _ = std::fs::write(format!("{frame_dir}/{n:05}_{tag}.jpg"), &jpeg);
+                    n += 1;
+                }
                 let snap = scanner.scan(&jpeg);
                 println!("snapshot: clock={:?} souls={:?} items={} allies={} enemies={} nw={:?}/{:?}", snap.game_clock_secs, snap.souls, snap.items.len(), snap.ally_heroes.len(), snap.enemy_heroes.len(), snap.ally_networth, snap.enemy_networth);
                 if let Ok(line) = serde_json::to_string(&snap) {

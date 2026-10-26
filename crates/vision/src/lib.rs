@@ -3,6 +3,7 @@ pub mod hud;
 pub mod ocr;
 pub mod parse;
 pub mod scan;
+pub mod screen;
 use image::{imageops::{crop_imm, resize, FilterType}, GrayImage, RgbaImage};
 use std::path::Path;
 

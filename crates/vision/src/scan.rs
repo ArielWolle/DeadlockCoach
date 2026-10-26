@@ -79,8 +79,18 @@ impl Scanner {
         out
     }
 
+    /// Classify the screen only (used by tools).
+    pub fn classify(&self, jpeg: &[u8]) -> crate::screen::Screen {
+        match image::load_from_memory(jpeg) {
+            Ok(img) => crate::screen::classify(&self.ocr, &img),
+            Err(_) => crate::screen::Screen::Unknown,
+        }
+    }
+
     pub fn scan(&mut self, jpeg: &[u8]) -> GameSnapshot {
         let Ok(img) = image::load_from_memory(jpeg) else { return GameSnapshot::default() };
+        // Only read gameplay HUD on gameplay frames; other screens yield an empty snapshot.
+        if crate::screen::classify(&self.ocr, &img) != crate::screen::Screen::Gameplay { return GameSnapshot::default(); }
         let clock = self.text(&img, hud::CLOCK).and_then(|s| parse::parse_clock(&s));
         let souls = self.text(&img, hud::SOULS).and_then(|s| parse::parse_souls(&s));
         let mut snap = self.tracker.accept(clock, souls);

@@ -669,6 +669,7 @@ dependencies = [
  "image",
  "ocrs",
  "rten",
+ "serde",
  "serde_json",
 ]
 
