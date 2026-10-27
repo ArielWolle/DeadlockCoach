@@ -247,6 +247,22 @@ can include the perception report and profile ID alongside their image/snapshot 
 - `Pipeline::set_profile`: validates/compiles atomically. Rejected graphs keep the previous
   profile; changing a valid profile resets temporal/custom-stage state.
 
+### Fast-path primitives (`coach_perception::track`)
+
+Reusable building blocks for real-time adapters (see [faster live coaching](../live-coaching.md)):
+
+- `Tracked`: a detected box with `hit` / `miss` / `may_acquire(now, ms)` / `forget` / `reset`.
+  Detect once, then read the exact box with recognition only.
+- `LineBatch`: collect crops (`add`, `add_all` → index ranges), run one
+  `TextBackend::recognize_lines` / `ocr::read_lines` call, then index results.
+  `Pipeline::prefetch_lines` batches independent fixed-crop line reads in generic profiles.
+- `Extrapolated`: a wall-time value (the match clock) anchored by verification and confirmed by
+  cheap reads. It ignores whole-minute misreads and throttles re-verification.
+- `RoundRobin` / `Cadence` / `vote`: rotate slow fields, throttle rare work, majority-vote reads.
+- `Laps`: per-phase timings (`to_json`) published with stage output.
+- `ocr::set_line_hook`: a thread-local hook that routes multi-crop recognition elsewhere. The
+  web build routes it to a parallel worker pool (`Coach::set_parallel_lines`, `LineRecognizer`).
+
 The browser implements the Deadlock scanner as a `Stage`, then routes its snapshot to the
 existing coaching engine. New generic fields remain independent of that snapshot schema.
 

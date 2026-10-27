@@ -21,7 +21,10 @@ struct AutomaticStage {scanner:coach_vision::auto::AutoScanner}
 impl Stage for AutomaticStage {
     fn run(&mut self,_inputs:&[Packet],frame:&FrameContext<'_>,_:&serde_json::Value)->Result<Packet,String>{
         let value=self.scanner.scan(frame.frame,frame.timestamp_ms);
-        Ok(Packet{value:Some(serde_json::to_value(value).map_err(|e|e.to_string())?),regions:self.scanner.regions(),..Default::default()})
+        let mut value=serde_json::to_value(value).map_err(|e|e.to_string())?;
+        // Per-phase timing travels with the stage trace so slow phases are visible in the UI.
+        if let Some(o)=value.as_object_mut(){o.insert("perf".into(),self.scanner.laps.to_json());}
+        Ok(Packet{value:Some(value),regions:self.scanner.regions(),..Default::default()})
     }
     fn reset(&mut self){self.scanner.reset();}
 }
@@ -36,7 +39,9 @@ impl Stage for DeadlockStage {
             regions.push(coach_perception::RegionObservation{id:id.into(),label:label.into(),origin:coach_perception::RegionOrigin::Configured,score:None,value_path:None,
                 bounds:coach_perception::Bounds{x:(r.x*frame.frame.width() as f32) as u32,y:(r.y*frame.frame.height() as f32) as u32,w:(r.w*frame.frame.width() as f32) as u32,h:(r.h*frame.frame.height() as f32) as u32}});
         }
-        Ok(Packet { value: Some(serde_json::to_value(snapshot).map_err(|e| e.to_string())?),regions, ..Default::default() })
+        let mut value = serde_json::to_value(snapshot).map_err(|e| e.to_string())?;
+        if let Some(o) = value.as_object_mut() { o.insert("perf".into(), self.scanner.laps.to_json()); }
+        Ok(Packet { value: Some(value), regions, ..Default::default() })
     }
     fn reset(&mut self) { self.scanner.reset(); }
 }
@@ -112,6 +117,40 @@ impl Coach {
         if snap.match_id.is_some() { self.match_id = snap.match_id; }
         if snap.game_clock_secs.is_some() { self.last_clock = snap.game_clock_secs; }
         Ok(self.engine.step(snap))
+    }
+}
+
+fn pack_crops(crops:&[image::DynamicImage])->(Vec<u8>,Vec<u32>){
+    let mut bytes=vec![];let mut dims=Vec::with_capacity(crops.len()*2);
+    for c in crops{let rgba=c.to_rgba8();dims.push(rgba.width());dims.push(rgba.height());bytes.extend_from_slice(rgba.as_raw());}
+    (bytes,dims)
+}
+fn unpack_crops(bytes:&[u8],dims:&[u32])->Result<Vec<image::DynamicImage>,JsValue>{
+    let mut out=vec![];let mut at=0usize;
+    for d in dims.chunks_exact(2){
+        let (w,h)=(d[0],d[1]);if w==0||h==0||w>4096||h>2304{return Err(js_error("invalid crop size"));}
+        let n=(w*h*4) as usize;let slice=bytes.get(at..at+n).ok_or_else(||js_error("truncated crop bytes"))?;at+=n;
+        out.push(image::DynamicImage::ImageRgba8(image::RgbaImage::from_raw(w,h,slice.to_vec()).ok_or_else(||js_error("bad crop"))?));
+    }
+    if at!=bytes.len(){return Err(js_error("trailing crop bytes"));}
+    Ok(out)
+}
+#[wasm_bindgen]
+extern "C" {
+    /// Provided by the analysis worker: synchronously recognizes packed crops on a worker pool,
+    /// returning an array of strings, or null to fall back to local recognition.
+    #[wasm_bindgen(js_namespace = globalThis, js_name = coachRecognizeLines)]
+    fn recognize_lines_js(bytes: &[u8], dims: &[u32]) -> JsValue;
+}
+/// Recognition-only worker for parallel line batches (same model and preprocessing).
+#[wasm_bindgen]
+pub struct LineRecognizer{reader:Reader}
+#[wasm_bindgen]
+impl LineRecognizer{
+    #[wasm_bindgen(constructor)]
+    pub fn new(recognition:Vec<u8>)->Result<LineRecognizer,JsValue>{console_error_panic_hook::set_once();Ok(Self{reader:Reader::recognition_only(recognition).map_err(js_error)?})}
+    pub fn read(&self,bytes:Vec<u8>,dims:Vec<u32>)->Result<Vec<String>,JsValue>{
+        let crops=unpack_crops(&bytes,&dims)?;self.reader.read_lines_local(&crops).map_err(js_error)
     }
 }
 
@@ -195,6 +234,15 @@ impl Coach {
             options: Options::default(), match_id: None, last_clock: None, lane_coach:coach_engine::laning::LaneCoach::default() };
         coach.engine = coach.engine()?;
         Ok(coach)
+    }
+
+    /// Route batched line recognition through the worker pool (when the host provides one).
+    pub fn set_parallel_lines(&mut self, enabled: bool) {
+        coach_perception::ocr::set_line_hook(enabled.then(|| Box::new(|crops: &[image::DynamicImage]| {
+            if crops.len() < 2 { return None; } // a single line cannot be split across workers
+            let (bytes, dims) = pack_crops(crops);
+            serde_wasm_bindgen::from_value::<Option<Vec<String>>>(recognize_lines_js(&bytes, &dims)).ok().flatten()
+        }) as coach_perception::ocr::LineHook));
     }
 
     pub fn configure(&mut self, options_json: &str) -> Result<(), JsValue> {

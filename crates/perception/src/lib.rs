@@ -5,4 +5,5 @@ pub mod localization;
 #[cfg(feature = "ocrs-backend")]
 pub mod ocr;
 pub mod pipeline;
+pub mod track;
 pub use pipeline::*;

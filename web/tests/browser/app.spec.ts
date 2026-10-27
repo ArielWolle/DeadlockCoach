@@ -31,10 +31,10 @@ test('settings persist, mute works and empty recording export is handled', async
   await expect(page.locator('#notice')).toHaveText('No recorded frames to export.');
 });
 
-test('real WASM initializes without isolation and replays recorded snapshots', async ({ page }) => {
+test('real WASM initializes cross-origin isolated and replays recorded snapshots', async ({ page }) => {
   const errors: string[] = []; page.on('pageerror', e => errors.push(e.message));
   await page.goto('./#replay');
-  expect(await page.evaluate(() => window.crossOriginIsolated)).toBe(false);
+  expect(await page.evaluate(() => window.crossOriginIsolated)).toBe(true);
   await page.getByRole('button', { name: 'Load included match' }).click();
   await expect(page.locator('#replay-status')).toContainText('Included match replay complete', { timeout: 110000 });
   await expect(page.locator('#engine-state')).toHaveText('LOCAL ENGINE READY');
@@ -70,7 +70,9 @@ test('browser OCR matches native clock, souls and inventory on real screenshots'
   expect(snap.items).toContain('upgrade_pristine_emblem');
   expect(snap.screen).toBe('Gameplay');
   const timing = await page.locator('#analysis-time').textContent();
-  console.info(`Browser OCR last recorded frame: ${timing}`);
+  await page.locator('[data-page="settings"]').click();
+  const pool = await page.locator('#diagnostics').evaluate(d => { const t = [...d.querySelectorAll('dt')].find(e => e.textContent === 'Parallel line recognition'); return t?.nextElementSibling?.textContent; });
+  console.info(`Browser OCR last recorded frame: ${timing} | isolated=${await page.evaluate(() => crossOriginIsolated)} | pool: ${pool} | phases: ${await page.locator('#analysis-time').getAttribute('title')}`);
   await testInfo.attach('browser-ocr-timing', { body: JSON.stringify({ timing, note: 'Headless recorded-frame timing, not game FPS or background latency' }), contentType: 'application/json' });
 });
 
@@ -94,6 +96,28 @@ test('mocked browser capture processes real pixels, pauses, stops and releases t
   await expect(page.locator('#session-state')).toHaveText('Coaching paused');
   await page.getByRole('button', { name: 'Stop', exact: true }).click();
   expect(await page.evaluate(() => (window as unknown as { testStream: MediaStream }).testStream.getTracks().every(t => t.readyState === 'ended'))).toBe(true);
+});
+
+test.describe('without cross-origin isolation', () => {
+  test.use({ serviceWorkers: 'block' });
+  test('screenshot OCR still matches using single-threaded recognition', async ({ page }) => {
+    // Simulate a host that cannot send COOP/COEP (and no service worker to add them).
+    await page.route('**/*', async route => {
+      const response = await route.fetch(); const headers = { ...response.headers() };
+      delete headers['cross-origin-opener-policy']; delete headers['cross-origin-embedder-policy'];
+      await route.fulfill({ response, headers });
+    });
+    await page.goto('./#replay');
+    expect(await page.evaluate(() => window.crossOriginIsolated)).toBe(false);
+    const fixture = path.join(root, 'public/assets/fixtures/00059_1792966931596.jpg');
+    await page.getByLabel('Bring your gameplay into the lab.').setInputFiles([fixture, fixture]);
+    await page.getByRole('button', { name: 'Analyze selected files' }).click();
+    await expect(page.locator('#replay-status')).toContainText('Replay complete.', { timeout: 110000 });
+    await expect(page.locator('#metric-clock')).toHaveText('5:13');
+    await expect(page.locator('#metric-souls')).toHaveText('1,732');
+    await page.locator('[data-page="settings"]').click();
+    await expect(page.locator('#diagnostics')).toContainText('not cross-origin isolated');
+  });
 });
 
 test.describe('cold network failure', () => {

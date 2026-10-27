@@ -42,6 +42,10 @@
    **11,728 ms** for its final OCR frame; the later profile-engine regression recorded
     **5,663 ms** (recorded 1600×900 HUD, not a live game benchmark).
     The automatic-HUD/lane-policy run logged **17,844 ms** under concurrent native build load.
+    The fast perception framework since reduced the replay's last full frame to about
+    **1.4–1.8 s**. Steady state is a single batched recognition call, about 0.2–0.35 s with the
+    parallel pool. First-frame acquisition and rare detector verifications still take seconds in
+    WASM, and sessions without cross-origin isolation are about 2× slower.
     This is the full-scene path, not the independent one-second screenshot sampler. The fast
     worker has measured about 0.5–1 second in headless fixtures, but game FPS impact, thermal
     load and background scheduling remain unmeasured. There is no guaranteed one-second full

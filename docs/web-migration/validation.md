@@ -65,6 +65,13 @@ The automatic-HUD/lane-policy validation run logged **17,844 ms** on the saved s
 replay's final OCR frame under concurrent native build/test load. This reinforces that the
 five-second goal is not met reliably; the new health/localization passes also consume time.
 
+After the fast perception framework (tracked boxes, one batched recognition call per frame,
+extrapolated clock, cross-origin-isolated parallel recognizer pool), the full suite (31 browser
+tests, 13 unit tests) logged a replay last frame of **1,389–1,796 ms**, mostly a rare clock
+verification. Steady per-frame work was a 12-line batch of 170–280 ms plus an auto batch of
+66–83 ms with 4 parallel recognizers, and the fast monitor took 495–783 ms. These are headless
+fixture numbers, not live-game measurements.
+
 ## Remaining acceptance work
 
 See [Twitch stream smoke tests](stream-tests.md) for an additional real 1080p stream-frame

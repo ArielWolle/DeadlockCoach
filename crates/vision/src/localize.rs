@@ -101,7 +101,7 @@ pub fn locate_currency_limited(frame:&DynamicImage,reader:&Reader,limit:usize)->
         }
     }None
 }
-fn currency_value(text:&str)->Option<u32>{
+pub fn currency_value(text:&str)->Option<u32>{
     let upper=text.to_ascii_uppercase().replace('0',"O");let pos=upper.find("SOULS").or_else(||upper.find("SDULS"))?;
     if upper.get(pos+5..).and_then(|s|s.chars().next()).is_some_and(|c|c.is_alphabetic()){return None;}
     let prefix=text.get(..pos)?.trim_end();if !prefix.chars().last()?.is_ascii_digit(){return None;}

@@ -55,6 +55,41 @@ fn ocr_backend_is_replaceable_and_shared_branches_do_not_repeat_inference() {
     assert_eq!(report.fields["hp"].score, Some(0.91));
 }
 
+/// Reports each crop's width so tests can verify batched results map back to the right node.
+struct BatchText { single: Arc<AtomicUsize>, batches: Arc<AtomicUsize>, lines: Arc<AtomicUsize> }
+impl TextBackend for BatchText {
+    fn recognize(&self, image: &DynamicImage, _: OcrMode, _: u32) -> Result<TextResult, String> {
+        self.single.fetch_add(1, Ordering::SeqCst); Ok(TextResult { text: format!("w{}", image.width()), score: None, regions: vec![] })
+    }
+    fn recognize_lines(&self, images: &[DynamicImage]) -> Result<Vec<TextResult>, String> {
+        self.batches.fetch_add(1, Ordering::SeqCst); self.lines.fetch_add(images.len(), Ordering::SeqCst);
+        Ok(images.iter().map(|i| TextResult { text: format!("w{}", i.width()), score: None, regions: vec![] }).collect())
+    }
+}
+
+#[test]
+fn independent_line_reads_share_one_batched_backend_call() {
+    let (single, batches, lines) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
+    let resources = Resources { ocr: Some(Arc::new(BatchText { single: single.clone(), batches: batches.clone(), lines: lines.clone() })), ..Default::default() };
+    let p = profile(json!([
+        {"id":"ca","op":{"type":"crop","region":{"x":0,"y":0,"w":10,"h":8,"space":"pixels"}}},
+        {"id":"cb","op":{"type":"crop","region":{"x":0,"y":0,"w":20,"h":8,"space":"pixels"}}},
+        {"id":"cc","op":{"type":"crop","region":{"x":0,"y":0,"w":6,"h":8,"space":"pixels"}}},
+        {"id":"a","inputs":["ca"],"op":{"type":"ocr","mode":"line","upscale":1}},
+        {"id":"b","inputs":["cb"],"op":{"type":"ocr","mode":"line","upscale":1}},
+        {"id":"c","inputs":["cc"],"op":{"type":"ocr","mode":"line","upscale":2}},
+        {"id":"full","inputs":["ca"],"op":{"type":"ocr","mode":"detect","upscale":1}}
+    ]), json!({"a":"a","b":"b","c":"c","full":"full"}));
+    let mut pipe = Pipeline::new(p, resources).unwrap();
+    let report = pipe.run(&image(), None, 0);
+    assert_eq!(batches.load(Ordering::SeqCst), 1, "all fixed line crops use one batch");
+    assert_eq!(lines.load(Ordering::SeqCst), 3);
+    assert_eq!(single.load(Ordering::SeqCst), 1, "only the detector-mode read runs separately");
+    assert_eq!(report.fields["a"].value, Some(json!("w10"))); assert_eq!(report.fields["b"].value, Some(json!("w20")));
+    assert_eq!(report.fields["c"].value, Some(json!("w12")), "upscale is applied before batching");
+    pipe.run(&image(), None, 1); assert_eq!(batches.load(Ordering::SeqCst), 2, "prefetch is recomputed per frame, never reused");
+}
+
 #[test]
 fn missing_scores_do_not_turn_into_fabricated_ocr_confidence() {
     let resources = Resources { ocr: Some(Arc::new(MockText { calls: Arc::new(AtomicUsize::new(0)), score: None })), ..Default::default() };

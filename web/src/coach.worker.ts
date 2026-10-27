@@ -3,8 +3,23 @@ import init, { Coach } from '../wasm/coach_web';
 import type { Manifest, WorkerReply, ProfileReply } from './types';
 import type { GameProfile } from './profiles';
 import { loadVerifiedAsset } from './assets';
+import { LinePool } from './line-pool';
 const ctx = self as unknown as DedicatedWorkerGlobalScope;
 let coach: Coach | undefined;
+// Parallel line recognition (cross-origin isolated sessions only). Started once per worker;
+// the synchronous bridge below is what the Rust scanner calls for each frame's line batch.
+let pool: LinePool | undefined, poolState = 'off';
+(globalThis as unknown as { coachRecognizeLines: (b: Uint8Array, d: Uint32Array) => string[] | null }).coachRecognizeLines = (b, d) => pool?.recognize(b, d) ?? null;
+function startPool(model: ArrayBuffer) {
+  if (pool || !LinePool.supported()) { if (!LinePool.supported()) poolState = 'unavailable · not cross-origin isolated'; return; }
+  const n = LinePool.size();
+  if (n < 1) { poolState = 'off · too few CPU cores'; return; }
+  pool = new LinePool(); poolState = `starting ${n}`;
+  void pool.start(model, n).then(ready => {
+    poolState = ready ? `${ready} parallel recognizers` : 'failed to start';
+    coach?.set_parallel_lines(ready > 0);
+  });
+}
 const send = (r: WorkerReply | ProfileReply) => ctx.postMessage(r);
 
 async function initialize(base: string, profile: GameProfile) {
@@ -35,6 +50,8 @@ async function initialize(base: string, profile: GameProfile) {
   const candidate = Coach.create(JSON.stringify(profile), bytes('models/text-detection.rten'), bytes('models/text-rec.rten'), bytes('templates.bin'),
     text('heroes.json', '[]'), text('timings.json', '[]'), text('counters.json', '[]'), text('rules.json', '{}'));
   coach?.free(); coach = candidate;
+  if (buffers['models/text-rec.rten']) startPool(buffers['models/text-rec.rten']);
+  coach.set_parallel_lines((pool?.size ?? 0) > 0);
   try {
     for (const key of await caches.keys()) if (key.startsWith('deadlock-assets-') && key !== `deadlock-assets-${manifest.version}`) await caches.delete(key);
   } catch { /* no persistent cache */ }
@@ -61,7 +78,10 @@ ctx.onmessage = event => {
         const analysis = m.type === 'frame'
           ? coach.analyze(new Uint8Array(m.rgba), m.width, m.height, new Uint8Array(m.map), m.mapWidth, m.mapHeight, m.timestamp)
           : coach.replay(JSON.stringify(m.snapshot));
-        send({ type: 'result', id: m.id, generation: m.generation, analysis, elapsed: performance.now() - start });
+        const s = pool?.stats;
+        send({ type: 'result', id: m.id, generation: m.generation, analysis, elapsed: performance.now() - start,
+          pool: { state: poolState, active: (pool?.size ?? 0) > 0,
+            avg_ms: s && s.batches ? Math.round(s.ms / s.batches) : null, fallbacks: s?.fallbacks ?? 0 } });
       }
     } catch (e) { send({ type: 'error', message: e instanceof Error ? e.message : String(e), id: m.id }); }
   });

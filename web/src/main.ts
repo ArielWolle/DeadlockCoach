@@ -11,7 +11,7 @@ import {regionsFromReport,drawRegions} from './region-overlays';
 import {QuickMonitor} from './quick';
 import {freshCue} from './live-cues';
 import { clearFrames, download, listFrames, recordFrame, snapshotLines } from './storage';
-import type { Analysis, Cue, GameItem, Knowledge, Options, Settings, Snapshot, WorkerReply, ProfileReply, PerceptionReport, TacticalDecision } from './types';
+import type { Analysis, Cue, GameItem, Knowledge, Options, Settings, Snapshot, WorkerReply, ProfileReply, PerceptionReport, TacticalDecision, PoolStatus } from './types';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const button = (id: string) => $<HTMLButtonElement>(id);
@@ -44,6 +44,14 @@ let recoveryTimer:ReturnType<typeof setTimeout>|undefined,recoveringFull=false,r
 let lastResultAt = 0, lastElapsed = 0, assetVersion = 'Not loaded';
 let needsViewport = false, manualViewport = false, automaticViewport = false, sourceGeometry = '';
 let latest: Snapshot = {}, latestFrame: ImageData | undefined, latestMap: ImageData | undefined;
+let lastPhases = '';
+let poolStatus: PoolStatus | undefined;
+/** Per-phase timings reported by the game stage (`perf`), slowest first. */
+function phaseSummary(report?: PerceptionReport | null) {
+  const perf = report?.stages.map(s => (s.value as { perf?: Record<string, number> } | null)?.perf).find(p => p && typeof p === 'object');
+  if (!perf) return '';
+  return Object.entries(perf).filter(([, v]) => typeof v === 'number').sort((a, b) => b[1] - a[1]).slice(0, 4).map(([k, v]) => `${k} ${Math.round(v)} ms`).join(' · ');
+}
 let cues: Array<Cue & { at?: number | null }> = [];
 let knowledge: Knowledge[] = [], knowledgeReady: Promise<void> | undefined;
 let itemNames: Record<string, string> = {}, heroNames: Record<string, string> = {};
@@ -68,7 +76,9 @@ function diagnostics() {
   const values = { 'Engine': ready ? 'Local WASM · single-thread worker' : 'Not initialized', 'Asset version': assetVersion,
     'Secure context': String(window.isSecureContext), 'Screen capture': typeof navigator.mediaDevices?.getDisplayMedia === 'function' ? 'Available' : 'Unavailable',
     'Voice API': window.speechSynthesis ? 'Available' : 'Unavailable', 'Cross-origin isolation': String(window.crossOriginIsolated),
-    'Full scene analysis': lastElapsed ? `${Math.round(lastElapsed)} ms` : '—', 'Fast health/map monitor':quick.elapsed?`${Math.round(quick.elapsed)} ms · separate worker`:'Waiting for registered gameplay',
+    'Full scene analysis': lastElapsed ? `${Math.round(lastElapsed)} ms` : '—', 'Slowest scene phases': lastPhases || '—',
+    'Parallel line recognition': poolStatus ? `${poolStatus.state}${poolStatus.avg_ms != null ? ` · ${poolStatus.avg_ms} ms per batch` : ''}${poolStatus.fallbacks ? ` · ${poolStatus.fallbacks} fallbacks` : ''}` : (window.crossOriginIsolated ? 'Waiting for first frame' : 'Unavailable · page is not cross-origin isolated'),
+    'Fast health/map monitor':quick.elapsed?`${Math.round(quick.elapsed)} ms · separate worker`:'Waiting for registered gameplay',
     'Screenshot cadence':`${settings.interval}s · full scans skip busy frames`, 'Recording': settings.record ? 'Local · bounded' : 'Off' };
   $('diagnostics').replaceChildren(...Object.entries(values).flatMap(([key, value]) => {
     const dt = document.createElement('dt'), dd = document.createElement('dd'); dt.textContent = key; dd.textContent = value; return [dt, dd];
@@ -136,6 +146,7 @@ async function initialize(profile = activeProfile) {
       clearTimeout(pending.timer); const task = pending; pending = undefined;
       if (reply.generation !== generation) task.reject(new Error('Analysis canceled'));
       else task.resolve({ analysis: reply.analysis, elapsed: reply.elapsed });
+      if (reply.pool) { poolStatus = reply.pool; }
     }
   };
   initTimer = setTimeout(() => analysisFailure('Model initialization timed out.'), 120000);
@@ -412,6 +423,7 @@ function apply(analysis: Analysis, elapsed: number) {
     const ctx=canvas.getContext('2d')!;ctx.putImageData(latestFrame,-bounds.x,-bounds.y);latestMap=ctx.getImageData(0,0,bounds.w,bounds.h);
   }
   renderSnapshot(latest); text('analysis-time', `Full scene: ${Math.round(elapsed)} ms · ${replaying ? 'replay' : 'local processing'}`);
+  lastPhases = phaseSummary(analysis.perception) || lastPhases; $('analysis-time').title = lastPhases;
   renderTactics(analysis.tactics || null,latest);
   if (analysis.perception) {
     latestReport = analysis.perception; profilePanel?.render(analysis.perception); drawPreview();
@@ -894,6 +906,16 @@ profilePanel = new ProfilePanel({ current: () => activeProfile, apply: applyGame
 refreshGameLayout();
 populateSettings(); renderSnapshot(latest); renderTactics(null,latest); diagnostics(); route(); void loadNames();
 if (import.meta.env.PROD && 'serviceWorker' in navigator) {
+  // On hosts that cannot send COOP/COEP, the service worker adds them. A page loaded before
+  // the worker controlled it is not isolated yet: reload once (never during a session) so
+  // parallel line recognition becomes available.
+  const isolateOnce = () => {
+    if (window.crossOriginIsolated || !navigator.serviceWorker.controller || running || replaying || capture.active) return;
+    if (sessionStorage.getItem('coach-isolation-reload')) return;
+    sessionStorage.setItem('coach-isolation-reload', '1'); location.reload();
+  };
+  isolateOnce();
+  navigator.serviceWorker.addEventListener('controllerchange', isolateOnce);
   void navigator.serviceWorker.register(`${base}sw.js`, { scope: new URL(import.meta.env.BASE_URL, location.origin).pathname })
     .then(reg => {
       reg.addEventListener('updatefound', () => {

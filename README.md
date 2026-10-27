@@ -28,6 +28,9 @@ worker using the same Rust vision and rule engine as the native app.
   pause and stop controls. New settings default to 100%; existing saved levels are preserved.
 - One-second screenshots and a separate fast HP/minimap worker; earlier objective reminders,
   wave reports, positive farm-pace feedback and conditional gank checks.
+- Fast perception: detect HUD text once, track exact boxes, and read all fields in one batched
+  recognition call per frame, split across parallel workers when the page is cross-origin
+  isolated. The first visit reloads once to enable this. See [faster live coaching](docs/live-coaching.md).
 - Optional frozen five-frame HUD inspector with located/configured overlays and sample export.
 - Optional legacy-profile black-border detection and manual viewport adjustment.
 - Screenshot and JSONL replay through the actual WASM engine.

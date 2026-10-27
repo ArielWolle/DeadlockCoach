@@ -184,6 +184,11 @@ pub struct TextResult { pub text: String, pub score: Option<f32>, pub regions:Ve
 /// Replace the OCR implementation without changing profile execution or game adapters.
 pub trait TextBackend {
     fn recognize(&self, image: &DynamicImage, mode: OcrMode, upscale: u32) -> Result<TextResult, String>;
+    /// Recognize several already-located single lines. Backends should batch these into
+    /// one inference call; the default keeps correctness for simple backends.
+    fn recognize_lines(&self, images: &[DynamicImage]) -> Result<Vec<TextResult>, String> {
+        images.iter().map(|i| self.recognize(i, OcrMode::Line, 1)).collect()
+    }
 }
 #[cfg(feature = "ocrs-backend")]
 impl TextBackend for Reader {
@@ -195,6 +200,9 @@ impl TextBackend for Reader {
             OcrMode::Line => self.read_line(&image.resize_exact(image.width() * upscale, image.height() * upscale, FilterType::CatmullRom))?,
         };
         Ok(TextResult { text, score: None,regions })
+    }
+    fn recognize_lines(&self, images: &[DynamicImage]) -> Result<Vec<TextResult>, String> {
+        Ok(self.read_lines(images)?.into_iter().map(|text| TextResult { text, score: None, regions: vec![] }).collect())
     }
 }
 type OcrCache = HashMap<(usize, bool, u32), Result<TextResult, String>>;
@@ -211,6 +219,8 @@ pub struct Pipeline {
     history: HashMap<String, History>,
     frame_id: u64,
     revision: String,
+    /// Line-OCR results computed up front in one batched backend call, keyed by node id.
+    prefetched: HashMap<String, TextResult>,
 }
 
 pub fn profile_from_json(text: &str) -> Result<Profile, String> {
@@ -221,7 +231,7 @@ pub fn profile_from_json(text: &str) -> Result<Profile, String> {
 impl Pipeline {
     pub fn new(profile: Profile, resources: Resources) -> Result<Self, String> {
         let mut pipeline = Self { profile: profile.clone(), order: vec![], resources, templates: BTreeMap::new(),
-            regexes: HashMap::new(), history: HashMap::new(), frame_id: 0, revision: String::new() };
+            regexes: HashMap::new(), history: HashMap::new(), frame_id: 0, revision: String::new(), prefetched: HashMap::new() };
         pipeline.set_profile(profile)?; Ok(pipeline)
     }
     pub fn profile(&self) -> &Profile { &self.profile }
@@ -264,6 +274,7 @@ impl Pipeline {
         let mut traces = vec![];
         let mut ocr_cache = OcrCache::new();
         let mut pixel_budget = 64_000_000u64;
+        self.prefetch_lines(frame);
         for index in self.order.clone() {
             let node = self.profile.nodes[index].clone();
             let ids = if node.inputs.is_empty() { vec!["$frame".into()] } else { node.inputs.clone() };
@@ -288,6 +299,32 @@ impl Pipeline {
         }).collect();
         Report { schema_version: 1, profile_id: self.profile.id.clone(), frame_id: self.frame_id, timestamp_ms,
             profile_revision: self.revision.clone(), frame_size: [frame.width(), frame.height()], fields, stages: traces }
+    }
+
+    /// Batch every unconditional `ocr(line)` whose input is a fixed crop of the frame into a
+    /// single recognition call. Results are consumed by the normal OCR stage, so traces,
+    /// parsing and confirmation behave exactly as without batching.
+    fn prefetch_lines(&mut self, frame: &DynamicImage) {
+        self.prefetched.clear();
+        let Some(backend) = self.resources.ocr.clone() else { return };
+        let ids: HashMap<&str, &Node> = self.profile.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
+        let mut keys = vec![]; let mut crops = vec![];
+        for node in &self.profile.nodes {
+            let Operation::Ocr { mode: OcrMode::Line, upscale } = &node.op else { continue };
+            if node.when.is_some() || node.inputs.len() != 1 { continue; }
+            let Some(source) = ids.get(node.inputs[0].as_str()) else { continue };
+            let Operation::Crop { region, anchor_input: false } = &source.op else { continue };
+            if source.when.is_some() || !(source.inputs.is_empty() || source.inputs == ["$frame"]) { continue; }
+            let Ok(b) = region_bounds(region, frame.width(), frame.height()) else { continue };
+            if b.w as u64 * b.h as u64 * (*upscale as u64).pow(2) > 16_000_000 { continue; }
+            let crop = frame.crop_imm(b.x, b.y, b.w, b.h);
+            let crop = if *upscale > 1 { crop.resize_exact(b.w * upscale, b.h * upscale, FilterType::CatmullRom) } else { crop };
+            keys.push(node.id.clone()); crops.push(crop);
+        }
+        if keys.len() < 2 { return; }
+        if let Ok(results) = backend.recognize_lines(&crops) {
+            if results.len() == keys.len() { self.prefetched = keys.into_iter().zip(results).collect(); }
+        }
     }
 
     fn execute(&mut self, node: &Node, inputs: &[Packet], context: &FrameContext<'_>,
@@ -339,7 +376,10 @@ impl Pipeline {
                 let reader = self.resources.ocr.as_ref().ok_or("OCR backend is not loaded")?;
                 let line = matches!(mode, OcrMode::Line);
                 let key = (Arc::as_ptr(image) as usize, line, *upscale);
-                let result = cache.entry(key).or_insert_with(|| reader.recognize(image, *mode, *upscale)).clone()?;
+                let result = match self.prefetched.remove(&node.id) {
+                    Some(batched) => batched,
+                    None => cache.entry(key).or_insert_with(|| reader.recognize(image, *mode, *upscale)).clone()?,
+                };
                 let text: String = result.text.chars().take(8192).collect();
                 if text.trim().is_empty() { return Ok((Status::Missing, Packet::default())); }
                 out.value = Some(Value::String(text)); out.score = result.score.filter(|s| s.is_finite());

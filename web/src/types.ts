@@ -1,4 +1,6 @@
 export type Priority = 'Low' | 'Normal' | 'High';
+/** Parallel line-recognition pool status, reported with each analysis result. */
+export interface PoolStatus { state: string; active: boolean; avg_ms: number | null; fallbacks: number }
 export interface Cue { key: string; text: string; priority: Priority; cooldown_secs: number; timer_spawn_ms?:number }
 export interface Point { x: number; y: number }
 export interface LaneState { ally_troopers: number; enemy_troopers: number; ally_progress?: number | null; enemy_progress?: number | null; push?: number | null }
@@ -42,6 +44,6 @@ export interface Knowledge { id: string; title: string; category: string; body: 
 export interface GameItem { class_name: string; name: string; cost: number; tier: number }
 export type WorkerReply = { type: 'progress'; message: string; fraction: number }
   | { type: 'ready'; version: string }
-  | { type: 'result'; id: number; generation: number; analysis: Analysis; elapsed: number }
+  | { type: 'result'; id: number; generation: number; analysis: Analysis; elapsed: number; pool?: PoolStatus }
   | { type: 'error'; message: string; id?: number };
 export type ProfileReply = { type: 'profile_ready'; requestId: number } | { type: 'profile_error'; requestId: number; message: string };

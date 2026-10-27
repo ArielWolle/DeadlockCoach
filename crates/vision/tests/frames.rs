@@ -18,7 +18,10 @@ fn scan_confirmed(s: &mut Scanner, prefix: &str) -> coach_core::GameSnapshot {
 
 #[test]
 fn reads_real_frames() {
-    let b = scan_confirmed(&mut scanner(), "00059");
+    // Team totals alternate ally/enemy per frame and each needs a confirming read: 4 frames.
+    let mut s = scanner(); let f = frame("00059");
+    for _ in 0..3 { s.scan_at(&f, 0); }
+    let b = s.scan_at(&f, 0);
     assert_eq!(b.game_clock_secs, Some(313));
     assert_eq!(b.souls, Some(1732));
     assert_eq!(b.ally_networth, Some(21000));

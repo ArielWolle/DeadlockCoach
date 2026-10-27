@@ -31,6 +31,27 @@ pub struct Scanner {
     vitals: crate::vitals::Tracker,
     regions:Vec<coach_perception::RegionObservation>,
     team_status:Vec<coach_core::HeroStatus>,
+    /// Refresh intervals for slow fields (team banners, earned souls, match id).
+    cadence: coach_perception::track::Cadence,
+    /// Damage panel read once per death.
+    death_cause: Option<Option<String>>,
+    /// Exact scoreboard name rectangles per slot, acquired by the detector once per match.
+    name_rects: Vec<Option<coach_perception::Bounds>>,
+    /// Match clock: detector-anchored, wall-time extrapolated, cheaply confirmed.
+    clock_value: coach_perception::track::Extrapolated,
+    /// Per-phase timing of the most recent scan.
+    pub laps: coach_perception::track::Laps,
+    /// Independent clock evidence for verification only (e.g. a glyph-located read from the
+    /// automatic scanner); never used directly as the clock value. Consumed by the next scan.
+    pub clock_hint: Option<u32>,
+    /// Set when the fixed clock box misread against the glyph verifier in this context.
+    fixed_clock_distrusted: bool,
+    status_rr: coach_perception::track::RoundRobin,
+    worth_rr: coach_perception::track::RoundRobin,
+    /// Whether the previous frame showed the in-match HUD (skip pre-game probe lines).
+    seen_hud: bool,
+    was_dead: bool,
+    totals_flip: bool,
 }
 
 /// Team totals only grow (mostly), and not by leaps. A value outside that band is accepted
@@ -102,12 +123,26 @@ impl Scanner {
             vitals: crate::vitals::Tracker::default(),
             regions:vec![],
             team_status:vec![],
+            cadence: Default::default(),
+            death_cause: None,
+            name_rects: vec![None; 12],
+            clock_value: Default::default(),
+            laps: Default::default(),
+            clock_hint: None,
+            fixed_clock_distrusted: false,
+            status_rr: Default::default(),
+            worth_rr: Default::default(),
+            seen_hud: false,
+            was_dead: false,
+            totals_flip: false,
         }
     }
 
     /// Reset per-match memory (call when the clock goes back to the start).
     pub fn reset(&mut self) {
         self.tracker = parse::Tracker::default();
+        self.fixed_clock_distrusted = false;
+        self.clock_hint = None;
         self.sums = vec![HashMap::new(); 12];
         self.frames = 0;
         self.last_totals = (None, None);
@@ -117,6 +152,10 @@ impl Scanner {
         self.map_tracker = crate::minimap::Tracker::default();
         self.vitals = crate::vitals::Tracker::default();
         self.team_status.clear();
+        self.cadence.reset();
+        self.death_cause = None;
+        self.name_rects = vec![None; 12];
+        self.clock_value.reset();
     }
 
     fn text(&self, img: &image::DynamicImage, r: crate::Region) -> Option<String> {
@@ -195,20 +234,63 @@ impl Scanner {
     /// Pixel entry point shared with WebAssembly. Canvas supplies RGBA directly, so no
     /// lossy JPEG roundtrip is required. Main HUD stays at calibrated 16:9 coordinates.
     pub fn scan_image(&mut self, img: &image::DynamicImage, minimap: Option<&image::RgbImage>, now_ms: u64) -> GameSnapshot {
-        self.scan_inner(img,minimap,now_ms,None)
+        self.scan_inner(img,minimap,now_ms,(None,None))
     }
-    pub fn scan_located(&mut self,img:&image::DynamicImage,minimap:Option<&image::RgbImage>,now_ms:u64,clock:u32,currency:u32)->GameSnapshot{
-        self.scan_inner(img,minimap,now_ms,Some((clock,currency)))
+    pub fn scan_located(&mut self,img:&image::DynamicImage,minimap:Option<&image::RgbImage>,now_ms:u64,clock:Option<u32>,currency:Option<u32>)->GameSnapshot{
+        self.scan_inner(img,minimap,now_ms,(clock,currency))
     }
-    fn scan_inner(&mut self,img:&image::DynamicImage,minimap:Option<&image::RgbImage>,now_ms:u64,located:Option<(u32,u32)>)->GameSnapshot{
+    fn scan_inner(&mut self,img:&image::DynamicImage,minimap:Option<&image::RgbImage>,now_ms:u64,located:(Option<u32>,Option<u32>))->GameSnapshot{
         self.regions.clear();
         use crate::screen::{self, Screen};
-        let (scr, raw_clock) = screen::classify_hinted(&self.ocr, &img, &self.hero_names,located.map(|p|p.0));
-        // Only HUD screens yield data; menus, shop and loading yield an empty snapshot.
-        if !scr.has_hud() { return GameSnapshot { screen: Some(format!("{scr:?}")), ..Default::default() }; }
+        use coach_perception::track::LineBatch;
+        // One batched recognition call reads every tracked single-line field for this frame.
+        // Text *detection* runs only for acquisition, throttled, or for rare fields below.
+        let fallback;
+        let map_crop = match minimap { Some(m) => m, None => {
+            fallback = crate::minimap::crop_from_frame(img); &fallback
+        }};
+        let mut laps = coach_perception::track::Laps::default();
+        let mut map = self.map_analyzer.analyze(map_crop);
+        laps.lap("minimap");
+        let mut batch = LineBatch::default();
+        let rects: Option<Vec<coach_perception::Bounds>> = screen::PROBE_SLOTS.iter().map(|i| self.name_rects.get(*i).copied().flatten()).collect();
+        // Line budget: every recognized line costs ~width-proportional model time, so only
+        // lines that can change a decision this frame are included.
+        let expected = self.clock_value.expected(now_ms);
+        let hint = self.clock_hint.take();
+        let probe = screen::add_probe(&mut batch, img, rects.as_deref(), !self.seen_hud, self.clock_value.value(now_ms).is_some());
+        // Respawn digits only matter while dead; Souls only when no tracked value is supplied.
+        let respawn_n = self.was_dead.then(|| batch.add(hud::crop(img, screen::respawn_number())));
+        let souls_line = located.1.is_none().then(|| batch.add(img.crop_imm(70, 742, 130, 30)));
+        // Team totals alternate ally / enemy per frame.
+        self.totals_flip = !self.totals_flip;
+        let total_line = batch.add(hud::crop(img, if self.totals_flip { hud::ALLY_TOTAL } else { hud::ENEMY_TOTAL }));
+        let vitals = self.vitals.tracked_crops(img).map(|c| batch.add_all(c));
+        let urn_line = map.urn_pos.is_some().then(|| batch.add(hud::crop(img, crate::Region { x: 710.0 / 1600.0, y: 585.0 / 900.0, w: 190.0 / 1600.0, h: 32.0 / 900.0 })));
+        // Team banners and earned-souls labels rotate: 4 + 3 of 12 per frame.
+        let status_slots = self.status_rr.take(12, 3);
+        let status = batch.add_all(crate::team::status_crops_for(img, &status_slots));
+        let worth_slots = self.worth_rr.take(12, 2);
+        let worth = batch.add_all(crate::team::networth_crops_for(img, &worth_slots));
+        let batched = batch.len();
+        let lines = batch.run(|crops| self.ocr.read_lines(crops));
+        laps.lap(&format!("line batch ({batched} lines)"));
+        let text = |i: usize| lines.get(i).map(String::as_str).unwrap_or("");
 
-        // New match? Reset all per-match memory.
-        let mid = self.text(&img, screen::match_id_region()).and_then(|s| parse::parse_match_id(&s));
+        // Detector name check runs only when the pixel panel cue fires, plus a slow 15 s safety
+        // net for unfamiliar themes. Cached exact name rectangles make later checks line-only.
+        let (ocr, heroes, cadence) = (&self.ocr, &self.hero_names, &mut self.cadence);
+        let (scr, raw_clock) = screen::interpret_probe(&lines, &probe, heroes, located.0, expected,
+            || (crate::scoreboard::panel_cue(img) || cadence.due("scoreboard_probe", now_ms, 15_000))
+                && crate::scoreboard::looks_like_scoreboard(ocr, img, heroes));
+        // Only HUD screens yield data; menus, shop and loading yield an empty snapshot.
+        laps.lap("screen + scoreboard check");
+        self.seen_hud = scr.has_hud();
+        self.was_dead = scr == Screen::Dead;
+        if !scr.has_hud() { self.laps = laps; return GameSnapshot { screen: Some(format!("{scr:?}")), ..Default::default() }; }
+
+        // New match? Reset all per-match memory. The id needs detector OCR, so it is sampled.
+        let mid = if self.cadence.due("match_id", now_ms, 60_000) { self.text(&img, screen::match_id_region()).and_then(|s| parse::parse_match_id(&s)) } else { None };
         // OCR of the id is noisy, so a different id must be seen twice in a row to count.
         match (self.match_id, mid) {
             (None, Some(n)) => self.match_id = Some(n),
@@ -223,22 +305,44 @@ impl Scanner {
             _ => {}
         }
 
+        laps.lap("match id");
         let mut snap = GameSnapshot { match_id: self.match_id, screen: Some(format!("{scr:?}")), ..Default::default() };
-        snap.game_clock_secs = self.tracker.accept_clock(raw_clock, now_ms);
+        // The clock advances with wall time: cheap batched reads only confirm the extrapolation;
+        // the reliable detector read anchors it and re-verifies on repeated disagreement.
+        if self.clock_value.observe(raw_clock, now_ms) {
+            // Fast path: one detector pass on the fixed clock box, accepted when it agrees with
+            // *independent* evidence: the verified extrapolation, a supplied located clock, or a
+            // glyph-located hint. Cheap fixed-box reads are not independent: they share any pixel
+            // offset (a 1 px shift read 5:13 as 6:13 in every fixed box). Otherwise locate the
+            // exact glyphs and read glyph-scaled context with a vote.
+            let fixed = self.ocr.read(&hud::crop(img, hud::CLOCK)).ok().and_then(|s| parse::parse_clock(&s)).filter(|v| *v <= 14400);
+            let near = |a: Option<u32>| matches!((fixed, a), (Some(f), Some(e)) if f.abs_diff(e) <= 1);
+            let agrees = near(expected) || near(located.0) || near(hint);
+            // The glyph search (~3 s in WASM) runs only when the fixed read is suspect: first anchor,
+            // no read, or a whole-minute-only difference (the measured misread pattern).
+            let minute_only = [expected, raw_clock, located.0, hint].into_iter().flatten()
+                .any(|e| fixed.is_some_and(|f| f.abs_diff(e) >= 59 && matches!((f as i64 - e as i64).rem_euclid(60), 0 | 1 | 59)));
+            // Once the fixed box has disagreed with the glyph verifier in this context, it stays
+            // distrusted until reset (the context's pixel offset does not change).
+            let suspect = !agrees && (self.fixed_clock_distrusted || expected.is_none() || fixed.is_none() || minute_only);
+            let verified = if !suspect { fixed } else {
+                let (fw, fh) = (img.width() as f32, img.height() as f32);
+                let area = coach_perception::Bounds { x: (0.5 * fw) as u32, y: ((hud::CLOCK.y + hud::CLOCK.h / 3.0) * fh) as u32, w: (hud::CLOCK.w * fw) as u32, h: (hud::CLOCK.h * fh) as u32 };
+                let glyph = crate::localize::locate_clock_limited(img, &self.ocr, Some(area), 1).map(|(v, _)| v).filter(|v| *v <= 14400);
+                if glyph.is_some() && fixed.is_some() && glyph != fixed { self.fixed_clock_distrusted = true; }
+                glyph.or(fixed)
+            };
+            self.clock_value.verify(verified.or(located.0), now_ms);
+        }
+        snap.game_clock_secs = self.clock_value.value(now_ms);
+        let raw_clock = snap.game_clock_secs.or(raw_clock);
+        laps.lap("clock verify");
 
-        let fallback;
-        let map_crop = match minimap { Some(m) => m, None => {
-            fallback = crate::minimap::crop_from_frame(img); &fallback
-        }};
-        let mut map = self.map_analyzer.analyze(map_crop);
         // Personal carry has a literal HUD instruction. Unlike proximity to a hero ring,
         // this can establish that YOU carry the urn, except while spectating.
-        if scr != Screen::Dead && raw_clock.unwrap_or(0) >= 600 && map.urn_pos.is_some() {
-            let instruction = self.text(&img, crate::Region {
-                x: 710.0 / 1600.0, y: 585.0 / 900.0,
-                w: 190.0 / 1600.0, h: 32.0 / 900.0,
-            }).unwrap_or_default().to_ascii_uppercase();
-            if instruction.contains("DELIVER") && instruction.contains("URN") {
+        if let Some(i) = urn_line {
+            let instruction = text(i).to_ascii_uppercase();
+            if scr != Screen::Dead && raw_clock.unwrap_or(0) >= 600 && instruction.contains("DELIVER") && instruction.contains("URN") {
                 map.urn = Some(coach_core::UrnState::CarriedByYou);
             }
         }
@@ -250,18 +354,30 @@ impl Scanner {
             // While dead the HUD shows the spectated player, so personal values are not ours.
             snap.dead = true;
             snap.souls = self.tracker.last_souls();
-            snap.respawn_secs = self.ocr.read(&hud::crop(&img, crate::Region {
-                x: 675.0 / 1600.0, y: 665.0 / 900.0, w: 250.0 / 1600.0, h: 40.0 / 900.0 })).ok().and_then(|s| parse::parse_respawn(&s));
-            snap.death_cause = self.ocr.read(&hud::crop(&img, crate::Region {
-                x: 1352.0 / 1600.0, y: 276.0 / 900.0, w: 200.0 / 1600.0, h: 22.0 / 900.0 })).ok().and_then(|s| clean_cause(&s));
+            snap.respawn_secs = match respawn_n {
+                Some(i) => parse::parse_respawn(text(i)),
+                None => self.ocr.read_lines(&[hud::crop(img, screen::respawn_number())]).ok().and_then(|l| l.first().and_then(|s| parse::parse_respawn(s))),
+            };
+            // The damage panel is static during one death: read it (detector OCR) once.
+            if self.death_cause.is_none() {
+                self.death_cause = Some(self.ocr.read(&hud::crop(&img, crate::Region {
+                    x: 1352.0 / 1600.0, y: 276.0 / 900.0, w: 200.0 / 1600.0, h: 22.0 / 900.0 })).ok().and_then(|s| clean_cause(&s)));
+            }
+            snap.death_cause = self.death_cause.clone().flatten();
         } else {
+            self.death_cause = None;
             if scr == Screen::Gameplay {
-                if let Some(v) = self.vitals.read(&self.ocr, img, now_ms) {
+                let mut reading = vitals.clone().and_then(|r| self.vitals.accept_lines(text(r.start), text(r.start + 1), now_ms));
+                // Lost or suspicious tracking re-acquires (detector) right away, throttled.
+                if reading.is_none() && !self.vitals.is_tracking() && self.vitals.may_acquire(now_ms) {
+                    reading = self.vitals.read(&self.ocr, img, now_ms);
+                }
+                if let Some(v) = reading {
                     snap.hp=Some(v.hp); snap.max_hp=Some(v.max); snap.health_observations=v.observations; snap.health_delta_ratio=v.delta;
                     self.regions=v.regions;
                 }
             }
-            let souls = located.map(|p|p.1).or_else(||self.text(&img, hud::SOULS).and_then(|s| parse::parse_souls(&s)));
+            let souls = located.1.or_else(|| souls_line.and_then(|i| parse::parse_souls(text(i))));
             snap.souls = self.tracker.accept_souls(souls).or(self.tracker.last_souls());
             // Items: non-flat slots matched against shop art with a confidence gate.
             for row in 0..2 {
@@ -275,10 +391,12 @@ impl Scanner {
             }
         }
 
+        laps.lap("vitals + souls + items");
         if scr == Screen::Dead { self.vitals=crate::vitals::Tracker::default(); }
 
         // Heroes: accumulate card scores across frames, assign uniquely to the 12 slots.
-        if raw_clock.is_some() {
+        // Identities change rarely, so portraits are sampled every 2 s (scores keep top-K).
+        if raw_clock.is_some() && self.cadence.due("portraits", now_ms, 2000) {
             self.frames += 1;
             for (i, cx) in hud::ALLY_CENTERS.iter().chain(hud::ENEMY_CENTERS.iter()).enumerate() {
                 let c = hud::crop(&img, hud::portrait(*cx));
@@ -293,10 +411,12 @@ impl Scanner {
             }
         }
         let mut assign = self.assign_heroes();
+        laps.lap("portraits");
 
         // Scoreboard: names are far more reliable than portraits, so they win.
         if scr == Screen::Scoreboard {
-            let rows = crate::scoreboard::read(&self.ocr, &self.items, &self.hero_names, &img);
+            let (rows, found) = crate::scoreboard::read_with_rects(&self.ocr, &self.items, &self.hero_names, &img);
+            for (slot, rect) in self.name_rects.iter_mut().zip(found) { if rect.is_some() { *slot = rect; } }
             for (i, r) in rows.iter().enumerate() { if r.hero.is_some() { assign[i] = r.hero.clone(); } }
             self.board_history.push(rows.clone());
             if self.board_history.len() > 5 { self.board_history.remove(0); }
@@ -309,9 +429,9 @@ impl Scanner {
         snap.ally_heroes = assign[..6].iter().flatten().cloned().collect();
         snap.enemy_heroes = assign[6..].iter().flatten().cloned().collect();
         if scr==Screen::Gameplay {
-            self.team_status=crate::team::health(&self.ocr,img,&self.team_status);
+            self.team_status=crate::team::apply_status_slots(img,&lines[status.clone()],&status_slots,&self.team_status);
             for(i,status)in self.team_status.iter_mut().enumerate(){status.hero=assign[i].clone();}
-            crate::team::networth(&self.ocr,img,raw_clock.unwrap_or(0),&mut self.team_status);
+            crate::team::apply_networth_slots(&lines[worth.clone()],&worth_slots,raw_clock.unwrap_or(0),&mut self.team_status);
             snap.hero_status=self.team_status.clone();
             crate::team::positions(&mut snap,map_crop,&self.heroes);
             self.team_status=snap.hero_status.clone();
@@ -323,12 +443,17 @@ impl Scanner {
 
         // These fields are tightly calibrated single lines. Direct recognition avoids
         // two full detection-model passes; multiline/uncertain fields keep full detection.
-        let a = self.ocr.read_line(&hud::crop(img, hud::ALLY_TOTAL)).ok()
-            .and_then(|s| hud::pick_total(&hud::team_total_candidates(&s), self.last_totals.0));
-        let e = self.ocr.read_line(&hud::crop(img, hud::ENEMY_TOTAL)).ok()
-            .and_then(|s| hud::pick_total(&hud::team_total_candidates(&s), self.last_totals.1));
-        snap.ally_networth = plausible(&mut self.last_totals.0, &mut self.pending_totals.0, a);
-        snap.enemy_networth = plausible(&mut self.last_totals.1, &mut self.pending_totals.1, e);
+        if self.totals_flip {
+            let a = hud::pick_total(&hud::team_total_candidates(text(total_line)), self.last_totals.0);
+            plausible(&mut self.last_totals.0, &mut self.pending_totals.0, a);
+        } else {
+            let e = hud::pick_total(&hud::team_total_candidates(text(total_line)), self.last_totals.1);
+            plausible(&mut self.last_totals.1, &mut self.pending_totals.1, e);
+        }
+        snap.ally_networth = self.last_totals.0;
+        snap.enemy_networth = self.last_totals.1;
+        laps.lap("scoreboard + team");
+        self.laps = laps;
         snap
     }
 }

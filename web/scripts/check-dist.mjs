@@ -33,19 +33,29 @@ self.addEventListener('activate', event => event.waitUntil((async () => {
   for (const key of await caches.keys()) if (key.startsWith('deadlock-shell-') && key !== CACHE) await caches.delete(key);
   await self.clients.claim();
 })()));
+// Static hosts such as GitHub Pages cannot set response headers. Adding COOP/COEP here makes
+// the app cross-origin isolated, enabling SharedArrayBuffer for the parallel recognizer pool.
+// Every handled response is same-origin, so require-corp blocks nothing the app uses.
+function isolate(response) {
+  if (!response || response.type === 'opaque' || response.status === 0) return response;
+  const headers = new Headers(response.headers);
+  headers.set('Cross-Origin-Opener-Policy', 'same-origin');
+  headers.set('Cross-Origin-Embedder-Policy', 'require-corp');
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+}
 self.addEventListener('fetch', event => {
   const url = new URL(event.request.url);
   if (event.request.method !== 'GET' || url.origin !== self.location.origin || !url.href.startsWith(self.registration.scope)) return;
   // Integrity recovery must reach the network, even when an unversioned shell entry exists.
-  if (event.request.cache === 'reload') { event.respondWith(fetch(event.request)); return; }
+  if (event.request.cache === 'reload') { event.respondWith(fetch(event.request).then(isolate)); return; }
   if (event.request.mode === 'navigate') {
-    event.respondWith(fetch(event.request).catch(() => caches.open(CACHE).then(c => c.match(new URL('index.html', self.registration.scope).href))));
+    event.respondWith(fetch(event.request).catch(() => caches.open(CACHE).then(c => c.match(new URL('index.html', self.registration.scope).href))).then(isolate));
   } else if (url.pathname.endsWith('/assets/manifest.json')) {
-    event.respondWith(fetch(event.request).then(response => { if (response.ok) { const copy = response.clone(); event.waitUntil(caches.open(CACHE).then(c => c.put(event.request, copy))); } return response; }).catch(() => caches.open(CACHE).then(c => c.match(event.request, { ignoreVary: true }))));
+    event.respondWith(fetch(event.request).then(response => { if (response.ok) { const copy = response.clone(); event.waitUntil(caches.open(CACHE).then(c => c.put(event.request, copy))); } return response; }).catch(() => caches.open(CACHE).then(c => c.match(event.request, { ignoreVary: true }))).then(isolate));
   } else {
     // Only same-origin static assets are cached. Vite's preview server adds Vary: Origin,
     // which otherwise makes the module script's CORS request miss the precached response.
-    event.respondWith(caches.open(CACHE).then(c => c.match(event.request, { ignoreVary: true })).then(cached => cached || fetch(event.request)));
+    event.respondWith(caches.open(CACHE).then(c => c.match(event.request, { ignoreVary: true })).then(cached => cached || fetch(event.request)).then(isolate));
   }
 });
 `);

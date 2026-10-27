@@ -7,8 +7,13 @@ pub struct TemplateLocator {values:Vec<f32>,mask:Vec<bool>,aspect:f32}
 #[derive(Debug,Clone,Copy)]
 pub struct Located {pub bounds:Bounds,pub score:f32}
 impl TemplateLocator {
+    /// Score one candidate box. Only that box is converted to grayscale (not the whole frame),
+    /// which makes per-frame tracking verification cheap.
     pub fn similarity(&self,frame:&DynamicImage,bounds:Bounds)->f32{
-        self.similarity_gray(&frame.to_luma8(),bounds)
+        if bounds.w==0||bounds.h==0||bounds.x.checked_add(bounds.w).is_none_or(|x|x>frame.width())
+            ||bounds.y.checked_add(bounds.h).is_none_or(|y|y>frame.height()){return 0.;}
+        let crop=frame.crop_imm(bounds.x,bounds.y,bounds.w,bounds.h).to_luma8();
+        self.score(&crop,0.,0.,bounds.w as f32)
     }
     pub fn similarity_gray(&self,frame:&GrayImage,bounds:Bounds)->f32{
         if bounds.w==0||bounds.h==0||bounds.x.checked_add(bounds.w).is_none_or(|x|x>frame.width())

@@ -118,6 +118,10 @@ impl Tracker {
     }
 
     pub fn last_souls(&self) -> Option<u32> { self.souls }
+    /// Clock expected at `now_ms` from the last accepted reading (wall-time extrapolation).
+    pub fn expected_clock(&self, now_ms: u64) -> Option<u32> {
+        self.clock.map(|(c, t)| c + (now_ms.saturating_sub(t) / 1000) as u32)
+    }
 }
 
 #[cfg(test)]

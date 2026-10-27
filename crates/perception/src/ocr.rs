@@ -3,6 +3,13 @@ use image::{imageops::FilterType, DynamicImage};
 use ocrs::{ImageSource, OcrEngine, OcrEngineParams};
 use std::path::Path;
 
+/// Optional host-provided batched line recognizer (see [`set_line_hook`]).
+pub type LineHook = Box<dyn Fn(&[DynamicImage]) -> Option<Vec<String>>>;
+thread_local! { static LINE_HOOK: std::cell::RefCell<Option<LineHook>> = const { std::cell::RefCell::new(None) }; }
+/// Register (or clear) a parallel line recognizer for this thread. Every `read_lines` call
+/// tries it first; results must be identical to local recognition (same model, same crops).
+pub fn set_line_hook(hook: Option<LineHook>) { LINE_HOOK.with(|h| *h.borrow_mut() = hook); }
+
 #[derive(Clone)]
 pub struct Reader {
     engine: std::sync::Arc<OcrEngine>,
@@ -90,6 +97,46 @@ impl Reader {
         let rect = RotatedRect::from_rect(Rect::from_tlhw(0.0, 0.0, rgb.height() as f32, rgb.width() as f32));
         let lines = self.engine.recognize_text(&input, &[vec![rect]]).map_err(|e| e.to_string())?;
         Ok(lines.into_iter().flatten().map(|line| line.to_string()).collect::<Vec<_>>().join("\n"))
+    }
+
+    /// Recognize many already-located single-line crops in ONE model call.
+    /// Crops are stacked on one canvas, so text detection never runs and the
+    /// recognizer batches lines internally. Output order matches input order.
+    pub fn read_lines(&self, crops: &[DynamicImage]) -> Result<Vec<String>, String> {
+        if crops.is_empty() { return Ok(vec![]); }
+        // A host may register a parallel recognizer (e.g. a browser worker pool). It must
+        // return exactly one line per crop, or `None` to fall back to local recognition.
+        if let Some(lines) = LINE_HOOK.with(|h| h.borrow().as_ref().and_then(|f| f(crops))).filter(|l| l.len() == crops.len()) {
+            return Ok(lines);
+        }
+        self.read_lines_local(crops)
+    }
+
+    /// Batched recognition on this thread (used directly by parallel recognizer workers).
+    pub fn read_lines_local(&self, crops: &[DynamicImage]) -> Result<Vec<String>, String> {
+        use rten_imageproc::{Rect, RotatedRect};
+        if crops.is_empty() { return Ok(vec![]); }
+        const GAP: u32 = 6;
+        let scale = |c: &DynamicImage| (40 / c.height().max(1)).clamp(1, 4);
+        let width = crops.iter().map(|c| c.width() * scale(c)).max().unwrap_or(1).max(1);
+        let height: u32 = crops.iter().map(|c| c.height().max(1) * scale(c) + GAP).sum();
+        let mut canvas = image::RgbImage::new(width, height.max(1));
+        let mut rects = Vec::with_capacity(crops.len());
+        let mut y = 0u32;
+        for crop in crops {
+            // Small HUD glyphs recognize far better after a smooth upscale to a usable height
+            // (measured: a 45 px italic "1492" misread at 1x, correct at 3x). The recognizer
+            // normalizes line height itself, so this does not grow inference cost.
+            let k = (40 / crop.height().max(1)).clamp(1, 4);
+            let rgb = if k > 1 { crop.resize_exact(crop.width() * k, crop.height() * k, FilterType::CatmullRom).to_rgb8() } else { crop.to_rgb8() };
+            image::imageops::replace(&mut canvas, &rgb, 0, y as i64);
+            rects.push(vec![RotatedRect::from_rect(Rect::from_tlhw(y as f32, 0.0, rgb.height().max(1) as f32, rgb.width().max(1) as f32))]);
+            y += rgb.height().max(1) + GAP;
+        }
+        let source = ImageSource::from_bytes(canvas.as_raw(), canvas.dimensions()).map_err(|e| e.to_string())?;
+        let input = self.engine.prepare_input(source).map_err(|e| e.to_string())?;
+        let lines = self.engine.recognize_text(&input, &rects).map_err(|e| e.to_string())?;
+        Ok(lines.into_iter().map(|l| l.map(|l| l.to_string()).unwrap_or_default()).collect())
     }
 
     /// Like `read` with an explicit upscale factor (tiny text benefits from more).

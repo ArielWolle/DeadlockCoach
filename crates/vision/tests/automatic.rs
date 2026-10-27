@@ -7,8 +7,10 @@ fn reference()->DynamicImage{image::open(std::path::Path::new(env!("CARGO_MANIFE
 fn full_window_discovery_does_not_require_video_dimensions_or_offsets(){
     let source=reference();let scaled=source.resize_exact(2000,1125,FilterType::Triangle);
     let mut window=RgbaImage::from_pixel(2500,1500,Rgba([25,25,25,255]));image::imageops::overlay(&mut window,&scaled.to_rgba8(),220,120);
-    let window=DynamicImage::ImageRgba8(window);let mut auto=scanner();auto.scan(&window,0);let s=auto.scan(&window,5000);
-    assert_eq!(s.game_clock_secs,Some(313));assert_eq!(s.souls,Some(1732));
+    // A still frame at the live one-second cadence; the clock is wall-time extrapolated, so
+    // a still image sampled 5 s later would correctly read as 318 rather than 313.
+    let window=DynamicImage::ImageRgba8(window);let mut auto=scanner();auto.scan(&window,0);let s=auto.scan(&window,1000);
+    assert!(matches!(s.game_clock_secs,Some(313|314)),"{:?}",s.game_clock_secs);assert_eq!(s.souls,Some(1732));
     let regions=auto.regions();let map=regions.iter().find(|r|r.id=="minimap").unwrap();
     assert!(map.bounds.x.abs_diff(1789)<20,"{:?}",map);assert!(map.bounds.y.abs_diff(776)<20,"{:?}",map);
     let money=regions.iter().find(|r|r.id=="souls").unwrap();assert!(money.bounds.x>280&&money.bounds.x<400);
@@ -27,10 +29,30 @@ fn a_blank_window_is_unknown_and_never_requests_manual_calibration(){
     let s=auto.scan(&frame,0);assert_eq!(s.screen.as_deref(),Some("Unknown"));assert!(s.game_clock_secs.is_none());assert!(auto.regions().is_empty());
 }
 #[test]
+fn letterboxed_native_pixels_are_analyzed_without_resampling_blur(){
+    // Native 1600x900 game pixels with black bars: the context must be cropped pixel-exact.
+    let mut framed=RgbaImage::from_pixel(1600,1000,Rgba([0,0,0,255]));image::imageops::overlay(&mut framed,&reference().to_rgba8(),0,50);
+    let framed=DynamicImage::ImageRgba8(framed);let mut auto=scanner();auto.scan(&framed,0);let s=auto.scan(&framed,1000);
+    assert!(matches!(s.game_clock_secs,Some(313|314)),"{:?}",s.game_clock_secs);assert_eq!(s.souls,Some(1732));
+}
+#[test]
+fn soft_video_minute_misreads_never_move_the_verified_clock(){
+    // A sharp frame anchors the clock (detector-verified). Then a softened video frame whose
+    // cheap line reads say 6:13 (measured) must not move the value between verifications.
+    let sharp=reference();
+    let soft=sharp.resize_exact(1280,720,FilterType::Triangle).resize_exact(1600,900,FilterType::Triangle);
+    let root=std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");let mut scanner=Scanner::load(&root).unwrap();
+    assert_eq!(scanner.scan_image(&sharp,None,0).game_clock_secs,Some(313));
+    for t in [500u64,1000,1500]{
+        let v=scanner.scan_image(&soft,None,t).game_clock_secs;
+        assert!(matches!(v,Some(313|314)),"t={t}: {v:?}");
+    }
+}
+#[test]
 fn moving_the_map_does_not_require_moving_currency_or_the_clock(){
     let source=reference();let map=source.crop_imm(1255,525,335,350).to_rgba8();let mut changed=source.to_rgba8();
     for y in 525..875{for x in 1255..1590{changed.put_pixel(x,y,Rgba([0,0,0,255]));}}
-    image::imageops::overlay(&mut changed,&map,930,300);let changed=DynamicImage::ImageRgba8(changed);let mut auto=scanner();auto.scan(&changed,0);let s=auto.scan(&changed,5000);
-    assert_eq!(s.game_clock_secs,Some(313));assert_eq!(s.souls,Some(1732));
+    image::imageops::overlay(&mut changed,&map,930,300);let changed=DynamicImage::ImageRgba8(changed);let mut auto=scanner();auto.scan(&changed,0);let s=auto.scan(&changed,1000);
+    assert!(matches!(s.game_clock_secs,Some(313|314)),"{:?}",s.game_clock_secs);assert_eq!(s.souls,Some(1732));
     let r=auto.regions().into_iter().find(|r|r.id=="minimap").unwrap();assert!(r.bounds.x.abs_diff(930)<10&&r.bounds.y.abs_diff(300)<10,"{r:?}");
 }
