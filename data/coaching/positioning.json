@@ -1,7 +1,8 @@
 {
   "schema_version": 1,
   "threshold_note": "Distances are minimap fractions (map width = 1). All thresholds are tunable coach heuristics, not sourced game rules. A hero that is not visible is missing, never assumed dead or far away.",
-  "thresholds": { "near_radius": 0.12, "fight_radius": 0.09, "watch_radius": 0.28, "closing_speed": 0.01, "missing_min_ms": 4000, "missing_max_ms": 30000, "help_max_distance": 0.45, "healthy": 0.6 },
+  "thresholds": { "near_radius": 0.12, "fight_radius": 0.09, "watch_radius": 0.28, "closing_speed": 0.01, "missing_min_ms": 4000, "missing_max_ms": 30000, "help_max_distance": 0.45, "healthy": 0.6, "low_enemy": 0.35, "low_ally": 0.35, "strength_margin": 1.2, "team_down": 2, "unseen_forward": 3, "forward_progress": 0.5 },
+  "health_note": "Top-bar health bars are not tied to specific minimap rings. Rings near you are some subset of the enemies with visible bars, so the coach uses the guaranteed range: worst case (healthiest) for danger, best case only when every candidate is low.",
   "cards": [
     { "id": "gank", "speech": "Gank warning: {count} closing on you {direction}. Fall back toward your guardian or a teammate.", "priority": "high", "cooldown_secs": 20,
       "rationale": "Enemies moving toward you from outside your fight are the visible start of a gank; without an advantage, reset.",
@@ -26,6 +27,23 @@
       "sources": [
         { "path": "strategy/laning-phase.md", "section": "## 7. When to rotate", "basis": "COMMUNITY", "excerpt": "neighbor lane winnable" },
         { "path": "strategy/common-mistakes.md", "section": "## 16. Fighting split / piecemeal", "basis": "COMMUNITY", "excerpt": "Fall back and regroup. Don't fight split." } ] },
+    { "id": "kill_window", "speech": "Kill window: {count} near you {is_are} below {pct}% health. Commit if no one else is coming.", "priority": "normal", "cooldown_secs": 25,
+      "rationale": "Every enemy that could be near you is low (from their top-bar health) while you are healthy: a pick creates a numbers advantage.",
+      "sources": [
+        { "path": "strategy/teamfighting.md", "section": "## 1. Wiki-grounded mechanics that shape fights", "basis": "WIKI", "excerpt": "Pick = killing a separated enemy / targeting low health or high threat to gain a numbers advantage." } ] },
+    { "id": "enemies_down", "speech": "{count} are dead{respawn}. Use the window with your team: push a lane or an objective.", "priority": "normal", "cooldown_secs": 45,
+      "rationale": "Greyed enemy portraits with respawn timers are a temporary numbers advantage to convert into objectives.",
+      "sources": [
+        { "path": "strategy/teamfighting.md", "section": "## 4. Engage / disengage", "basis": "COMMUNITY", "excerpt": "count survivors and take the highest-value safe action (objective, wave, reset) rather than chasing" } ] },
+    { "id": "allies_down", "speech": "{count} are dead{respawn}. Play safe near your guardian until they're back.", "priority": "normal", "cooldown_secs": 45,
+      "rationale": "With teammates respawning your side has no numbers advantage; avoid taking fights alone.",
+      "sources": [
+        { "path": "strategy/teamfighting.md", "section": "## 4. Engage / disengage", "basis": "COMMUNITY", "excerpt": "No advantage -> reset." } ] },
+    { "id": "unseen", "speech": "{count} haven't been seen for a while and you're pushed up. Expect a gank; stay near your wave.", "priority": "normal", "cooldown_secs": 40,
+      "rationale": "Enemies without a top-bar health bar have not been seen recently; pushing forward without that information invites a gank.",
+      "sources": [
+        { "path": "strategy/coach-cue-library.md", "section": "## Cue table", "basis": "WIKI", "excerpt": "An enemy marker not seen on minimap for 20s+ while pushing" },
+        { "path": "strategy/common-mistakes.md", "section": "## 22. Ignoring the minimap / missing alerts", "basis": "WIKI", "excerpt": "enemy markers disappear from the minimap while the player pushes forward" } ] },
     { "id": "join", "speech": "Your team has the numbers at {area}: {allies} against {enemies}. Join the fight if you can reach it.", "priority": "low", "cooldown_secs": 45,
       "rationale": "Joining a fight your team is winning converts the advantage; nearby enemies around you must be absent.",
       "sources": [

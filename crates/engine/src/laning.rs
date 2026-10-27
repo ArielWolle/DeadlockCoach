@@ -52,7 +52,7 @@ impl LaneCoach {
         if matches!(danger.id.as_str(),"gank"|"outnumbered") && d.action!=Action::BackOff {
             let mut hold=self.plan("hold",Action::HoldWave,s,Priority::High,d.evidence.clone(),d.missing.clone(),true);
             hold.text=danger.text.clone();hold.evidence.extend(danger.evidence);hold.speak=false;d=hold;
-        } else if danger.id=="missing" && aggressive {
+        } else if matches!(danger.id.as_str(),"missing"|"unseen"|"allies_down") && aggressive {
             d.evidence.extend(danger.evidence);d.speak=false;
         }
         Some(d)

@@ -49,7 +49,13 @@ impl Monitor {
         }
         let map=frame.crop_imm(c.map.x,c.map.y,c.map.w,c.map.h).to_rgb8();
         snapshot.minimap=Some(self.map.observe(crate::minimap::Analyzer::new().analyze(&map),now));
-        // Team health status comes from the latest full scan (seeded context).
+        // CRITICAL banners, identities and timers come from the latest full scan (seeded context);
+        // health bars / dead portraits are pixel reads refreshed every fast sample.
+        if snapshot.hero_status.len()==12{
+            if self.previous_team.len()==12{for(t,p) in snapshot.hero_status.iter_mut().zip(&self.previous_team){
+                t.health_ratio=p.health_ratio;t.health_observations=p.health_observations;t.respawn_secs=t.respawn_secs.or(p.respawn_secs);}}
+            crate::team::apply_bars(&game,&mut snapshot.hero_status);
+        }
         if let Some(library)=&self.library{crate::team::positions(&mut snapshot,&map,library);}else{for slot in &mut snapshot.hero_status{slot.position=None;slot.lane=None;slot.position_observations=0;}}
         self.previous_team=snapshot.hero_status.clone();
         Some(snapshot)

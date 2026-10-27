@@ -91,6 +91,14 @@ pub struct HeroStatus {
     pub ally:bool,pub slot:usize,pub hero:Option<String>,pub critical:Option<bool>,
     pub health_ratio:Option<f32>,pub networth:Option<u32>,pub networth_observations:u32,pub observations:u32,
     pub position:Option<Pt>,pub position_observations:u32,pub lane:Option<Lane>,
+    /// Whether the top-bar health bar is drawn. Enemy bars are only shown while your team has
+    /// recently seen that hero: `Some(false)` means "not seen in a while" (missing), not dead.
+    pub bar_visible:Option<bool>,
+    /// Consecutive frames with a consistent health-bar reading (`health_ratio`).
+    pub health_observations:u32,
+    /// Greyed portrait with a respawn timer.
+    pub dead:Option<bool>,
+    pub respawn_secs:Option<u32>,
 }
 
 /// Positions are normalised minimap coordinates, (0,0) top-left, (1,1) bottom-right.

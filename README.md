@@ -31,6 +31,8 @@ worker using the same Rust vision and rule engine as the native app.
 - Minimap hero tracking (ally/enemy portrait rings with last-seen positions and movement) driving
   positional calls: gank warnings, outnumbered, missing enemies, go in on a numbers advantage,
   and help or join nearby teammates. See [minimap detection](docs/minimap-implementation.md).
+- Top-bar team state for all twelve heroes: health bars, "not seen recently" (no bar), dead with
+  respawn timer. Feeds kill windows, real-vs-false outnumbers and team-wide windows while heroes are dead.
 - Fast perception: detect HUD text once, track exact boxes, and read all fields in one batched
   recognition call per frame, split across parallel workers when the page is cross-origin
   isolated. The first visit reloads once to enable this. See [faster live coaching](docs/live-coaching.md).

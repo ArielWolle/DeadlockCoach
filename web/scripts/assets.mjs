@@ -55,7 +55,7 @@ await emit('perception-guide.md', await readFile(path.join(root, 'docs/perceptio
 await emit('laning-policy.json', await readFile(path.join(root,'data/coaching/laning.json')));
 await emit('item-rationales.json', await readFile(path.join(root,'data/coaching/item-rationales.json')));
 // Only the already checked-in, explicitly named regression fixtures are included.
-const fixtureNames = ['00014_1792966706577.jpg', '00059_1792966931596.jpg',
+const fixtureNames = ['00014_1792966706577.jpg', '00059_1792966931596.jpg', '00401_health-mixed.jpg',
   '00184_scoreboard-mid.jpg', '00216_dead-respawn.jpg', '00048_1792966876580.jpg'];
 for (const name of fixtureNames) await emit(`fixtures/${name}`, await readFile(path.join(root, 'samples/frames', name)));
 await emit('demo.jsonl', await readFile(path.join(root, 'samples/session2-minimap.jsonl')));

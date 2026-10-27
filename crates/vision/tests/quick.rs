@@ -22,7 +22,12 @@ fn recognition_only_monitor_reads_health_and_twelve_slots_without_full_detection
     // Team banners come from the full scan's round-robin and pass through unchanged.
     assert_eq!(first.hero_status[6].critical,Some(true));assert_eq!(first.hero_status[9].critical,Some(true));
     assert!(first.hero_status[6].observations>=2);
-    assert!(first.hero_status.iter().all(|p|p.health_ratio.is_none()));
+    // Health bars are refreshed by the fast monitor itself: ally 1 is damaged, the two CRITICAL
+    // enemies are near zero, enemy 2 has no bar (not seen recently).
+    let hp=|i:usize|first.hero_status[i].health_ratio.unwrap_or(-1.0);
+    assert!((hp(1)-0.69).abs()<0.06&&hp(0)>0.95,"{:?}",first.hero_status.iter().map(|s|s.health_ratio).collect::<Vec<_>>());
+    assert!(hp(6)<0.05&&hp(9)<0.05);
+    assert_eq!(first.hero_status[8].bar_visible,Some(false));assert!(first.hero_status[8].health_ratio.is_none());
     assert_eq!(context.snapshot.hero_status[0].networth,Some(3500));
     let second=monitor.scan(&frame,&context,700).unwrap();assert!(second.health_observations>=2);
 }

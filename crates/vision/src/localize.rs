@@ -50,12 +50,16 @@ impl MapLocator {
                 let x=b.cx-reference.cx*scale;let y=b.cy-reference.cy*scale;let w=self.reference.width() as f32*scale;let h=self.reference.height() as f32*scale;
                 if w<100.||w>1000.||x<0.||y<0.||x+w>frame.width() as f32||y+h>frame.height() as f32{continue;}
                 let bounds=Bounds{x:x as u32,y:y as u32,w:w as u32,h:h as u32};
-                if landmark(frame,bounds,true).is_some()&&landmark(frame,bounds,false).is_some(){proposals.push(Located{bounds,score:self.template.similarity_gray(&gray,bounds)});}
+                if landmark(frame,bounds,true).is_some()&&landmark(frame,bounds,false).is_some(){proposals.push((Located{bounds,score:self.template.similarity_gray(&gray,bounds)},true));}
             }
         }
-        proposals.sort_by(|a,b|b.score.total_cmp(&a.score));
-        if proposals.first().is_none_or(|p|p.score<0.5){proposals.extend(self.template.candidates(frame,100.,900.,0.48));}
-        for candidate in proposals {
+        proposals.sort_by(|a,b|b.0.score.total_cmp(&a.0.score));
+        if proposals.first().is_none_or(|p|p.0.score<0.5){proposals.extend(self.template.candidates(frame,100.,900.,0.48).into_iter().map(|c|(c,false)));}
+        // Verify every candidate and keep the best, rather than the first that passes: a small
+        // landmark-shaped patch elsewhere (e.g. near the ability bar) must not beat the real map.
+        let min_w=frame.width() as f32*0.12;
+        let mut best:Option<Located>=None;
+        for (candidate,from_blob) in proposals {
             let Some(top)=landmark(frame,candidate.bounds,true) else{continue};let Some(bottom)=landmark(frame,candidate.bounds,false)else{continue};
             let scale=(bottom.1-top.1)/(rb.1-rt.1);
             if !scale.is_finite()||scale<0.25||scale>4. {continue;}
@@ -63,10 +67,15 @@ impl MapLocator {
             if x<0.||y<0.||x+w>frame.width() as f32||y+h>frame.height() as f32{continue;}
             // Independent landmarks must agree in both axes, not merely form a dark patch.
             if ((top.0-bottom.0)-(rt.0-rb.0)*scale).abs()>w*0.05{continue;}
-            if candidate.score<0.48{continue;}
+            // Base-icon proposals whose landmark-derived box agrees within 3% are three
+            // independent cues; heroes covering the map edges then may lower the template score.
+            let agrees=from_blob&&(x-candidate.bounds.x as f32).abs()<=w*0.03&&(y-candidate.bounds.y as f32).abs()<=h*0.03&&(w-candidate.bounds.w as f32).abs()<=w*0.03;
+            if candidate.score<(if agrees{0.36}else{0.48})||w<min_w{continue;}
             let x=x.round() as u32;let y=y.round() as u32;
-            return Some(Located{bounds:Bounds{x,y,w:(w.round() as u32).min(frame.width()-x),h:(h.round() as u32).min(frame.height()-y)},score:candidate.score});
-        }None
+            let bounds=Bounds{x,y,w:(w.round() as u32).min(frame.width()-x),h:(h.round() as u32).min(frame.height()-y)};
+            let score=self.template.similarity_gray(&gray,bounds).max(candidate.score);
+            if best.as_ref().is_none_or(|b|score>b.score){best=Some(Located{bounds,score});}
+        }best
     }
 }
 

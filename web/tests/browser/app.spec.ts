@@ -80,6 +80,21 @@ test('browser OCR matches native clock, souls and inventory on real screenshots'
   await testInfo.attach('browser-ocr-timing', { body: JSON.stringify({ timing, note: 'Headless recorded-frame timing, not game FPS or background latency' }), contentType: 'application/json' });
 });
 
+test('browser reads top-bar health, unseen and dead heroes like native', async ({ page }) => {
+  await page.goto('./#replay');
+  const fixture = path.join(root, 'public/assets/fixtures/00401_health-mixed.jpg');
+  await page.getByLabel('Bring your gameplay into the lab.').setInputFiles([fixture, fixture]);
+  await page.getByRole('button', { name: 'Analyze selected files' }).click();
+  await expect(page.locator('#replay-status')).toContainText('Replay complete.', { timeout: 110000 });
+  await expect(page.locator('#metric-clock')).toHaveText('4:53');
+  const snap = JSON.parse(await page.locator('#snapshot-json').textContent() || '{}');
+  const t = snap.hero_status as { health_ratio?: number | null; bar_visible?: boolean | null; dead?: boolean | null; respawn_secs?: number | null }[];
+  expect(t).toHaveLength(12);
+  expect(t[0].health_ratio!).toBeLessThan(0.3); expect(t[4].health_ratio!).toBeGreaterThan(0.9);
+  expect(t[7].bar_visible).toBe(false); expect(t[10].bar_visible).toBe(false);
+  expect(t[11].dead).toBe(true); expect(t[11].respawn_secs).toBe(2);
+});
+
 test('mocked browser capture processes real pixels, pauses, stops and releases the stream', async ({ page }) => {
   await page.addInitScript(() => {
     Object.defineProperty(navigator.mediaDevices, 'getDisplayMedia', { configurable: true, value: async () => {

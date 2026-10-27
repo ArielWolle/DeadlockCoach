@@ -23,7 +23,9 @@ export interface Snapshot {
   hp?:number|null; max_hp?:number|null; health_observations?:number; health_delta_ratio?:number|null;
   coaching_context?:{focus_lane?:'Green'|'Blue'|'Yellow'|null};
 }
-export interface HeroStatus {ally:boolean;slot:number;hero?:string|null;critical?:boolean|null;health_ratio?:number|null;networth?:number|null;networth_observations:number;observations:number;position?:Point|null;position_observations:number;lane?:string|null}
+export interface HeroStatus {ally:boolean;slot:number;hero?:string|null;critical?:boolean|null;health_ratio?:number|null;networth?:number|null;networth_observations:number;observations:number;position?:Point|null;position_observations:number;lane?:string|null;
+  /** false = enemy not seen recently (no top-bar health bar); not dead. */
+  bar_visible?:boolean|null;health_observations?:number;dead?:boolean|null;respawn_secs?:number|null}
 export interface Reading { status: 'ok' | 'missing' | 'pending' | 'skipped' | 'error'; value: unknown; score: number | null;
   bounds: { x: number; y: number; w: number; h: number } | null; source: string; bounds_origin?:'configured'|'detected' }
 export interface StageTrace extends Omit<Reading, 'source'> { id: string; operation: string; inputs: string[]; elapsed_ms: number;

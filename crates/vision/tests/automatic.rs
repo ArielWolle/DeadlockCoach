@@ -17,6 +17,20 @@ fn full_window_discovery_does_not_require_video_dimensions_or_offsets(){
     assert_eq!(money.origin,coach_perception::RegionOrigin::Detected);
 }
 #[test]
+fn crowded_minimap_is_located_and_team_health_reaches_the_snapshot(){
+    // Heroes on the map edges lowered the template score and a small patch near the ability bar
+    // used to win: the frame produced no snapshot at all.
+    let frame=image::open(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../samples/frames/00401_health-mixed.jpg")).unwrap();
+    let mut auto=scanner();auto.scan(&frame,0);let s=auto.scan(&frame,1000);
+    assert_eq!(s.screen.as_deref(),Some("Gameplay"));assert!(matches!(s.game_clock_secs,Some(293|294)),"{:?}",s.game_clock_secs);
+    let map=auto.regions().into_iter().find(|r|r.id=="minimap").unwrap();assert!(map.bounds.x.abs_diff(1255)<8&&map.bounds.w.abs_diff(335)<10,"{map:?}");
+    let t=&s.hero_status;assert_eq!(t.len(),12);
+    let hp=|i:usize|t[i].health_ratio.unwrap_or(-1.0);
+    assert!(hp(0)<0.3&&hp(4)>0.9&&(hp(3)-0.66).abs()<0.1,"{:?}",t.iter().map(|h|h.health_ratio).collect::<Vec<_>>());
+    assert_eq!(t[7].bar_visible,Some(false));assert_eq!(t[10].bar_visible,Some(false));assert!(t[7].dead!=Some(true));
+    assert_eq!(t[11].dead,Some(true));assert_eq!(t[11].respawn_secs,Some(2));
+}
+#[test]
 fn relocating_currency_independently_does_not_change_its_reader(){
     let source=reference();let glyph=source.crop_imm(60,728,170,55).to_rgba8();let mut changed=source.to_rgba8();
     for y in 720..790{for x in 60..240{changed.put_pixel(x,y,Rgba([0,0,0,255]));}}

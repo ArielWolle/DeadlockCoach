@@ -272,6 +272,11 @@ impl Scanner {
         let status = batch.add_all(crate::team::status_crops_for(img, &status_slots));
         let worth_slots = self.worth_rr.take(12, 2);
         let worth = batch.add_all(crate::team::networth_crops_for(img, &worth_slots));
+        // Health bars / dead portraits are pixel reads for all twelve slots; only dead slots add
+        // a respawn-timer line. Committed below for gameplay frames only (the death screen tints them).
+        let mut bar_status = self.team_status.clone();
+        let dead_slots = crate::team::apply_bars(img, &mut bar_status);
+        let respawn_lines = batch.add_all(crate::team::respawn_crops(img, &dead_slots));
         let batched = batch.len();
         let lines = batch.run(|crops| self.ocr.read_lines(crops));
         laps.lap(&format!("line batch ({batched} lines)"));
@@ -429,7 +434,8 @@ impl Scanner {
         snap.ally_heroes = assign[..6].iter().flatten().cloned().collect();
         snap.enemy_heroes = assign[6..].iter().flatten().cloned().collect();
         if scr==Screen::Gameplay {
-            self.team_status=crate::team::apply_status_slots(img,&lines[status.clone()],&status_slots,&self.team_status);
+            self.team_status=crate::team::apply_status_slots(img,&lines[status.clone()],&status_slots,&bar_status);
+            crate::team::apply_respawn(&lines[respawn_lines.clone()],&dead_slots,&mut self.team_status);
             for(i,status)in self.team_status.iter_mut().enumerate(){status.hero=assign[i].clone();}
             crate::team::apply_networth_slots(&lines[worth.clone()],&worth_slots,raw_clock.unwrap_or(0),&mut self.team_status);
             snap.hero_status=self.team_status.clone();

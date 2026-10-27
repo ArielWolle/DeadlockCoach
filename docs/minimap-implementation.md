@@ -56,16 +56,43 @@ red-orange `(224,68,28)`; your own hero is the green-ringed marker.
 Before this change the detector found 0 of 5 heroes on `00049` and 2+2 of 5+4 on `00059`.
 Cost: ~55-85 ms native per minimap and ~175 ms in WASM; the 1 s fast monitor measured ~0.93 s.
 
+## Top-bar team state (`crates/vision/src/team.rs`)
+
+Every gameplay frame (full scan and the 1 s fast monitor) reads all twelve top-bar slots from
+pixels in under 1 ms, so no OCR is needed except for respawn timers:
+
+- **Health bar:** a slanted bar beside each portrait (allies white on the left, enemies red on the
+  right) spanning rows 24-62 at 1600x900, filled bottom-up over a dark empty part. The CRITICAL
+  glow tints the empty part dark red; that still counts as empty. A reading needs a bar shape (a fill
+  run ending at the bottom, mostly empty above), so a dark game scene behind a missing bar is not
+  mistaken for 0 HP. An all-empty bar counts as ~0 HP only when the CRITICAL banner confirms it.
+- **No bar:** the enemy has not been seen recently (`bar_visible = false`). Not dead, not safe.
+- **Dead:** a greyed portrait without a bar. The red respawn digits are isolated (black on white,
+  tightly cropped) and read in the frame's line batch (`respawn_secs`).
+- Readings are skipped on the death screen, which tints the whole top bar.
+
+Validated on `00400` (all full), `00401` (CRITICAL, damaged, two unseen, one dead with timer 2)
+and `00059`; `tests/topbar.rs` checks every slot within 10 percentage points.
+
+Top-bar health is **not tied to particular minimap rings**: matching the small minimap icon to the
+portrait by colour layout was tested and was not discriminative. But every visible enemy ring
+has a visible bar, so k enemies near you are some k of the visible-bar enemies. The coach uses the
+guaranteed range of their total health: the healthiest k for danger calls, and "low" only when
+even the healthiest candidates are low.
+
 ## Positional coaching (`crates/engine/src/positioning.rs`, `data/coaching/positioning.json`)
 
 One call per evaluation, most urgent first, with a source-cited card for each:
 
 | Call | Trigger (all distances are map fractions) |
 | --- | --- |
-| Gank warning (high) | Confirmed visible enemy within 0.28, outside your fight, closing at >= 0.01/s, and approaching + nearby enemies >= you + nearby allies |
-| Outnumbered (high) | >= 2 enemies within 0.12 and more than you + allies there |
-| Missing (normal) | Confirmed enemy last seen within 0.28 of you, unseen for 4-30 s, while you are past mid-lane (or 2+ missing) |
-| Go in (normal) | Healthy (>= 60%, two reads), 2v1 or a two-hero margin around you, and nobody near you missing |
+| Gank warning (high) | Confirmed visible enemy within 0.28, outside your fight, closing at >= 0.01/s, and approaching + nearby enemies >= you + nearby allies; skipped when every candidate enemy is known to be low |
+| Outnumbered (high) | >= 2 enemies within 0.12, more than you + allies there, and their worst-case health exceeds your side's guaranteed health |
+| Kill window (normal) | You are healthy and every enemy that could be near you is <= 35% (1v1, or you have at least as many) |
+| Missing (normal) | Confirmed enemy last seen within 0.28 of you, unseen for 4-30 s, while you are past mid-lane (or 2+ missing); capped by alive enemies not on the map, so dead enemies are not "missing" |
+| Unseen (normal) | 3+ alive enemies have no top-bar health bar while you are past mid-lane |
+| Go in (normal) | Healthy, 2v1 or a two-hero margin, your side's guaranteed health >= 1.2x their worst case, nobody near you missing and at most one enemy unseen |
+| Enemies down / allies down (normal) | 2+ dead on one side (and more than the other side): push an objective together / play safe until they respawn, with the first respawn time when read |
 | Help / join (normal / low) | Healthy, no enemy near you, a teammate 0.12-0.45 away with enemies within 0.09: help if they are even or behind, join if they are ahead |
 
 The lane plan defers to these: during a gank/outnumbered call it holds silently instead of saying
