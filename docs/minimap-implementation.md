@@ -19,7 +19,8 @@ ratios, HUD offsets and map patches need recalibration. Screenshot capture only.
 | --- | --- | --- |
 | Lane pressure | Proportion of sampled lane-line pixels in lane colour versus red; requires three consistent frames | A pressure estimate, not exact wave position or a verified measure of lane ownership |
 | Troopers | Small solid white/red components near a lane; known furniture and hero-ring areas excluded | Counts are marker detections, not exact unit counts; overlapping or occluded dots are missed |
-| Hero visibility | Circular red/white support, nonmaximum suppression | Overlapping rings can be missed. Zero detections does not establish that enemies are absent or dead |
+| Hero visibility | Team-colour masks (cream-white allies, red-orange enemies), then portrait-sized circle search with greedy explain-away (see below) | Matches 12 of 12 hand-labelled allies and 10 of 10 enemies on three fixtures; precision on other HUD themes, colour-blind settings and heavy stream compression is unmeasured. Not visible does not mean absent or dead |
+| Hero tracks | Per-team nearest-neighbour matching with a time-growing gate, velocity from consecutive sightings, last-seen position kept for 45 s | Identity is per track, not per hero name; two heroes crossing paths can swap tracks |
 | Midboss | Gold winged icon near centre, supported in at least two of three frames | Positive availability evidence only. Absence never establishes a kill or starts a respawn timer |
 | Urn marker | Cyan cap/body shape, furniture exclusions, consecutive spatial support | Cyan portraits, delivery outlines, and occlusion can still cause misses |
 | Urn on ground | Stationary confirmed vase at a bridge spawn position | Do not infer ground state elsewhere |
@@ -30,6 +31,46 @@ The recorded carry sequence establishes your carry; it does not validate enemy p
 An ambiguous vase stays `Visible` and produces no ownership claim. Disappearance is not delivery.
 Tracking expires across observation gaps. Camp availability, local player position/`your_lane`,
 and structure states are not inferred by this implementation.
+
+## Hero ring detection and tracking
+
+Measured on zoomed fixture crops (canonical 335x350 minimap): a hero icon is a portrait inside a
+~2.5 px thick ring, centreline radius ~10 px. Allies are cream-white `(242,231,213)`, enemies
+red-orange `(224,68,28)`; your own hero is the green-ringed marker.
+
+1. **Mask** each team colour (`ring_masks`).
+2. **Circle search** (`hero_rings`): for each candidate centre, 36 rays sample a +-1 px band at
+   radii 9/10/11; coverage >= 50% spread over at least three quadrants. Occlusion by towers or other
+   portraits is tolerated. An integral image skips empty regions.
+3. **Reject furniture:** filled interiors (solid diamonds/blobs); missing diagonal support just
+   outside the ring (hollow diamonds only reach the radius on their axes); base arcs; points
+   outside the playable ellipse. Near a known structure the interior must look like a portrait,
+   not a hollow diamond. Heroes fighting at a tower are therefore kept; the previous detector
+   discarded everything within 13 px of a structure and needed 27/32 ring hits.
+4. **Explain-away:** accept the strongest ring, claim its band pixels, re-score the rest. Arcs of
+   two overlapping portraits no longer form a phantom third hero.
+5. **Track** (`Tracker`): `MinimapState.heroes` holds `HeroTrack { ally, pos, unseen_ms, hits,
+   velocity, lane }`. Only `hits >= 2` tracks drive coaching. A missing hero keeps its last-seen
+   position (dashed in the Map view) until it is forgotten after 45 s.
+
+Before this change the detector found 0 of 5 heroes on `00049` and 2+2 of 5+4 on `00059`.
+Cost: ~55-85 ms native per minimap and ~175 ms in WASM; the 1 s fast monitor measured ~0.93 s.
+
+## Positional coaching (`crates/engine/src/positioning.rs`, `data/coaching/positioning.json`)
+
+One call per evaluation, most urgent first, with a source-cited card for each:
+
+| Call | Trigger (all distances are map fractions) |
+| --- | --- |
+| Gank warning (high) | Confirmed visible enemy within 0.28, outside your fight, closing at >= 0.01/s, and approaching + nearby enemies >= you + nearby allies |
+| Outnumbered (high) | >= 2 enemies within 0.12 and more than you + allies there |
+| Missing (normal) | Confirmed enemy last seen within 0.28 of you, unseen for 4-30 s, while you are past mid-lane (or 2+ missing) |
+| Go in (normal) | Healthy (>= 60%, two reads), 2v1 or a two-hero margin around you, and nobody near you missing |
+| Help / join (normal / low) | Healthy, no enemy near you, a teammate 0.12-0.45 away with enemies within 0.09: help if they are even or behind, join if they are ahead |
+
+The lane plan defers to these: during a gank/outnumbered call it holds silently instead of saying
+push/poke, and aggressive lane plans are muted while enemies near you are missing.
+Thresholds are tunable heuristics, not game facts. Unseen enemies are never assumed safe.
 
 ## Coaching behaviour
 

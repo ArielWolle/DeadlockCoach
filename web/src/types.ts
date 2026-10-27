@@ -9,7 +9,10 @@ export interface MinimapState {
   midboss_up: boolean; urn?: 'Visible' | 'Ground' | 'CarriedByAlly' | 'CarriedByEnemy' | 'CarriedByYou' | null;
   urn_pos?: Point | null; enemies: Point[]; allies: Point[]; enemy_count: number;
   you?:Point|null; your_lane?:'Green'|'Blue'|'Yellow'|null; your_progress?:number|null;
+  /** Hero rings tracked across frames; unseen_ms > 0 means last-seen (missing), not dead. */
+  heroes?: HeroTrack[];
 }
+export interface HeroTrack { id: number; ally: boolean; pos: Point; unseen_ms: number; hits: number; velocity?: Point | null; lane?: 'Green' | 'Blue' | 'Yellow' | null }
 export interface Snapshot {
   hero?:string|null;own_networth?:number|null;hero_status?:HeroStatus[];
   game_clock_secs?: number | null; souls?: number | null; screen?: string | null;

@@ -682,6 +682,7 @@ name = "coach-vision"
 version = "0.1.0"
 dependencies = [
  "coach-core",
+ "coach-engine",
  "coach-perception",
  "image",
  "serde",

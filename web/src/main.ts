@@ -405,7 +405,19 @@ function drawMap(s: Snapshot) {
   }
   const map = s.minimap;
   if (map) {
-    for (const p of map.enemies || []) { ctx.strokeStyle = '#ff7364'; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(p.x * 670, p.y * 700, 17, 0, Math.PI * 2); ctx.stroke(); }
+    if (map.heroes?.length) {
+      // Tracked heroes: solid = visible now, dashed = last seen position of a missing hero.
+      for (const h of map.heroes) {
+        if (h.hits < 2 && h.unseen_ms > 0) continue;
+        const x = h.pos.x * 670, y = h.pos.y * 700, missing = h.unseen_ms > 0;
+        ctx.save(); ctx.strokeStyle = h.ally ? '#7fb8ff' : '#ff7364'; ctx.lineWidth = 3; ctx.globalAlpha = missing ? 0.55 : 1;
+        if (missing) ctx.setLineDash([5, 5]);
+        ctx.beginPath(); ctx.arc(x, y, 22, 0, Math.PI * 2); ctx.stroke();
+        if (h.velocity && !missing) { ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + h.velocity.x * 670 * 4, y + h.velocity.y * 700 * 4); ctx.stroke(); }
+        if (missing && !h.ally) { ctx.setLineDash([]); ctx.fillStyle = '#ffb3aa'; ctx.font = '14px system-ui'; ctx.fillText(`? ${Math.round(h.unseen_ms / 1000)}s`, x + 24, y + 5); }
+        ctx.restore();
+      }
+    } else for (const p of map.enemies || []) { ctx.strokeStyle = '#ff7364'; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(p.x * 670, p.y * 700, 17, 0, Math.PI * 2); ctx.stroke(); }
     if (map.urn_pos) { ctx.strokeStyle = '#69eef0'; ctx.lineWidth = 3; ctx.strokeRect(map.urn_pos.x * 670 - 11, map.urn_pos.y * 700 - 16, 22, 32); }
     if (map.you) {ctx.strokeStyle='#a4ff8d';ctx.lineWidth=3;ctx.beginPath();ctx.arc(map.you.x*670,map.you.y*700,13,0,Math.PI*2);ctx.stroke();ctx.fillStyle='#ceffbd';ctx.font='14px system-ui';ctx.fillText('You?',map.you.x*670+15,map.you.y*700);}
   }
@@ -484,7 +496,9 @@ function renderSnapshot(s: Snapshot) {
   text('map-evidence', map ? `${map.observations} RECENT OBSERVATIONS` : 'NO OBSERVATIONS');
   text('boss-status', map?.midboss_up ? 'Gold icon confirmed' : 'Not confirmed (not necessarily dead)');
   const urnNames = { Visible: 'Marker seen · possession unknown', Ground: 'Stationary marker at bridge', CarriedByYou: 'You are carrying', CarriedByAlly: 'Moving with ally · inferred', CarriedByEnemy: 'Moving with enemy · inferred' };
-  text('urn-status', map?.urn ? urnNames[map.urn] : 'Not confirmed'); text('enemy-count', map ? String(map.enemy_count) : '—');
+  text('urn-status', map?.urn ? urnNames[map.urn] : 'Not confirmed'); const tracked=(ally:boolean)=>{const h=(map?.heroes||[]).filter(t=>t.ally===ally&&t.hits>=2);const seen=h.filter(t=>t.unseen_ms===0).length;
+    return `${seen} visible${h.length>seen?` · ${h.length-seen} missing`:''}`;};
+  text('enemy-count', map ? (map.heroes ? tracked(false) : String(map.enemy_count)) : '—'); text('ally-count', map?.heroes ? tracked(true) : '—');
   $('lane-cards').replaceChildren();
   for (const name of ['green', 'blue', 'yellow'] as const) {
     const l = map?.[name]; const card = document.createElement('article'); card.className = `lane-card ${name}`;

@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 pub mod map_rules;
 pub mod laning;
+pub mod positioning;
 pub mod economy;
 mod counter_explanations;
 
@@ -202,7 +203,7 @@ impl Rule for NetworthLeadRule {
     }
 }
 pub fn default_rules(cfg: RulesConfig) -> Vec<Box<dyn Rule>> {
-    vec![Box::new(laning::LaneCoach::default()), Box::new(map_rules::MapRule), Box::new(UnspentSoulsRule(cfg.clone())), Box::new(DeathCauseRule), Box::new(NetworthLeadRule::new(cfg)),Box::new(economy::PaceRule),Box::new(economy::WaveReportRule)]
+    vec![Box::new(positioning::PositionCoach::default()), Box::new(laning::LaneCoach::default()), Box::new(map_rules::MapRule), Box::new(UnspentSoulsRule(cfg.clone())), Box::new(DeathCauseRule), Box::new(NetworthLeadRule::new(cfg)),Box::new(economy::PaceRule),Box::new(economy::WaveReportRule)]
 }
 
 pub struct Engine {

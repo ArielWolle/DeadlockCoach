@@ -69,6 +69,10 @@ test('browser OCR matches native clock, souls and inventory on real screenshots'
   const snap = JSON.parse(await page.locator('#snapshot-json').textContent() || '{}');
   expect(snap.items).toContain('upgrade_pristine_emblem');
   expect(snap.screen).toBe('Gameplay');
+  // Minimap hero tracking (hand-labelled: 5 allied and 4 enemy portrait rings), confirmed over two frames.
+  const heroes = (snap.minimap?.heroes || []) as { ally: boolean; hits: number; unseen_ms: number }[];
+  expect(heroes.filter(h => h.ally && h.hits >= 2 && h.unseen_ms === 0)).toHaveLength(5);
+  expect(heroes.filter(h => !h.ally && h.hits >= 2 && h.unseen_ms === 0)).toHaveLength(4);
   const timing = await page.locator('#analysis-time').textContent();
   await page.locator('[data-page="settings"]').click();
   const pool = await page.locator('#diagnostics').evaluate(d => { const t = [...d.querySelectorAll('dt')].find(e => e.textContent === 'Parallel line recognition'); return t?.nextElementSibling?.textContent; });

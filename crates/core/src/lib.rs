@@ -145,6 +145,41 @@ pub struct MinimapState {
     /// Lane you are standing in, if you are near one.
     pub your_lane: Option<Lane>,
     pub your_progress: Option<f32>,
+    /// Hero portraits tracked across frames (both teams). Unlike `allies` / `enemies` (this
+    /// frame only), tracks remember where a hero was last seen, so "missing" and "approaching"
+    /// can be judged. A track that is not visible is NOT known to be dead or safe.
+    pub heroes: Vec<HeroTrack>,
+}
+
+/// One hero portrait followed across minimap observations.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct HeroTrack {
+    /// Stable within a tracking session only; not a hero identity.
+    pub id: u32,
+    pub ally: bool,
+    /// Last observed position (map fractions, own base at the bottom).
+    pub pos: Pt,
+    /// Milliseconds since last seen; 0 means visible in this observation.
+    pub unseen_ms: u64,
+    /// Number of observations matched to this track (>= 2 is confirmed).
+    pub hits: u32,
+    /// Smoothed velocity in map fractions per second, when seen moving between sightings.
+    pub velocity: Option<Pt>,
+    /// Nearest lane when the hero is on one.
+    pub lane: Option<Lane>,
+}
+
+impl HeroTrack {
+    pub fn visible(&self) -> bool { self.unseen_ms == 0 }
+    pub fn confirmed(&self) -> bool { self.hits >= 2 }
+    pub fn distance(&self, p: Pt) -> f32 { (self.pos.x - p.x).hypot(self.pos.y - p.y) }
+    /// Speed toward `p` in map fractions per second (positive = closing in).
+    pub fn closing_speed(&self, p: Pt) -> f32 {
+        let (Some(v), d) = (self.velocity, self.distance(p)) else { return 0.0 };
+        if d < 1e-4 { return 0.0; }
+        (v.x * (p.x - self.pos.x) + v.y * (p.y - self.pos.y)) / d
+    }
 }
 
 impl MinimapState {

@@ -22,7 +22,10 @@ no longer waits for full OCR to finish.
 - Inspection/pause/stop halts dispatch; generation checks reject old-session results. History
   retains five actual recent screenshots. Fast-read boxes use **configured/tracked** provenance.
 
-Native fixture monitoring measured about 154 ms. A real-WASM browser test measured 567–750 ms
+The fast worker also feeds the minimap hero tracker every sample, which is what makes gank
+and "missing" calls possible (see [minimap detection](minimap-implementation.md)). With hero-ring
+search added, a fast update measured ~0.93 s in the headless browser suite.
+Native fixture monitoring measured about 154 ms before ring search. A real-WASM browser test measured 567–750 ms
 per fast update, acquiring 19–20 screenshots during two full scans. This is headless fixture
 evidence, not a foreground-game FPS or thermal benchmark. Background scheduling/load can exceed
 the one-second target. Diagnostics display both durations; `coach:capture` / `coach:quick`

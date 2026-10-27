@@ -26,9 +26,9 @@ pub struct Decision {
 }
 
 #[derive(Clone)]
-pub struct LaneCoach { catalog:Arc<Catalog> }
+pub struct LaneCoach { catalog:Arc<Catalog>, position:crate::positioning::PositionCoach }
 impl Default for LaneCoach {
-    fn default() -> Self { Self { catalog:Arc::new(serde_json::from_str(include_str!("../../../data/coaching/laning.json")).expect("shipped lane policy")) } }
+    fn default() -> Self { Self { catalog:Arc::new(serde_json::from_str(include_str!("../../../data/coaching/laning.json")).expect("shipped lane policy")), position:Default::default() } }
 }
 pub fn lane_name(l:Lane) -> &'static str { match l { Lane::Green=>"Green",Lane::Blue=>"Blue",Lane::Yellow=>"Yellow" } }
 pub fn focus(s:&GameSnapshot) -> Option<Lane> { s.coaching_context.focus_lane.or_else(|| s.minimap.as_ref().and_then(|m| m.your_lane)) }
@@ -42,7 +42,22 @@ impl LaneCoach {
         Decision {action,text:c.speech.replace("{lane}",&name),rationale:c.rationale.clone(),lane,lane_source:lane_source.into(),
             evidence,missing,sources:c.sources.clone(),conditional,cue_key,priority,cooldown_secs:c.cooldown_secs,speak:true}
     }
+    /// The lane plan, reconciled with positional danger. Gank/outnumbered warnings are spoken by
+    /// the positioning coach; the plan then holds silently instead of contradicting it, and
+    /// aggressive plans are muted while enemies near you are missing.
     pub fn decide(&self,s:&GameSnapshot) -> Option<Decision> {
+        let mut d=self.decide_lane(s)?;
+        let Some(danger)=self.position.assess(s) else {return Some(d)};
+        let aggressive=matches!(d.action,Action::Poke|Action::PushWave|Action::Jungle|Action::Gank|Action::PrepareObjective);
+        if matches!(danger.id.as_str(),"gank"|"outnumbered") && d.action!=Action::BackOff {
+            let mut hold=self.plan("hold",Action::HoldWave,s,Priority::High,d.evidence.clone(),d.missing.clone(),true);
+            hold.text=danger.text.clone();hold.evidence.extend(danger.evidence);hold.speak=false;d=hold;
+        } else if danger.id=="missing" && aggressive {
+            d.evidence.extend(danger.evidence);d.speak=false;
+        }
+        Some(d)
+    }
+    fn decide_lane(&self,s:&GameSnapshot) -> Option<Decision> {
         let clock=s.game_clock_secs?;
         if s.dead || s.screen.as_deref().is_some_and(|v| v!="Gameplay") {return None;}
         let cfg=&self.catalog.thresholds;
@@ -72,7 +87,9 @@ impl LaneCoach {
         else {missing.push("Lane front is not stable".into());}
         let nearby=map.you.map(|me| {
             let near=|p:&coach_core::Pt| (p.x-me.x).hypot(p.y-me.y)<=cfg.nearby_radius;
-            (map.allies.iter().filter(|p| near(p)).count() as u32+1,map.enemies.iter().filter(|p| near(p)).count() as u32)
+            // Prefer confirmed, currently visible tracks; single-frame rings are a fallback.
+            if map.heroes.is_empty() {(map.allies.iter().filter(|p| near(p)).count() as u32+1,map.enemies.iter().filter(|p| near(p)).count() as u32)}
+            else {let n=|ally:bool| map.heroes.iter().filter(|h|h.ally==ally&&h.confirmed()&&h.visible()&&near(&h.pos)).count() as u32;(n(true)+1,n(false))}
         });
         if let Some((a,e))=nearby {evidence.push(format!("Nearby visible hero rings: {a} allied including you / {e} enemy"));}
         else {missing.push("Player position is unconfirmed; nearby hero counts are unknown".into());}

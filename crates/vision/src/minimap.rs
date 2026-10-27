@@ -163,15 +163,12 @@ fn dilate(mask: &[bool], w: u32, h: u32, radius: i32) -> Vec<bool> {
 /// Circular support, rather than a component's rectangle, distinguishes portrait rings
 /// from diamonds and fragmented lines. Nearby maxima are suppressed; never invent heroes
 /// to split a merged component.
-fn rings(mask: &[bool], w: u32, h: u32, scale: f32) -> Vec<(f32, f32)> {
-    rings_at(mask,w,h,scale,&[8.0,9.0,10.0,11.0])
-}
 fn rings_at(mask:&[bool],w:u32,h:u32,scale:f32,radii:&[f32]) -> Vec<(f32,f32)> {
     let mut candidates = vec![];
     let margin = ((radii.iter().copied().fold(0.0,f32::max)+1.0) * scale).ceil() as i32;
     let step = scale.round().max(1.0) as usize;
     // Precompute circle samples and dilate once. The old inner loop evaluated millions
-    // of sin/cos calls and 3×3 neighbourhood scans per frame, especially expensive in WASM.
+    // of sin/cos calls and 3x3 neighbourhood scans per frame, especially expensive in WASM.
     let supported = dilate(mask, w, h, 1);
     let circles: Vec<Vec<(i32, i32)>> = radii.iter().map(|radius| {
         (0..32).map(|i| {
@@ -200,6 +197,127 @@ fn rings_at(mask:&[bool],w:u32,h:u32,scale:f32,radii:&[f32]) -> Vec<(f32,f32)> {
         if !out.iter().any(|p| dist(*p, (x, y)) < 14.0) { out.push((x, y)); }
     }
     out
+}
+
+/// Team-ring colour masks for hero portraits (measured on saved frames): allied rings are
+/// cream-white (~242,231,213), enemy rings red-orange (~224,68,28).
+pub fn ring_masks(img: &RgbImage) -> (Vec<bool>, Vec<bool>) {
+    let n = (img.width() * img.height()) as usize;
+    let (mut ally, mut enemy) = (vec![false; n], vec![false; n]);
+    for (i, p) in img.pixels().enumerate() {
+        let (h, s, v) = hsv(p[0], p[1], p[2]);
+        if v >= 0.74 && s <= 0.24 && p[0] >= 175 { ally[i] = true; }
+        else if (h < 26.0 || h > 340.0) && s >= 0.6 && v >= 0.55 { enemy[i] = true; }
+    }
+    (ally, enemy)
+}
+
+/// A detected hero portrait ring in canonical minimap px, with its ring coverage (0..1).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Ring { pub x: f32, pub y: f32, pub coverage: f32 }
+
+/// Find hero portrait rings in a team-colour mask: "large circles" of the measured radius.
+///
+/// For each candidate centre, 36 rays sample a +-1 px band at each radius; coverage is the
+/// fraction of rays that hit. Occlusion by structures or overlapping portraits is tolerated
+/// (coverage >= `min_coverage`, spread over at least three quadrants). Two checks reject map
+/// furniture that a naive circle test accepts: a filled interior (solid diamonds / blobs), and
+/// missing diagonal support just outside the ring (hollow diamonds reach the radius only on
+/// their axes). Heroes standing on towers are therefore kept instead of position-filtered.
+pub fn hero_rings(mask: &[bool], w: u32, h: u32, s: f32, min_coverage: f32) -> Vec<Ring> {
+    const RAYS: usize = 36;
+    let radii = [9.0f32, 10.0, 11.0];
+    let at = |x: i32, y: i32| x >= 0 && y >= 0 && (x as u32) < w && (y as u32) < h && mask[(y as u32 * w + x as u32) as usize];
+    // Integral image: skip centres whose neighbourhood cannot hold a ring (most of the map).
+    let mut integral = vec![0u32; ((w + 1) * (h + 1)) as usize];
+    for y in 0..h { let mut row = 0u32; for x in 0..w {
+        row += mask[(y * w + x) as usize] as u32;
+        integral[((y + 1) * (w + 1) + x + 1) as usize] = integral[(y * (w + 1) + x + 1) as usize] + row;
+    }}
+    let boxed = |x0: i32, y0: i32, x1: i32, y1: i32| {
+        let (x0, y0, x1, y1) = (x0.clamp(0, w as i32) as u32, y0.clamp(0, h as i32) as u32, x1.clamp(0, w as i32) as u32, y1.clamp(0, h as i32) as u32);
+        let g = |x: u32, y: u32| integral[(y * (w + 1) + x) as usize] as i64;
+        (g(x1, y1) - g(x0, y1) - g(x1, y0) + g(x0, y0)).max(0) as u32
+    };
+    let rays: Vec<(f32, f32)> = (0..RAYS).map(|i| { let a = i as f32 * std::f32::consts::TAU / RAYS as f32; (a.cos(), a.sin()) }).collect();
+    let outer = (12.5 * s).ceil() as i32;
+    let need = (0.28 * min_coverage * std::f32::consts::TAU * 10.0 * 2.5 * s * s) as u32;
+    let step = (s * 0.375).floor().max(1.0) as usize;
+    let mut found: Vec<(Ring, f32)> = vec![];
+    for y in (0..h as i32).step_by(step) { for x in (0..w as i32).step_by(step) {
+        if boxed(x - outer, y - outer, x + outer + 1, y + outer + 1) < need { continue; }
+        // Interior: a portrait, not team colour.
+        let inner = boxed(x - (4.0 * s) as i32, y - (4.0 * s) as i32, x + (4.0 * s) as i32 + 1, y + (4.0 * s) as i32 + 1);
+        let inner_area = ((8.0 * s) as u32 + 1).pow(2);
+        if inner as f32 > 0.45 * inner_area as f32 { continue; }
+        let mut best = (0usize, 0f32, [0u8; 4]);
+        for r in radii {
+            let mut hits = 0usize; let mut quadrants = [0u8; 4];
+            for (i, (c, sn)) in rays.iter().enumerate() {
+                let hit = [-1.0f32, 0.0, 1.0].iter().any(|d| at(x + ((r + d) * s * c).round() as i32, y + ((r + d) * s * sn).round() as i32));
+                if hit { hits += 1; quadrants[i * 4 / RAYS] += 1; }
+                if hits + (RAYS - 1 - i) < (min_coverage * RAYS as f32) as usize { break; }
+            }
+            if hits > best.0 { best = (hits, r, quadrants); }
+        }
+        let coverage = best.0 as f32 / RAYS as f32;
+        if coverage < min_coverage || best.2.iter().filter(|q| **q >= 3).count() < 3 { continue; }
+        // Roundness: a circle also has support on the diagonals at its outer edge.
+        let r = best.1 + 1.0;
+        let diagonal = (0..8).filter(|k| {
+            let a = (45.0 + 90.0 * (*k / 2) as f32 + if k % 2 == 0 { -8.0 } else { 8.0 }).to_radians();
+            [-1.0f32, 0.0].iter().any(|d| at(x + ((r + d) * s * a.cos()).round() as i32, y + ((r + d) * s * a.sin()).round() as i32))
+        }).count();
+        if diagonal < 4 { continue; }
+        found.push((Ring { x: x as f32 / s, y: y as f32 / s, coverage }, best.1));
+    }}
+    // Greedy explain-away: accept the strongest ring, claim its band pixels, then re-score the
+    // rest on unclaimed pixels only. Arcs of two overlapping portraits no longer combine into
+    // a phantom third ring, while a genuinely overlapped portrait keeps its own visible arc.
+    found.sort_by(|a, b| b.0.coverage.total_cmp(&a.0.coverage));
+    let mut claimed = vec![false; mask.len()];
+    let mut out: Vec<Ring> = vec![];
+    for (ring, r) in found {
+        if out.iter().any(|o| dist((o.x, o.y), (ring.x, ring.y)) < 7.5) { continue; }
+        let (cx, cy) = ((ring.x * s) as i32, (ring.y * s) as i32);
+        let free = |x: i32, y: i32| at(x, y) && !claimed[(y as u32 * w + x as u32) as usize];
+        let hits = rays.iter().filter(|(c, sn)| [-1.0f32, 0.0, 1.0].iter()
+            .any(|d| free(cx + ((r + d) * s * c).round() as i32, cy + ((r + d) * s * sn).round() as i32))).count();
+        let coverage = hits as f32 / RAYS as f32;
+        if coverage < min_coverage { continue; }
+        let band = ((r + 2.0) * s).ceil() as i32;
+        for dy in -band..=band { for dx in -band..=band {
+            let d = ((dx * dx + dy * dy) as f32).sqrt() / s;
+            let (x, y) = (cx + dx, cy + dy);
+            if (r - 2.5..=r + 2.5).contains(&d) && x >= 0 && y >= 0 && (x as u32) < w && (y as u32) < h { claimed[(y as u32 * w + x as u32) as usize] = true; }
+        }}
+        out.push(Ring { coverage, ..ring });
+    }
+    out
+}
+
+/// The playable map is roughly an ellipse inside the square crop; outside it the game world
+/// shows through and can contain unrelated circles.
+fn on_map(p: (f32, f32)) -> bool { ((p.0 - 167.0) / 150.0).powi(2) + ((p.1 - 172.0) / 165.0).powi(2) < 1.0 }
+
+/// Base icons are large team-coloured arcs that partially match a ring.
+const BASES: [(f32, f32); 2] = [(180.0, 33.0), (143.0, 312.0)];
+
+/// Mean brightness and spread of the ring interior. Portraits are lit faces (bright, varied);
+/// a hollow structure diamond has a uniform dark hole.
+fn interior_is_portrait(img: &RgbImage, p: (f32, f32), s: f32) -> bool {
+    // A structure interior is only structure colour (red / team hue) or its dark hole.
+    let (mut n, mut furniture) = (0f32, 0f32);
+    let r = (5.5 * s) as i32;
+    for dy in -r..=r { for dx in -r..=r {
+        if dx * dx + dy * dy > r * r { continue; }
+        let (x, y) = ((p.0 * s) as i32 + dx, (p.1 * s) as i32 + dy);
+        if x < 0 || y < 0 || x as u32 >= img.width() || y as u32 >= img.height() { continue; }
+        let q = img.get_pixel(x as u32, y as u32); let (h, sat, v) = hsv(q[0], q[1], q[2]);
+        n += 1.0;
+        if v < 0.28 || (sat > 0.45 && (h < 26.0 || h > 340.0 || (38.0..62.0).contains(&h) || (85.0..218.0).contains(&h))) { furniture += 1.0; }
+    }}
+    n > 0.0 && furniture / n < 0.6
 }
 
 const MIDBOSS_POS: (f32, f32) = (162.0, 175.0);
@@ -293,12 +411,15 @@ impl Analyzer {
         let m = masks(img);
         let mut st = MinimapState::default();
         let mut sums = [[(0u32, 0f32); 2]; 3]; // lane -> [ally, enemy] -> (count, sum progress)
-        let ring_pts: Vec<_> = rings(&m.red, w, h, s).into_iter()
-            .filter(|p| !self.near_structure(*p, 13.0) && p.1 > 80.0 && p.1 < 290.0)
-            .take(6).collect();
-        let ally_pts: Vec<_> = rings(&m.white, w, h, s).into_iter()
-            .filter(|p| !self.near_structure(*p, 13.0) && p.1 > 80.0 && p.1 < 290.0)
-            .take(6).collect();
+        // Heroes: mask each team colour, then look for portrait-sized circles (6 per team max;
+        // the own hero is drawn in green, so at most 5 cream-white allied rings).
+        let (ally_mask, enemy_mask) = ring_masks(img);
+        let plausible = |p: &(f32, f32)| on_map(*p) && dist(BASES[0], *p) > 32.0 && dist(BASES[1], *p) > 22.0
+            && (!self.near_structure(*p, 6.0) || interior_is_portrait(img, *p, s));
+        let ring_pts: Vec<(f32, f32)> = hero_rings(&enemy_mask, w, h, s, 0.5).into_iter()
+            .map(|r| (r.x, r.y)).filter(plausible).take(6).collect();
+        let ally_pts: Vec<(f32, f32)> = hero_rings(&ally_mask, w, h, s, 0.5).into_iter()
+            .map(|r| (r.x, r.y)).filter(plausible).take(5).collect();
         let own:Vec<_> = rings_at(&m.green,w,h,s,&[4.0,5.0,6.0,7.0]).into_iter()
             .filter(|p| !self.near_structure(*p,12.0) && p.1>75.0 && p.1<305.0).collect();
         // A unique bright-green ring is only a candidate; the temporal tracker confirms it.
@@ -345,7 +466,7 @@ impl Analyzer {
         st.enemy_count = ring_pts.len() as u32;
         st.enemies = ring_pts.iter().map(|(x, y)| norm(*x, *y, CW as u32, CH as u32)).collect();
         st.allies = ally_pts.iter().map(|(x, y)| norm(*x, *y, CW as u32, CH as u32))
-            .filter(|p| st.you.is_none_or(|me| (me.x-p.x).hypot(me.y-p.y)>0.035)).collect();
+            .filter(|p| st.you.is_none_or(|me| (me.x-p.x).hypot(me.y-p.y)>0.02)).collect();
 
         // Midboss: gold winged icon near the map centre.
         let mut gold = 0u32;
@@ -384,13 +505,77 @@ impl Analyzer {
 #[derive(Default)]
 pub struct Tracker {
     history: std::collections::VecDeque<(u64, MinimapState)>,
+    heroes: Vec<HeroSighting>,
+    next_id: u32,
 }
 
+/// Internal track state: last sighting plus the one before it (for velocity).
+#[derive(Clone)]
+struct HeroSighting { id: u32, ally: bool, pos: Pt, seen_ms: u64, hits: u32, velocity: Option<Pt> }
+
+/// Tracks older than this are forgotten: a hero unseen this long could be anywhere.
+pub const TRACK_FORGET_MS: u64 = 45_000;
+
 impl Tracker {
+    /// Match this frame's portrait rings to existing tracks, per team. Greedy nearest-first
+    /// assignment inside a gate that grows with elapsed time (heroes move; ziplines are fast).
+    fn track_heroes(&mut self, raw: &MinimapState, now_ms: u64) -> Vec<coach_core::HeroTrack> {
+        self.heroes.retain(|h| now_ms.saturating_sub(h.seen_ms) <= TRACK_FORGET_MS);
+        for (ally, seen) in [(true, &raw.allies), (false, &raw.enemies)] {
+            let mut pairs = vec![];
+            for (ti, t) in self.heroes.iter().enumerate().filter(|(_, t)| t.ally == ally && t.seen_ms <= now_ms) {
+                let dt = (now_ms - t.seen_ms) as f32 / 1000.0;
+                let gate = (0.05 + 0.05 * dt).min(0.35);
+                for (di, d) in seen.iter().enumerate() {
+                    // Predict with the known velocity for short gaps only.
+                    let lead = if dt <= 4.0 { t.velocity.unwrap_or_default() } else { Pt::default() };
+                    let e = (t.pos.x + lead.x * dt - d.x).hypot(t.pos.y + lead.y * dt - d.y);
+                    if e <= gate { pairs.push((e, ti, di)); }
+                }
+            }
+            pairs.sort_by(|a, b| a.0.total_cmp(&b.0));
+            let (mut used_t, mut used_d) = (vec![], vec![]);
+            for (_, ti, di) in pairs {
+                if used_t.contains(&ti) || used_d.contains(&di) { continue; }
+                used_t.push(ti); used_d.push(di);
+                let t = &mut self.heroes[ti]; let d = seen[di];
+                let dt = (now_ms - t.seen_ms) as f32 / 1000.0;
+                if (0.4..=8.0).contains(&dt) {
+                    let v = Pt { x: (d.x - t.pos.x) / dt, y: (d.y - t.pos.y) / dt };
+                    t.velocity = Some(match t.velocity { Some(o) => Pt { x: 0.5 * (o.x + v.x), y: 0.5 * (o.y + v.y) }, None => v });
+                } else if dt > 8.0 { t.velocity = None; }
+                t.pos = d; t.seen_ms = now_ms; t.hits += 1;
+            }
+            for (di, d) in seen.iter().enumerate() {
+                if used_d.contains(&di) { continue; }
+                self.next_id += 1;
+                self.heroes.push(HeroSighting { id: self.next_id, ally, pos: *d, seen_ms: now_ms, hits: 1, velocity: None });
+            }
+            // A team has at most 6 heroes (5 allies besides you): drop the stalest extras.
+            let cap = if ally { 5 } else { 6 };
+            let mut team: Vec<usize> = (0..self.heroes.len()).filter(|i| self.heroes[*i].ally == ally).collect();
+            if team.len() > cap {
+                team.sort_by_key(|i| std::cmp::Reverse((self.heroes[*i].seen_ms, self.heroes[*i].hits)));
+                let drop: Vec<u32> = team[cap..].iter().map(|i| self.heroes[*i].id).collect();
+                self.heroes.retain(|h| !drop.contains(&h.id));
+            }
+        }
+        let an = Analyzer::new();
+        self.heroes.iter().map(|h| {
+            let unseen_ms = now_ms.saturating_sub(h.seen_ms);
+            let lane = an.project((h.pos.x * CW, h.pos.y * CH)).filter(|(_, _, d)| *d <= 14.0)
+                .map(|(k, _, _)| [coach_core::Lane::Green, coach_core::Lane::Blue, coach_core::Lane::Yellow][k]);
+            coach_core::HeroTrack { id: h.id, ally: h.ally, pos: h.pos, unseen_ms, hits: h.hits,
+                velocity: if unseen_ms == 0 { h.velocity } else { None }, lane }
+        }).collect()
+    }
+
     pub fn observe(&mut self, mut raw: MinimapState, now_ms: u64) -> MinimapState {
         if self.history.back().map(|(t, _)| now_ms < *t || now_ms - *t > 20000).unwrap_or(false) {
             self.history.clear();
+            self.heroes.clear();
         }
+        raw.heroes = self.track_heroes(&raw, now_ms);
         self.history.retain(|(t, _)| now_ms.saturating_sub(*t) <= 30000);
         self.history.push_back((now_ms, raw.clone()));
         while self.history.len() > 3 { self.history.pop_front(); }

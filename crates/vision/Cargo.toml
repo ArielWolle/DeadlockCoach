@@ -11,3 +11,6 @@ coach-perception = { path = "../perception" }
 coach-core = { path = "../core" }
 serde_json.workspace = true
 serde = { workspace = true }
+
+[dev-dependencies]
+coach-engine = { path = "../engine" }

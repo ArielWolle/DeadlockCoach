@@ -22,6 +22,17 @@ fn clock_crops(frame:&DynamicImage,b:Bounds)->Vec<DynamicImage>{
         frame.crop_imm(x.min(frame.width()-1),y.min(frame.height()-1),((w*h) as u32).min(frame.width()-x.min(frame.width()-1)).max(1),((hh*h) as u32).min(frame.height()-y.min(frame.height()-1)).max(1))
     }).collect()
 }
+/// Visible hero portrait rings as inspector overlays, in source-frame pixels.
+fn hero_regions(map:Bounds,m:&coach_core::MinimapState)->Vec<RegionObservation>{
+    let r=(11.0*map.w as f32/335.0).max(2.0);
+    m.heroes.iter().filter(|h|h.visible()).map(|h|{
+        let (cx,cy)=(map.x as f32+h.pos.x*map.w as f32,map.y as f32+h.pos.y*map.h as f32);
+        RegionObservation{id:format!("hero_{}_{}",if h.ally{"ally"}else{"enemy"},h.id),
+            label:format!("{} hero ring (seen {}x{})",if h.ally{"Ally"}else{"Enemy"},h.hits,if h.confirmed(){""}else{", unconfirmed"}),
+            bounds:Bounds{x:(cx-r).max(0.0) as u32,y:(cy-r).max(0.0) as u32,w:(2.0*r) as u32,h:(2.0*r) as u32},
+            origin:RegionOrigin::Detected,score:None,value_path:Some("/minimap/heroes".into())}
+    }).collect()
+}
 fn observation(id:&str,label:&str,b:Bounds,path:&str)->RegionObservation{
     RegionObservation{id:id.into(),label:label.into(),bounds:b,origin:RegionOrigin::Detected,score:None,value_path:Some(path.into())}
 }
@@ -84,7 +95,8 @@ impl AutoScanner {
         // The independent minimap analysis is only needed when no game context forms (below);
         // inside a context the compatibility scanner analyzes the same crop once.
         macro_rules! independent { () => {{
-            if let Some(m)=map{let crop=frame.crop_imm(m.bounds.x,m.bounds.y,m.bounds.w,m.bounds.h).to_rgb8();independent.minimap=Some(self.map_tracker.observe(crate::minimap::Analyzer::new().analyze(&crop),now));}
+            if let Some(m)=map{let crop=frame.crop_imm(m.bounds.x,m.bounds.y,m.bounds.w,m.bounds.h).to_rgb8();independent.minimap=Some(self.map_tracker.observe(crate::minimap::Analyzer::new().analyze(&crop),now));
+                if let Some(mm)=&independent.minimap{self.regions.extend(hero_regions(m.bounds,mm));}}
             laps.lap("independent minimap");self.laps=laps;self.had_context=false;
             return independent;
         }}}
@@ -145,6 +157,7 @@ impl AutoScanner {
             ("max_health_search","Max HP search · compatibility",crate::Region{x:145./1600.,y:675./900.,w:110./1600.,h:45./900.})] {
             self.regions.push(RegionObservation{id:id.into(),label:label.into(),bounds:Bounds{x:left+(r.x*w as f32) as u32,y:top+(r.y*h as f32) as u32,w:(r.w*w as f32) as u32,h:(r.h*h as f32) as u32},origin:RegionOrigin::Configured,score:None,value_path:Some(if id=="health_search"{"/hp"}else{"/max_hp"}.into())});
         }
+        if let Some(m)=&snapshot.minimap{self.regions.extend(hero_regions(map.bounds,m));}
         self.laps=laps;self.had_context=true;
         snapshot
     }
