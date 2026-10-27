@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "threshold_note": "Spawn times are wiki facts (re-verified 2026-10-27). Invade conditions follow the wiki: lane pushed into the opponent's side and opposing heroes accounted for. Camp clears and respawns are not observed from screenshots, so no respawn timers are claimed.",
+  "thresholds": { "warn_secs": 20, "crashed_front": 0.7, "forward_progress": 0.5, "healthy": 0.6, "max_unaccounted": 1, "near_radius": 0.12 },
+  "spawns": [
+    { "id": "small", "secs": 120 },
+    { "id": "medium", "secs": 300 },
+    { "id": "large", "secs": 480 }
+  ],
+  "cards": [
+    { "id": "spawn_small", "speech": "Small camps spawn in {seconds} seconds. Push your wave first, then take the nearest one between waves.", "priority": "normal", "cooldown_secs": 600,
+      "rationale": "Tier I camps appear at 2:00; a wave is worth more than a camp, so camps fit between waves.",
+      "sources": [
+        { "path": "jungle/jungle-tactics.md", "section": "## Verified quotes for coaching cards (retrieved 2026-10-27)", "basis": "WIKI", "excerpt": "Tier I camps spawn at the 2:00 minute mark, Tier II camps at 5:00, and Tier III camps at 8:00." },
+        { "path": "jungle/jungle-tactics.md", "section": "## Verified quotes for coaching cards (retrieved 2026-10-27)", "basis": "WIKI", "excerpt": "it's recommended to clear camps in between trooper waves." } ] },
+    { "id": "spawn_medium", "speech": "Medium camps spawn in {seconds} seconds. Secure your wave, then take a medium camp near your guardian before the next wave.", "priority": "normal", "cooldown_secs": 600,
+      "rationale": "Tier II camps appear at 5:00; leaving lane right after securing a wave avoids losing trooper souls.",
+      "sources": [
+        { "path": "jungle/jungle-tactics.md", "section": "## Verified quotes for coaching cards (retrieved 2026-10-27)", "basis": "WIKI", "excerpt": "Tier I camps spawn at the 2:00 minute mark, Tier II camps at 5:00, and Tier III camps at 8:00." },
+        { "path": "jungle/jungle-tactics.md", "section": "## Verified quotes for coaching cards (retrieved 2026-10-27)", "basis": "WIKI", "excerpt": "If you plan on leaving lane, it is generally best to do so right after securing the wave." } ] },
+    { "id": "spawn_large", "speech": "Large camps and Sinner's Sacrifice spawn in {seconds} seconds. Go in with health, and watch for roamers while you farm.", "priority": "normal", "cooldown_secs": 600,
+      "rationale": "Tier III camps and Sinner's Sacrifice appear at 8:00; the machine hits back and farming attracts roaming assassins.",
+      "sources": [
+        { "path": "jungle/jungle-tactics.md", "section": "## Verified quotes for coaching cards (retrieved 2026-10-27)", "basis": "WIKI", "excerpt": "Tier I camps spawn at the 2:00 minute mark, Tier II camps at 5:00, and Tier III camps at 8:00." },
+        { "path": "jungle/jungle-routes.md", "section": "## Mid game (~5:00 - ~12:00)", "basis": "WIKI", "excerpt": "come with health (80 dmg per hit back, 320-640 total)" },
+        { "path": "jungle/jungle-tactics.md", "section": "## Verified quotes for coaching cards (retrieved 2026-10-27)", "basis": "WIKI", "excerpt": "When jungling, players need to be careful to avoid roaming assassin heroes who might steal their unsecured souls." } ] },
+    { "id": "invade", "speech": "Your wave is on their guardian and {accounted}. Take a camp on their side, leave one Haunt alive so it can't respawn, and be back for the next wave.", "priority": "normal", "cooldown_secs": 60,
+      "rationale": "Counter-jungling is rewarding but risky; the wiki's conditions are a lane pushed into their side and knowing where the opposing heroes are.",
+      "sources": [
+        { "path": "jungle/jungle-tactics.md", "section": "## Verified quotes for coaching cards (retrieved 2026-10-27)", "basis": "WIKI", "excerpt": "players tend to do so only when the zipline on a nearby lane is pushed into the opponent's side, and when they know where all the opposing heroes are." },
+        { "path": "jungle/jungle-tactics.md", "section": "## Verified quotes for coaching cards (retrieved 2026-10-27)", "basis": "WIKI", "excerpt": "One common strategy involves killing every Haunt in an camp on the opponent side but one, which prevents the others from respawning." } ] },
+    { "id": "invade_unsafe", "speech": "Your wave is pushed, but {count} unaccounted for. Don't go into their jungle; take a camp on your own side between waves.", "priority": "normal", "cooldown_secs": 60,
+      "rationale": "Missing enemies may be waiting in their jungle; the invade condition (knowing where opposing heroes are) is not met.",
+      "sources": [
+        { "path": "jungle/jungle-tactics.md", "section": "## Verified quotes for coaching cards (retrieved 2026-10-27)", "basis": "WIKI", "excerpt": "Clearing camps on the opposite team's side of the map is rewarding as it makes it harder for the other team to gain souls, but it comes with the risk of being attacked and killed by opposing heroes." },
+        { "path": "jungle/jungle-tactics.md", "section": "## Verified quotes for coaching cards (retrieved 2026-10-27)", "basis": "WIKI", "excerpt": "players tend to do so only when the zipline on a nearby lane is pushed into the opponent's side, and when they know where all the opposing heroes are." } ] }
+  ]
+}

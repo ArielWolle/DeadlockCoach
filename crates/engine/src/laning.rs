@@ -26,9 +26,9 @@ pub struct Decision {
 }
 
 #[derive(Clone)]
-pub struct LaneCoach { catalog:Arc<Catalog>, position:crate::positioning::PositionCoach }
+pub struct LaneCoach { catalog:Arc<Catalog>, position:crate::positioning::PositionCoach, jungle:crate::jungle::JungleCoach }
 impl Default for LaneCoach {
-    fn default() -> Self { Self { catalog:Arc::new(serde_json::from_str(include_str!("../../../data/coaching/laning.json")).expect("shipped lane policy")), position:Default::default() } }
+    fn default() -> Self { Self { catalog:Arc::new(serde_json::from_str(include_str!("../../../data/coaching/laning.json")).expect("shipped lane policy")), position:Default::default(), jungle:Default::default() } }
 }
 pub fn lane_name(l:Lane) -> &'static str { match l { Lane::Green=>"Green",Lane::Blue=>"Blue",Lane::Yellow=>"Yellow" } }
 pub fn focus(s:&GameSnapshot) -> Option<Lane> { s.coaching_context.focus_lane.or_else(|| s.minimap.as_ref().and_then(|m| m.your_lane)) }
@@ -47,6 +47,8 @@ impl LaneCoach {
     /// aggressive plans are muted while enemies near you are missing.
     pub fn decide(&self,s:&GameSnapshot) -> Option<Decision> {
         let mut d=self.decide_lane(s)?;
+        // A specific invade / stay-on-your-side call replaces the generic camp suggestion.
+        if matches!(d.action,Action::Jungle|Action::HoldWave)&&self.jungle.invade(s).is_some(){d.speak=false;}
         let Some(danger)=self.position.assess(s) else {return Some(d)};
         let aggressive=matches!(d.action,Action::Poke|Action::PushWave|Action::Jungle|Action::Gank|Action::PrepareObjective);
         if matches!(danger.id.as_str(),"gank"|"outnumbered") && d.action!=Action::BackOff {

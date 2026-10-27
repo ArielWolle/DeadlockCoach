@@ -81,3 +81,19 @@ All items below are minimap/HUD observables; icon shapes come from the wiki Haun
 ## Known gaps
 - No source gave exact per-camp ambush hot-spots, vision-ward rules (no wards documented), or which minimap icons vanish on clear.
 - No source gave hero-specific jungle matchups beyond named examples in camp-types.md.
+
+## Verified quotes for coaching cards (retrieved 2026-10-27)
+
+Re-checked against the live wiki before building jungle advice; quoted verbatim.
+
+- deadlock.wiki/Haunt, Overview [WIKI]: "Tier I camps spawn at the 2:00 minute mark, Tier II camps at 5:00, and Tier III camps at 8:00."
+- deadlock.wiki/Haunt, Strategy [WIKI]: "Clearing camps on the opposite team's side of the map is rewarding as it makes it harder for the other team to gain souls, but it comes with the risk of being attacked and killed by opposing heroes."
+- deadlock.wiki/Haunt, Strategy [WIKI]: "players tend to do so only when the zipline on a nearby lane is pushed into the opponent's side, and when they know where all the opposing heroes are."
+- deadlock.wiki/Haunt, Strategy [WIKI]: "One common strategy involves killing every Haunt in an camp on the opponent side but one, which prevents the others from respawning."
+- deadlock.wiki/Strategy, Jungling [WIKI]: "Clearing a trooper wave is generally faster and rewards more souls than a Neutral camp, so it's recommended to clear camps in between trooper waves."
+- deadlock.wiki/Strategy, Timings [WIKI]: "If you plan on leaving lane, it is generally best to do so right after securing the wave."
+- deadlock.wiki/Strategy, Jungling [WIKI]: "When jungling, players need to be careful to avoid roaming assassin heroes who might steal their unsecured souls."
+
+Coach interpretation [DERIVED]: an enemy missing from your lane is a reason not to invade (they may be in
+that jungle); invading is suggested only when the missing laner is dead or at most one enemy is
+unaccounted for, matching "they know where all the opposing heroes are".
