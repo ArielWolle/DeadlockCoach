@@ -291,6 +291,8 @@ fn interior_is_portrait(img: &RgbImage, p: (f32, f32), s: f32) -> bool {
 }
 
 const MIDBOSS_POS: (f32, f32) = (162.0, 175.0);
+/// Side-lane bridges (canonical px): urn spawn points and bridge power-up spawns.
+const BRIDGES: [(f32, f32); 2] = [(68.0, 175.0), (259.0, 175.0)];
 /// Mint shop icons (canonical px) that pass the player-marker colour test in every match.
 const SHOP_ICONS: [(f32, f32); 5] = [(23.0, 207.0), (104.0, 163.0), (243.0, 207.0), (217.0, 196.0), (177.0, 197.0)];
 
@@ -354,7 +356,8 @@ impl Analyzer {
         let (lo, hi) = match (k, mirrored) { (1, _) => blue, (0, false) | (2, true) => green, _ => yellow };
         let r = (1.6 * s).round().max(1.0) as i32;
         let total = *self.cum[k].last().unwrap();
-        let (mut lc, mut red) = (0u32, 0u32);
+        // Each sample along the lane: Some(true) = your lane colour, Some(false) = red, None = neither.
+        let mut samples: Vec<(f32, Option<bool>)> = vec![];
         let mut d = 0.0;
         while d < total {
             let t = d / total;
@@ -378,9 +381,25 @@ impl Analyzer {
                     else if hh >= lo && hh <= hi { has_lane = true; }
                 }
             }
-            if has_lane { lc += 1; } else if has_red { red += 1; }
+            samples.push((t, if has_lane { Some(true) } else if has_red { Some(false) } else { None }));
         }
-        if lc + red < 40 { None } else { Some(lc as f32 / (lc + red) as f32) }
+        let coloured = samples.iter().filter(|(_, c)| c.is_some()).count();
+        if coloured < 40 { return None; }
+        // The front is where your colour stops being the majority, walking from your base. A share
+        // of coloured pixels (the old measure) is pulled toward the middle by red troopers, rings and
+        // structures on your side, so a lane owned up to their guardian read ~0.47 in a recording.
+        // Pick the single split that best explains the lane as "yours, then theirs": maximise
+        // (your colour before) - (red before), i.e. the peak of a running +1/-1 sum. A local
+        // occluder (an enemy portrait ring, a red trooper dot) only dents the sum, so it cannot
+        // end the walk early the way a sliding window did.
+        let (mut run, mut best, mut first, mut last) = (0i32, 0i32, 0usize, 0usize);
+        for (j, (_, c)) in samples.iter().enumerate() {
+            run += match c { Some(true) => 1, Some(false) => -1, None => 0 };
+            if run > best { best = run; first = j + 1; last = j + 1; } else if run == best && best > 0 { last = j + 1; }
+        }
+        if best == 0 { return Some(samples[0].0); }
+        let at = ((first + last) / 2).min(samples.len() - 1);
+        Some(samples[at].0)
     }
 
     /// Lane colours depend on which team you are: the map is drawn from your base, so the
@@ -500,6 +519,7 @@ impl Analyzer {
 
         // Urn: bright cyan vase that is not a lane diamond.
         let mut urn: Option<(f32, f32, u32)> = None;
+        let mut on_bridge = [false; 2];
         // Join the vase cap and body before shape checks. Portrait highlights generally
         // lack this tall cap/body silhouette. Also exclude the small centre-lane diamond.
         let cyan_joined = dilate(&m.cyan, w, h, s.round().max(1.0) as i32);
@@ -509,8 +529,12 @@ impl Analyzer {
             if b.area as f32 / (s * s) < 40.0 || bw > 18.0 || bh > 24.0 || bh < 13.0 || bh < bw * 1.15 { continue; }
             if self.near_structure(p, 12.0) { continue; }
             if dist(p, (162.0, 201.0)) < 12.0 { continue; }
+            on_bridge[0] |= dist(p, BRIDGES[0]) < 14.0; on_bridge[1] |= dist(p, BRIDGES[1]) < 14.0;
             if urn.map(|u| b.area > u.2).unwrap_or(true) { urn = Some((p.0, p.1, b.area)); }
         }
+        // Bridge power-ups spawn on both bridges at once (5:00, 10:00, ...), the urn is one object:
+        // urn-shaped icons on both bridges are power-ups (a recorded match called them the urn).
+        if on_bridge[0] && on_bridge[1] { urn = None; }
         if let Some((x, y, _)) = urn {
             mk.push((x, y, 'U'));
             st.urn_pos = Some(norm(x, y, CW as u32, CH as u32));
@@ -530,7 +554,15 @@ pub struct Tracker {
     history: std::collections::VecDeque<(u64, MinimapState)>,
     heroes: Vec<HeroSighting>,
     next_id: u32,
+    midboss: MidbossState,
 }
+
+/// The Midboss is alive from 0:00 and only leaves the map when killed (respawning 7 / 6 / 5 min
+/// later). A recorded match flipped the per-frame flag 77 times, so state changes are events:
+/// gone for 20 s straight = killed, seen again afterwards = respawned.
+#[derive(Default)]
+struct MidbossState { seen: bool, absent_since: Option<u64>, down_at: Option<u64>, back_at: Option<u64> }
+pub const MIDBOSS_GONE_MS: u64 = 20_000;
 
 /// Internal track state: last sighting plus the one before it (for velocity).
 #[derive(Clone)]
@@ -569,13 +601,27 @@ impl Tracker {
                 } else if dt > 8.0 { t.velocity = None; }
                 t.pos = d; t.seen_ms = now_ms; t.hits += 1;
             }
+            // A team has at most 6 heroes (5 allies besides you).
+            let cap = if ally { 5 } else { 6 };
             for (di, d) in seen.iter().enumerate() {
                 if used_d.contains(&di) { continue; }
+                // With the whole team already tracked, an unexplained ring is one of them after a
+                // jump (zipline, teleport, respawn) or a missed frame: continue the nearest track
+                // not matched this frame instead of minting a new id (rec2: 140 ids for 11 heroes).
+                let team = self.heroes.iter().filter(|h| h.ally == ally).count();
+                let spare = (team >= cap).then(|| (0..self.heroes.len())
+                    .filter(|i| self.heroes[*i].ally == ally && !used_t.contains(i))
+                    .min_by(|a, b| { let e = |i: &usize| (self.heroes[*i].pos.x - d.x).hypot(self.heroes[*i].pos.y - d.y); e(a).total_cmp(&e(b)) })).flatten();
+                if let Some(ti) = spare {
+                    used_t.push(ti);
+                    let t = &mut self.heroes[ti];
+                    t.pos = *d; t.seen_ms = now_ms; t.hits += 1; t.velocity = None;
+                    continue;
+                }
                 self.next_id += 1;
                 self.heroes.push(HeroSighting { id: self.next_id, ally, pos: *d, seen_ms: now_ms, hits: 1, velocity: None });
             }
-            // A team has at most 6 heroes (5 allies besides you): drop the stalest extras.
-            let cap = if ally { 5 } else { 6 };
+            // Drop the stalest extras beyond the team size.
             let mut team: Vec<usize> = (0..self.heroes.len()).filter(|i| self.heroes[*i].ally == ally).collect();
             if team.len() > cap {
                 team.sort_by_key(|i| std::cmp::Reverse((self.heroes[*i].seen_ms, self.heroes[*i].hits)));
@@ -597,6 +643,7 @@ impl Tracker {
         if self.history.back().map(|(t, _)| now_ms < *t || now_ms - *t > 20000).unwrap_or(false) {
             self.history.clear();
             self.heroes.clear();
+            self.midboss = MidbossState::default();
         }
         raw.heroes = self.track_heroes(&raw, now_ms);
         self.history.retain(|(t, _)| now_ms.saturating_sub(*t) <= 30000);
@@ -606,7 +653,17 @@ impl Tracker {
         let own_confirmed = self.history.len() >= 2 && raw.you.is_some_and(|p| self.history.iter().rev().nth(1)
             .and_then(|(_,m)| m.you).is_some_and(|old| (p.x-old.x).hypot(p.y-old.y)<0.30));
         if !own_confirmed { raw.you=None; raw.your_lane=None; raw.your_progress=None; }
-        raw.midboss_up = self.history.len() >= 3 && self.history.iter().filter(|(_, m)| m.midboss_up).count() >= 2;
+        let mb = &mut self.midboss;
+        if raw.midboss_up {
+            if mb.down_at.is_some() { mb.back_at = Some(now_ms); mb.down_at = None; }
+            mb.seen = true; mb.absent_since = None;
+        } else if mb.seen {
+            let since = *mb.absent_since.get_or_insert(now_ms);
+            if mb.down_at.is_none() && now_ms.saturating_sub(since) >= MIDBOSS_GONE_MS { mb.down_at = Some(now_ms); mb.back_at = None; }
+        }
+        raw.midboss_up = mb.seen && mb.down_at.is_none();
+        raw.midboss_down_ms = mb.down_at.map(|t| now_ms.saturating_sub(t));
+        raw.midboss_back_ms = mb.back_at.map(|t| now_ms.saturating_sub(t));
         for k in 0..3 {
             let values: Vec<f32> = self.history.iter().filter_map(|(_, m)| match k {
                 0 => m.green.push, 1 => m.blue.push, _ => m.yellow.push,
@@ -617,6 +674,15 @@ impl Tracker {
                 let hi = values.iter().copied().fold(f32::NEG_INFINITY, f32::max);
                 (hi - lo <= 0.20).then(|| values.iter().sum::<f32>() / values.len() as f32)
             } else { None };
+            // Trooper dots flicker under rings and pings (counts jumped 0-5-0 between frames):
+            // report the median of the recent reads.
+            let median = |f: fn(&coach_core::LaneState) -> u32| {
+                let mut v: Vec<u32> = self.history.iter().map(|(_, m)| f(match k { 0 => &m.green, 1 => &m.blue, _ => &m.yellow })).collect();
+                v.sort_unstable(); v[v.len() / 2]
+            };
+            let (a, e) = (median(|l| l.ally_troopers), median(|l| l.enemy_troopers));
+            let lane = match k { 0 => &mut raw.green, 1 => &mut raw.blue, _ => &mut raw.yellow };
+            lane.ally_troopers = a; lane.enemy_troopers = e;
         }
         // Require nearby urn positions on consecutive frames. Movement together with
         // a ring of the same team is evidence of carrying, rather than a single proximity.

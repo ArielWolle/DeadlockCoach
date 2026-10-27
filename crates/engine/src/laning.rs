@@ -30,6 +30,8 @@ pub struct LaneCoach { catalog:Arc<Catalog>, position:crate::positioning::Positi
 impl Default for LaneCoach {
     fn default() -> Self { Self { catalog:Arc::new(serde_json::from_str(include_str!("../../../data/coaching/laning.json")).expect("shipped lane policy")), position:Default::default(), jungle:Default::default() } }
 }
+/// Health fraction below which the retreat call preempts everything.
+pub const CRITICAL:f32 = 0.15;
 pub fn lane_name(l:Lane) -> &'static str { match l { Lane::Green=>"Green",Lane::Blue=>"Blue",Lane::Yellow=>"Yellow" } }
 pub fn focus(s:&GameSnapshot) -> Option<Lane> { s.coaching_context.focus_lane.or_else(|| s.minimap.as_ref().and_then(|m| m.your_lane)) }
 
@@ -49,6 +51,15 @@ impl LaneCoach {
         let mut d=self.decide_lane(s)?;
         // A specific invade / stay-on-your-side call replaces the generic camp suggestion.
         if matches!(d.action,Action::Jungle|Action::HoldWave)&&self.jungle.invade(s).is_some(){d.speak=false;}
+        // "Back off before trading" is wrong while most of the enemy team is dead and none is near
+        // you (a recorded match said it with three enemies dead): there is no one to trade with.
+        if d.cue_key=="lane:back_off" {
+            let dead=crate::positioning::TeamPicture::from(s).map(|p|p.enemies_dead.len()).unwrap_or(0);
+            let me=s.minimap.as_ref().and_then(|m|m.you);
+            // Unknown position counts as near: unknown is not safe.
+            let near=me.is_none_or(|me|s.minimap.as_ref().is_some_and(|m|m.heroes.iter().any(|h|!h.ally&&h.visible()&&h.distance(me)<=0.28)));
+            if dead>=3 && !near {d.speak=false;d.evidence.push(format!("{dead} enemies are dead on the top bar and none is visible near you"));}
+        }
         let Some(danger)=self.position.assess(s) else {return Some(d)};
         let aggressive=matches!(d.action,Action::Poke|Action::PushWave|Action::Jungle|Action::Gank|Action::PrepareObjective);
         if matches!(danger.id.as_str(),"gank"|"outnumbered") && d.action!=Action::BackOff {
@@ -67,9 +78,16 @@ impl LaneCoach {
         let mut evidence=vec![]; let mut missing=vec![];
         if let Some(h)=health {evidence.push(format!("Personal health OCR: {:.0}% ({} reads)",h*100.0,s.health_observations));}
         else {missing.push("Personal health could not be read".into());}
+        // Critical health overrides every plan on a single reading: each reading is already
+        // checked against the health bar (or is the bar), and a recorded match stayed silent at 6%.
+        if health.is_some_and(|h| h<CRITICAL) {
+            return Some(self.plan("critical",Action::BackOff,s,Priority::High,evidence,missing,false));
+        }
         // Low health needs two consistent reads; a sudden drop needs a real burst (a recorded match
         // showed a stuck misread and small trades triggering this far too often).
-        if health.is_some_and(|h| h<cfg.low_health) && s.health_observations>=2 || s.health_delta_ratio.is_some_and(|d| d < -cfg.damage_drop) {
+        // Low but clearly rising health is already healing (fountain, regen item): no warning.
+        let healing=s.health_delta_ratio.is_some_and(|d| d>0.05);
+        if health.is_some_and(|h| h<cfg.low_health) && s.health_observations>=2 && !healing || s.health_delta_ratio.is_some_and(|d| d < -cfg.damage_drop) {
             if let Some(delta)=s.health_delta_ratio {evidence.push(format!("Health changed by {:.0} percentage points since the previous read",delta*100.0));}
             return Some(self.plan("back_off",Action::BackOff,s,Priority::High,evidence,missing,s.health_observations<2));
         }

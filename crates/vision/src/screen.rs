@@ -90,6 +90,9 @@ pub fn interpret_probe(lines: &[String], p: &Probe, hero_names: &[(String, Strin
     (Screen::Unknown, None)
 }
 
+/// Whether the respawn banner line reads "RESPAWN" (independent of the clock read).
+pub fn probe_says_respawn(lines: &[String], p: &Probe) -> bool { lines.get(p.respawn).is_some_and(|s| has(s, "RESPAWN")) }
+
 /// Majority vote over clock candidates; only readings with a separator are considered.
 pub fn vote_clock(lines: &[String], expected: Option<u32>) -> Option<u32> {
     let parsed: Vec<Option<u32>> = lines.iter().map(|s| Some(s.trim()).filter(|s| s.contains(':')).and_then(parse::parse_clock).filter(|v| *v <= 14400)).collect();

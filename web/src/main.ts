@@ -301,10 +301,13 @@ function logCue(cue:Cue,s:Snapshot,fast:boolean){
   if(cueLog.length>3000)cueLog.splice(0,cueLog.length-3000);
   if(settings.record)try{localStorage.setItem(CUE_LOG_KEY,JSON.stringify(cueLog));}catch{/* quota: export keeps the in-memory log */}
 }
+/** Cue keys (or key prefixes) only the full scan's engine produces (QuickCoach::configure). */
+const FULL_ONLY=['counter','death','lead','behind','unspent-dead'];
 function deliver(analysis:Analysis,timestamp:number,fast=false){
   const now=Date.now(),age=Math.max(0,now-timestamp);const delivered:Cue[]=[];
   for(const original of analysis.cues){
-    if(!fast&&now-quick.lastResultAt<3000&&!original.key.startsWith('counter:')&&!original.key.startsWith('death'))continue;
+    // While the fast path is live it speaks the shared rules; only full-scan-only cues pass here.
+    if(!fast&&now-quick.lastResultAt<3000&&!FULL_ONLY.some(p=>original.key===p||original.key.startsWith(p+':')))continue;
     const cue=freshCue(original,analysis.snapshot.game_clock_secs,age);if(!cue)continue;
     if(now-(spokenAt.get(cue.key)??-Infinity)<cue.cooldown_secs*1000)continue;
     if(cue.key.startsWith('counter:')){

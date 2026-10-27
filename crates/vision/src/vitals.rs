@@ -15,6 +15,10 @@ pub const MAX_PANEL: Region = Region { x: 145.0 / 1600.0, y: 675.0 / 900.0, w: 1
 /// Measured on recorded frames: the bar runs from about (385,580) at the top to (428,770) at the
 /// bottom and fills bottom-up. White = current HP; red = damage just taken; green = incoming
 /// heal; dark grey = missing. Returns None when the bar is not clearly visible.
+/// Allowed difference between the number and the bar: the bar measured within ~0.03 of correct
+/// readings, so near-empty bars catch a dropped digit ("10" for 104/964) that a fixed 15-point
+/// tolerance missed.
+pub fn bar_tolerance(bar: f32) -> f32 { 0.06 + 0.15 * bar }
 /// `bar_ratio` measured at full health (the top rows sit under the frame's tab).
 pub const BAR_FULL: f32 = 0.97;
 pub fn bar_ratio(frame: &DynamicImage) -> Option<f32> {
@@ -49,6 +53,8 @@ pub struct Tracker {
     bar: Option<f32>,
     /// A >30% single-read jump seen once without health-bar support; accepted if repeated.
     pending_jump: Option<(u32, u32)>,
+    /// Last accepted max HP and when: scales the bar when the digits are unreadable.
+    last_max: Option<(u64, u32)>,
 }
 pub struct Reading { pub hp: u32, pub max: u32, pub observations: u32, pub delta: Option<f32>, pub regions: Vec<RegionObservation> }
 
@@ -77,7 +83,7 @@ impl Tracker {
     /// Set the health-bar fraction of the frame about to be read.
     pub fn set_bar(&mut self, bar: Option<f32>) { self.bar = bar; }
     fn bar_supports(&self, hp: u32, max: u32) -> bool {
-        self.bar.is_some_and(|b| (hp as f32 / max.max(1) as f32 - (b / BAR_FULL).min(1.0)).abs() <= 0.15)
+        self.bar.is_some_and(|b| { let b = (b / BAR_FULL).min(1.0); (hp as f32 / max.max(1) as f32 - b).abs() <= bar_tolerance(b) })
     }
 
     /// Interpret batched line reads of the tracked boxes.
@@ -142,9 +148,18 @@ impl Tracker {
     /// beyond 15 percentage points the reading is rejected and both boxes are re-acquired.
     pub fn agrees_with_bar(&mut self, r: &Reading, bar: Option<f32>) -> bool {
         let Some(bar) = bar.map(|b| (b / BAR_FULL).min(1.0)) else { return true };
-        let ok = (r.hp as f32 / r.max.max(1) as f32 - bar).abs() <= 0.15;
+        let ok = (r.hp as f32 / r.max.max(1) as f32 - bar).abs() <= bar_tolerance(bar);
         if !ok { self.hp.reset(); self.max.reset(); self.previous = None; }
         ok
+    }
+    /// HP from the bar alone when the digits are unreadable. At very low health the red damage
+    /// vignette hides the number (rec2: 6 of 12 frames under 10% HP unread) while the bar still
+    /// measures within ~0.03; that is exactly when a retreat call matters. Needs a max HP read in
+    /// the last 60 s (max changes only with items and levels).
+    pub fn from_bar(&self, now: u64) -> Option<(u32, u32)> {
+        let b = (self.bar? / BAR_FULL).min(1.0);
+        let (_, max) = self.last_max.filter(|(t, _)| now >= *t && now - *t <= 60_000)?;
+        Some(((b * max as f32).round() as u32, max))
     }
     /// Re-acquisition is throttled so a hidden HUD cannot cause a detector pass every frame.
     pub fn may_acquire(&mut self, now: u64) -> bool { self.hp.may_acquire(now, 2000) }
@@ -154,6 +169,7 @@ impl Tracker {
         let observations = previous.map(|p| p.3.saturating_add(1)).unwrap_or(1);
         let delta = previous.map(|(_, old, old_max, _)| hp as f32 / max as f32 - old as f32 / old_max as f32);
         self.previous = Some((now, hp, max, observations));
+        self.last_max = Some((now, max));
         Reading { hp, max, observations, delta, regions: vec![] }
     }
 }

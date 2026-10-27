@@ -62,6 +62,8 @@ pub struct Extrapolated {
     last_confirm_ms: u64,
     mismatches: u32,
     last_verify_ms: Option<u64>,
+    /// Verified readings that disagree with the extrapolation, kept while they agree with each other.
+    pending: Vec<(u32, u64)>,
 }
 
 impl Extrapolated {
@@ -70,11 +72,15 @@ impl Extrapolated {
     pub const REVERIFY_MS: u64 = 120_000;
     pub const VERIFY_THROTTLE_MS: u64 = 2_000;
     /// Without any confirmation for this long, the value is no longer reported.
-    pub const STALE_MS: u64 = 15_000;
+    /// Wall-time extrapolation stays trustworthy for a minute without a confirming read (the
+    /// small clock text can fail to read for long stretches under stream overlays).
+    pub const STALE_MS: u64 = 60_000;
 
     pub fn expected(&self, now_ms: u64) -> Option<u32> {
         self.anchor.filter(|(_, t)| now_ms >= *t).map(|(v, t)| v + ((now_ms - t) / 1000) as u32)
     }
+    /// Milliseconds since the last confirming read, if anchored.
+    pub fn confirmed_age_ms(&self, now_ms: u64) -> Option<u64> { self.anchor.map(|_| now_ms.saturating_sub(self.last_confirm_ms)) }
     /// Current value, if anchored and recently confirmed.
     pub fn value(&self, now_ms: u64) -> Option<u32> {
         self.expected(now_ms).filter(|_| now_ms >= self.last_confirm_ms && now_ms - self.last_confirm_ms <= Self::STALE_MS)
@@ -100,7 +106,26 @@ impl Extrapolated {
     /// Record the result of an expensive verification.
     pub fn verify(&mut self, value: Option<u32>, now_ms: u64) {
         self.last_verify_ms = Some(now_ms);
-        if let Some(v) = value { self.anchor = Some((v, now_ms)); self.last_confirm_ms = now_ms; self.mismatches = 0; }
+        let Some(v) = value else { return };
+        // The value follows wall time, so even the reliable reader is not trusted when it alone
+        // contradicts the extrapolation (a recorded match read 7:00 for 17:00 and +60 s): a jump is
+        // adopted only after mutually consistent verifications - 3 forward, 2 backward (a new
+        // match or rewind). A clock still showing exactly the last confirmed value is a pause or a
+        // stalled stream (the game clock stops, wall time does not) and is adopted at once. Other
+        // small backward gaps are misreads too (rec2 read 8:11 as 8:01 and 10:56 as 10:50).
+        let accept = match self.expected(now_ms) {
+            None => true,
+            Some(e) if v.abs_diff(e) <= 3 => true,
+            Some(e) if v < e && self.anchor.is_some_and(|(a, _)| a == v) => true,
+            Some(e) => {
+                // Consistent = advancing with wall time, or standing still (paused).
+                let consistent = self.pending.last().is_some_and(|(pv, pt)| v.abs_diff(pv + (now_ms.saturating_sub(*pt) / 1000) as u32) <= 2 || v.abs_diff(*pv) <= 1);
+                if !consistent { self.pending.clear(); }
+                self.pending.push((v, now_ms));
+                self.pending.len() >= if v > e { 3 } else { 2 }
+            }
+        };
+        if accept { self.anchor = Some((v, now_ms)); self.last_confirm_ms = now_ms; self.mismatches = 0; self.pending.clear(); }
     }
     pub fn reset(&mut self) { *self = Self::default(); }
 }
@@ -206,7 +231,18 @@ mod tests {
         assert_eq!(c.value(4000), Some(317));
         assert!(!c.observe(Some(320), 7000));
         assert!(c.observe(Some(437), 123_000), "a confirmed value is still re-verified every 120 s");
-        let mut s = Extrapolated::default(); s.verify(Some(10), 0); assert_eq!(s.value(16_000), None, "unconfirmed values go stale");
+        // A single verified misread no longer moves an established value; consistent repeats do.
+        let mut j = Extrapolated::default(); j.verify(Some(1000), 0);
+        j.verify(Some(420), 2000); assert_eq!(j.expected(2000), Some(1002), "one 7:00-for-17:00 misread is rejected");
+        j.verify(Some(1063), 4000); j.verify(Some(1065), 6000); assert_eq!(j.expected(6000), Some(1006), "two +60 reads are not enough");
+        j.verify(Some(1067), 8000); assert_eq!(j.expected(8000), Some(1067), "three consistent reads move it");
+        j.verify(Some(5), 10_000); j.verify(Some(7), 12_000); assert_eq!(j.expected(12_000), Some(7), "new match: two backward reads");
+        let mut s = Extrapolated::default(); s.verify(Some(10), 0); assert_eq!(s.value(59_000), Some(69)); assert_eq!(s.value(61_000), None, "unconfirmed values go stale after a minute");
+        // A pause: the clock still shows the last confirmed value, adopted at once.
+        let mut p = Extrapolated::default(); p.verify(Some(313), 0); p.verify(Some(313), 5000); assert_eq!(p.expected(5000), Some(313));
+        // A small backward misread (8:11 read as 8:01) is not; a held pause (same value twice) is.
+        let mut m = Extrapolated::default(); m.verify(Some(490), 0); m.verify(Some(481), 1000); assert_eq!(m.expected(1000), Some(491));
+        let mut h = Extrapolated::default(); h.verify(Some(490), 0); h.verify(Some(490), 6000); h.verify(Some(490), 9000); assert_eq!(h.expected(9000), Some(490));
     }
     #[test]
     fn vote_prefers_majority_then_expected_value() {

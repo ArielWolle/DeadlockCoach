@@ -163,6 +163,10 @@ pub struct MinimapState {
     /// Lane layout seen on the map: the side lanes swap between teams (`true` = Yellow on the
     /// left, Green on the right). None when no lane colour was visible.
     pub lanes_mirrored: Option<bool>,
+    /// Midboss events from the tracker: milliseconds since its icon disappeared for good (likely
+    /// killed), and since it reappeared (respawned). None = no such event.
+    pub midboss_down_ms: Option<u64>,
+    pub midboss_back_ms: Option<u64>,
 }
 
 /// One hero portrait followed across minimap observations.

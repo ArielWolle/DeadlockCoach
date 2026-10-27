@@ -60,10 +60,16 @@ impl Rule for MapRule {
                 "Two lanes look pushed. There may be time for nearby camps before the next wave. Watch missing enemies.".into(),
                 Priority::Low, 150));
         }
-        if map.midboss_up && clock >= 600 && !urgent && !poor_health && no_bad_lane {
+        // The Midboss is up from 0:00, so "it is lit" is news only once, and again when it returns
+        // after a kill (the tracker confirms a 20 s absence, then a sighting).
+        if map.midboss_up && map.midboss_back_ms.is_some_and(|ms| ms <= 30_000) && !urgent {
+            out.push(cue("map:midboss-back".into(),
+                "The Midboss is back on the map. Push your lanes and gather teammates before considering it.".into(),
+                Priority::Normal, 120));
+        } else if map.midboss_up && map.midboss_back_ms.is_none() && clock >= 600 && !urgent && !poor_health && no_bad_lane {
             out.push(cue("map:midboss".into(),
                 "The Midboss icon is lit. Push your lanes and gather teammates before considering it.".into(),
-                Priority::Low, 300));
+                Priority::Low, 36_000));
         }
         out
     }

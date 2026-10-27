@@ -83,6 +83,17 @@ impl Rule for CounterRule {
             if snap.game_clock_secs.unwrap_or(0)<180||snap.souls.unwrap_or(0)<800{return vec![];}
             if snap.minimap.as_ref().is_some_and(|m|m.you.is_some_and(|me|m.enemies.iter().any(|p|(me.x-p.x).hypot(me.y-p.y)<0.18))){return vec![];}
         }
+        // A suggestion must be affordable from souls actually read (a recorded match suggested
+        // items with no souls reading at all), and fit the build you are seen buying: a damage
+        // item of the other category is skipped once you own three of one and none of the other.
+        let owned = |kind: &str| snap.items.iter().filter(|i| counter_explanations::slot(i) == Some(kind)).count();
+        let (weapon, spirit) = (owned("weapon"), owned("spirit"));
+        let fits = |class: &str| match counter_explanations::slot(class) {
+            Some("weapon") => !(spirit >= 3 && weapon == 0),
+            Some("spirit") => !(weapon >= 3 && spirit == 0),
+            _ => true,
+        };
+        let affordable = |class: &str| counter_explanations::cost(class).is_none_or(|cost| snap.souls.is_some_and(|souls| souls >= cost));
         let mut seen: Vec<&str> = vec![];
         let mut cues = vec![];
         for trigger in snap.enemy_items.iter().chain(snap.enemy_heroes.iter()) {
@@ -91,7 +102,7 @@ impl Rule for CounterRule {
             let mine: Vec<&CounterDef> = self.0.iter()
                 .filter(|c| &c.when_enemy_has == trigger
                     && !snap.items.iter().any(|i| i == &c.suggest || i == &c.suggest_class)
-                    && counter_explanations::cost(&c.suggest_class).is_none_or(|cost|snap.souls.is_none_or(|souls|souls>=cost)))
+                    && affordable(&c.suggest_class) && fits(&c.suggest_class))
                 .take(1).collect();
             let Some(first) = mine.first() else { continue };
             let who = if first.label.is_empty() { trigger.as_str() } else { first.label.as_str() };
@@ -189,6 +200,9 @@ impl Rule for NetworthLeadRule {
         let (Some(a), Some(e), Some(t)) = (snap.ally_networth, snap.enemy_networth, snap.game_clock_secs) else { return vec![] };
         if t < self.cfg.lead_min_clock_secs || a == 0 || e == 0 { return vec![]; }
         let diff = (a as f32 - e as f32) / e as f32 * 100.0;
+        // One team at under half the other's souls is a digit drop, not a match state (a
+        // recorded match read ~100k as 1000 and called "behind"): say nothing.
+        if a.min(e) * 2 < a.max(e) { self.streak.set((0, 0)); return vec![]; }
         let state: i8 = if diff >= self.cfg.lead_pct && a.saturating_sub(e) >= self.cfg.lead_min_abs { 1 }
             else if diff <= -self.cfg.lead_pct && e.saturating_sub(a) >= self.cfg.lead_min_abs { -1 } else { 0 };
         let (prev, n) = self.streak.get();
@@ -204,7 +218,7 @@ impl Rule for NetworthLeadRule {
     }
 }
 pub fn default_rules(cfg: RulesConfig) -> Vec<Box<dyn Rule>> {
-    vec![Box::new(positioning::PositionCoach::default()), Box::new(jungle::JungleCoach::default()), Box::new(laning::LaneCoach::default()), Box::new(map_rules::MapRule), Box::new(UnspentSoulsRule(cfg.clone())), Box::new(DeathCauseRule), Box::new(NetworthLeadRule::new(cfg)),Box::new(economy::PaceRule),Box::new(economy::WaveReportRule)]
+    vec![Box::new(positioning::PositionCoach::default()), Box::new(jungle::JungleCoach::default()), Box::new(laning::LaneCoach::default()), Box::new(map_rules::MapRule), Box::new(UnspentSoulsRule(cfg.clone())), Box::new(DeathCauseRule), Box::new(NetworthLeadRule::new(cfg)),Box::new(economy::PaceRule),Box::new(economy::WaveReportRule::default())]
 }
 
 pub struct Engine {
@@ -237,7 +251,7 @@ impl Engine {
             self.last_said.get("$counter-category").is_none_or(|t|now.saturating_sub(*t)>=180)
             &&self.last_said.get(&format!("$counter-item:{}",c.key.rsplit(':').next().unwrap_or(""))).is_none_or(|t|now.saturating_sub(*t)>=1200)));
         if let Some(l)=self.last_cue_at { if now-l<self.min_gap_secs {
-            out.retain(|c| c.priority==Priority::High && (now-l>=3 || c.key=="lane:back_off"));
+            out.retain(|c| c.priority==Priority::High && (now-l>=3 || c.key=="lane:back_off" || c.key=="lane:critical"));
         }}
         out.sort_by(|a, b| b.priority.cmp(&a.priority));
         out.truncate(self.max_per_step);
@@ -325,6 +339,31 @@ mod tests {
         let r = counter_rule_from_json(r#"[{"when_enemy_has":"hero_x","suggest":"Y","reason":"r."}]"#).unwrap();
         let mut s = at(10); s.enemy_heroes = vec!["hero_x".into()];
         assert_eq!(Engine::new(vec![r]).step(&s).len(), 1);
+    }
+
+    #[test]
+    fn counter_needs_read_souls_and_a_fitting_build() {
+        // Plated Armor (vitality, 6400) vs a spirit item; owned items are three weapon items.
+        let json = r#"[{"when_enemy_has":"hero_x","suggest":"Plated Armor","suggest_class":"upgrade_deflecting_armor","reason":"r."},
+            {"when_enemy_has":"hero_y","suggest":"Extra Spirit","suggest_class":"upgrade_improved_spirit","reason":"r."}]"#;
+        let step = |souls: Option<u32>, enemy: &str| {
+            let mut s = at(900); s.souls = souls; s.enemy_heroes = vec![enemy.into()];
+            s.items = vec!["upgrade_close_range".into(), "upgrade_high_velocity_mag".into(), "upgrade_clip_size".into()];
+            Engine::new(vec![counter_rule_from_json(json).unwrap()]).step(&s).len()
+        };
+        assert_eq!(step(None, "hero_x"), 0, "souls unread");
+        assert_eq!(step(Some(5000), "hero_x"), 0, "cannot afford 6400");
+        assert_eq!(step(Some(7000), "hero_x"), 1);
+        assert_eq!(step(Some(7000), "hero_y"), 0, "spirit item for a weapon build");
+    }
+
+    #[test]
+    fn implausible_team_gap_is_not_called() {
+        let mut e = Engine::new(vec![Box::new(NetworthLeadRule::new(RulesConfig::default()))]);
+        e.min_gap_secs = 0;
+        let mut said = 0;
+        for t in [600, 610, 620, 630] { let mut s = at(t); s.ally_networth = Some(1000); s.enemy_networth = Some(60000); said += e.step(&s).len(); }
+        assert_eq!(said, 0, "a 98% gap is a misread, not a game state");
     }
 
     #[test]

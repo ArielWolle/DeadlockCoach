@@ -98,9 +98,11 @@ impl Coach {
         if self.pipeline.profile().adapter != "deadlock" { return Ok(Engine::new(vec![])); }
         let mut rules: Vec<Box<dyn Rule>> = vec![];
         if self.options.timers { rules.extend(coach_engine::rules_from_timings(&self.timings).map_err(js_error)?); }
-        if self.options.laning {rules.push(Box::new(self.lane_coach.clone()));}
+        // Positioning (gank / outnumbered / missing / help) and jungle calls speak for themselves;
+        // the lane plan mutes itself in their favour, so both must be registered or nothing is said.
+        if self.options.laning {rules.push(Box::new(coach_engine::positioning::PositionCoach::default()));rules.push(Box::new(coach_engine::jungle::JungleCoach::default()));rules.push(Box::new(self.lane_coach.clone()));}
         if self.options.map { rules.push(Box::new(coach_engine::map_rules::MapRule)); }
-        if self.options.map { rules.push(Box::new(coach_engine::economy::WaveReportRule)); }
+        if self.options.map { rules.push(Box::new(coach_engine::economy::WaveReportRule::default())); }
         if self.options.economy {
             rules.push(Box::new(coach_engine::UnspentSoulsRule(self.rules.clone())));
             rules.push(Box::new(coach_engine::NetworthLeadRule::new(self.rules.clone())));
@@ -176,8 +178,8 @@ impl QuickCoach {
     pub fn configure(&mut self,options:&str)->Result<(),JsValue>{
         self.options=json(options)?;let mut rules:Vec<Box<dyn Rule>>=vec![];
         if self.options.timers{rules.extend(coach_engine::rules_from_timings(include_str!("../../../data/timings.json")).map_err(js_error)?);}
-        if self.options.laning{rules.push(Box::new(self.lane.clone()));}
-        if self.options.map{rules.push(Box::new(coach_engine::economy::WaveReportRule));rules.push(Box::new(coach_engine::map_rules::MapRule));}
+        if self.options.laning{rules.push(Box::new(coach_engine::positioning::PositionCoach::default()));rules.push(Box::new(coach_engine::jungle::JungleCoach::default()));rules.push(Box::new(self.lane.clone()));}
+        if self.options.map{rules.push(Box::new(coach_engine::economy::WaveReportRule::default()));rules.push(Box::new(coach_engine::map_rules::MapRule));}
         if self.options.economy{rules.push(Box::new(coach_engine::economy::PaceRule));rules.push(Box::new(coach_engine::UnspentSoulsRule(RulesConfig::default())));}
         self.engine=Engine::new(rules);Ok(())
     }

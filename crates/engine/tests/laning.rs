@@ -12,7 +12,7 @@ fn crashed(s:&mut GameSnapshot) {let l=&mut s.minimap.as_mut().unwrap().blue;l.p
 #[test]
 fn policy_cards_quote_real_document_guidance_without_unverified_claims() {
     let catalog:Catalog=serde_json::from_str(include_str!("../../../data/coaching/laning.json")).unwrap();
-    assert_eq!(catalog.schema_version,1);assert_eq!(catalog.cards.len(),13);
+    assert_eq!(catalog.schema_version,1);assert_eq!(catalog.cards.len(),14);
     for c in catalog.cards {
         assert!(!c.sources.is_empty());assert!(c.cooldown_secs>=20);
         for source in c.sources {
@@ -123,4 +123,18 @@ fn visible_ui_values_do_not_authorize_coaching_when_game_state_is_unknown(){let 
 #[test]fn health_warning_interrupts_immediately_and_starts_before_critical_hp(){
     let mut e=Engine::new(vec![Box::new(LaneCoach::default())]);let mut s=state();assert!(!e.step(&s).is_empty());
     s.game_clock_secs=Some(401);s.hp=Some(440);assert_eq!(e.step(&s)[0].key,"lane:back_off");
+}
+#[test]fn critical_health_is_called_on_one_reading_and_preempts_the_gap(){
+    let mut e=Engine::new(vec![Box::new(LaneCoach::default())]);let mut s=state();assert!(!e.step(&s).is_empty());
+    s.game_clock_secs=Some(401);s.hp=Some(60);s.health_observations=1;
+    let c=e.step(&s);assert_eq!(c[0].key,"lane:critical");assert!(c[0].text.contains("critical"));
+}
+#[test]fn low_health_is_not_told_to_back_off_trades_while_three_enemies_are_dead(){
+    let mut s=state();s.hp=Some(300);
+    s.hero_status=(0..12).map(|i|coach_core::HeroStatus{ally:i<6,slot:i%6,dead:Some(!(i<6)&&i<9),..Default::default()}).collect();
+    let d=LaneCoach::default().decide(&s).unwrap();assert_eq!(d.cue_key,"lane:back_off");assert!(!d.speak);
+    // Unknown position is not safe: the warning stays.
+    s.minimap.as_mut().unwrap().you=None;assert!(LaneCoach::default().decide(&s).unwrap().speak);
+    // Critical health still preempts.
+    s.hp=Some(100);assert_eq!(LaneCoach::default().decide(&s).unwrap().cue_key,"lane:critical");
 }

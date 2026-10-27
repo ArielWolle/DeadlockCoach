@@ -37,10 +37,16 @@ impl Monitor {
         let d=seen.abs_diff(expected);if d>6&&!(d%60<=2||d%60>=58){return None;}
         let clock=expected;
         let raw=&lines[hp_i];
-        let value=raw.trim().replace(',',"");if value.is_empty()||!value.chars().all(|c|c.is_ascii_digit()){return None;}
-        let hp=value.parse::<u32>().ok()?;let max=c.snapshot.max_hp?;if hp>max||max<100{return None;}
-        // The health bar must agree; a truncated tracked box is re-acquired by the full scan.
-        if crate::vitals::bar_ratio(&game).is_some_and(|b|(hp as f32/max as f32-(b/crate::vitals::BAR_FULL).min(1.)).abs()>0.15){return None;}
+        let max=c.snapshot.max_hp?;if max<100{return None;}
+        let bar=crate::vitals::bar_ratio(&game).map(|b|(b/crate::vitals::BAR_FULL).min(1.));
+        let value=raw.trim().replace(',',"");
+        let digits=(!value.is_empty()&&value.chars().all(|c|c.is_ascii_digit())).then(||value.parse::<u32>().ok()).flatten().filter(|hp|*hp<=max);
+        let hp=match digits{
+            // The health bar must agree; a truncated tracked box is re-acquired by the full scan.
+            Some(hp)=>{if bar.is_some_and(|b|(hp as f32/max as f32-b).abs()>crate::vitals::bar_tolerance(b)){return None;}hp}
+            // Unreadable digits (the low-health damage vignette): the bar alone is still a measurement.
+            None=>(bar?*max as f32).round() as u32,
+        };
         let v=self.vitals.accept(hp,max,now);
         let mut snapshot=c.snapshot.clone();snapshot.game_clock_secs=Some(clock);snapshot.hp=Some(hp);snapshot.health_observations=v.observations;snapshot.health_delta_ratio=v.delta;
         if !rich {

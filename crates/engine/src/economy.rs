@@ -17,17 +17,32 @@ impl Rule for PaceRule{
         vec![Cue{key:format!("pace:{band}"),text,priority:Priority::Low,cooldown_secs:120}]
     }
 }
-pub struct WaveReportRule;
+/// Lane-by-lane wave summary. A recorded match repeated "contested near the middle" 12 times:
+/// a report is spoken only when some lane needs action (pushed out or coming toward you), and
+/// the same report is not repeated for 5 minutes; a changed report waits at least 45 s.
+#[derive(Default)]
+pub struct WaveReportRule{last:std::cell::RefCell<Option<(String,u32)>>}
 impl Rule for WaveReportRule{
     fn evaluate(&self,s:&GameSnapshot)->Vec<Cue>{
         if s.dead||s.screen.as_deref()!=Some("Gameplay"){return vec![];}
+        let Some(clock)=s.game_clock_secs else{return vec![]};
         let Some(map)=s.minimap.as_ref().filter(|m|m.observations>=3)else{return vec![]};
-        let mut parts=vec![];
+        let mut parts=vec![];let mut actionable=false;
         for(lane,name)in [(coach_core::Lane::Green,"Green"),(coach_core::Lane::Blue,"Blue"),(coach_core::Lane::Yellow,"Yellow")]{
             let v=map.lane(lane);if v.ally_troopers+v.enemy_troopers<2{continue;}
-            if let Some(front)=v.push {parts.push(format!("{name} {}",if front>=0.7{"pushed out"}else if front<0.35{"coming toward our side"}else{"contested near the middle"}));}
+            if let Some(front)=v.push {
+                let state=if front>=0.7{"pushed out"}else if front<0.35{"coming toward our side"}else{"contested near the middle"};
+                actionable|=front>=0.7||front<0.35;parts.push(format!("{name} {state}"));
+            }
         }
-        if parts.is_empty(){return vec![];}
-        vec![Cue{key:"wave:overview".into(),text:format!("Wave check: {}. Catch incoming farm before roaming.",parts.join(", ")),priority:Priority::Low,cooldown_secs:75}]
+        if parts.is_empty()||!actionable{return vec![];}
+        let summary=parts.join(", ");
+        let mut last=self.last.borrow_mut();
+        if let Some((prev,at))=last.as_ref(){
+            let since=clock.saturating_sub(*at);
+            if clock>=*at&&(since<45||*prev==summary&&since<300){return vec![];}
+        }
+        *last=Some((summary.clone(),clock));
+        vec![Cue{key:"wave:overview".into(),text:format!("Wave check: {summary}. Catch incoming farm before roaming."),priority:Priority::Low,cooldown_secs:45}]
     }
 }

@@ -19,7 +19,7 @@ pub struct Scanner {
     sums: Vec<HashMap<String, Vec<f32>>>,
     frames: u32,
     last_totals: (Option<u32>, Option<u32>),
-    pending_totals: (Option<u32>, Option<u32>),
+    pending_totals: (Option<(u32, u32)>, Option<(u32, u32)>),
     hero_names: Vec<(String, String)>,
     match_id: Option<u64>,
     pending_match: Option<u64>,
@@ -52,15 +52,53 @@ pub struct Scanner {
     seen_hud: bool,
     was_dead: bool,
     totals_flip: bool,
+    /// Last identity per item slot and how many scans in a row it repeated.
+    item_votes: [Option<(String, u8)>; 12],
+    /// Per ally slot: summed |slot health - your health| and joint reads (see own_slot).
+    own_slot: [(f32, u32); 6],
+}
+
+/// Your top-bar slot, once one slot's bar has clearly followed your own HP.
+pub fn own_slot(err: &[(f32, u32); 6]) -> Option<usize> {
+    let mut m: Vec<(usize, f32)> = err.iter().enumerate().filter(|(_, e)| e.1 >= 8).map(|(i, e)| (i, e.0 / e.1 as f32)).collect();
+    m.sort_by(|a, b| a.1.total_cmp(&b.1));
+    let (best, second) = (m.first()?, m.get(1)?);
+    (best.1 < 0.08 && second.1 >= 2.0 * best.1 + 0.05).then_some(best.0)
+}
+
+/// Shop costs by class name (data/items.json). Items absent here (retired shop art) are rejected.
+fn item_costs() -> &'static HashMap<String, u32> {
+    static COSTS: std::sync::OnceLock<HashMap<String, u32>> = std::sync::OnceLock::new();
+    COSTS.get_or_init(|| serde_json::from_str::<Vec<serde_json::Value>>(include_str!("../../../data/items.json").trim_start_matches('\u{feff}')).unwrap_or_default()
+        .iter().filter_map(|i| Some((i["class_name"].as_str()?.to_string(), i["cost"].as_u64()? as u32))).collect())
+}
+
+/// Most souls a player can have spent by clock seconds: generous (a fed carry is near 1,000
+/// souls a minute early), so it only removes impossible matches such as a 6,400 item at 2:59.
+pub fn affordable_by(clock: u32) -> u32 { 1500 + clock * 1200 / 60 }
+
+/// Whether a matched item may be listed as owned: a real shop item (tier-5 placeholders cost 9999
+/// and are not sold in normal matches) that could be bought by now.
+pub fn plausible_item(name: &str, clock: Option<u32>) -> bool {
+    match item_costs().get(name) {
+        None => false,
+        Some(&c) if c >= 9999 => false,
+        Some(&c) => clock.is_none_or(|t| c <= affordable_by(t)),
+    }
 }
 
 /// Team totals only grow (mostly), and not by leaps. A value outside that band is accepted
 /// only if the next reading agrees with it (so one misread cannot poison later frames).
-fn plausible(prev: &mut Option<u32>, pending: &mut Option<u32>, v: Option<u32>) -> Option<u32> {
+/// Team net worth only grows (minor losses on death). A rise outside the band needs one
+/// confirming read; a drop of more than 10% needs ten consistent reads: a recorded match read
+/// ~100k as 1000 for 12 frames, which produced a false "you are behind" call.
+fn plausible(prev: &mut Option<u32>, pending: &mut Option<(u32, u32)>, v: Option<u32>) -> Option<u32> {
     let v = v?;
     let in_band = match *prev { Some(p) => v + p / 10 >= p && v <= p + p / 2 + 3000, None => false };
-    let confirmed = pending.map(|q| v.abs_diff(q) <= q / 10 + 1000).unwrap_or(false);
-    if in_band || confirmed { *prev = Some(v); *pending = None; Some(v) } else { *pending = Some(v); None }
+    let count = pending.filter(|(q, _)| v.abs_diff(*q) <= q / 10 + 1000).map(|(_, n)| n + 1).unwrap_or(1);
+    let drop = prev.is_some_and(|p| v + p / 10 < p);
+    let confirmed = count >= if drop { 10 } else { 2 };
+    if in_band || confirmed { *prev = Some(v); *pending = None; Some(v) } else { *pending = Some((v, count)); None }
 }
 
 fn load_hero_names(root: &Path) -> Vec<(String, String)> {
@@ -135,6 +173,8 @@ impl Scanner {
             seen_hud: false,
             was_dead: false,
             totals_flip: false,
+            item_votes: Default::default(),
+            own_slot: Default::default(),
         }
     }
 
@@ -152,6 +192,8 @@ impl Scanner {
         self.map_tracker = crate::minimap::Tracker::default();
         self.vitals = crate::vitals::Tracker::default();
         self.team_status.clear();
+        self.item_votes = Default::default();
+        self.own_slot = Default::default();
         self.cadence.reset();
         self.death_cause = None;
         self.name_rects = vec![None; 12];
@@ -285,9 +327,18 @@ impl Scanner {
         // Detector name check runs only when the pixel panel cue fires, plus a slow 15 s safety
         // net for unfamiliar themes. Cached exact name rectangles make later checks line-only.
         let (ocr, heroes, cadence) = (&self.ocr, &self.hero_names, &mut self.cadence);
-        let (scr, raw_clock) = screen::interpret_probe(&lines, &probe, heroes, located.0, expected,
+        let (mut scr, raw_clock) = screen::interpret_probe(&lines, &probe, heroes, located.0, expected,
             || (crate::scoreboard::panel_cue(img) || cadence.due("scoreboard_probe", now_ms, 15_000))
                 && crate::scoreboard::looks_like_scoreboard(ocr, img, heroes));
+        // The small clock text failed to read on 22.5% of a recorded match's frames (stream
+        // overlays, effects), which dropped whole gameplay frames, and the death screen was never
+        // recognized because its banner check needed a clock read. With a recently verified clock,
+        // the respawn banner means dead and the own health bar (only drawn on the live HUD) means
+        // gameplay. The extrapolated clock is not fed back as a reading (`raw_clock` stays None).
+        if scr == Screen::Unknown && expected.is_some() && self.clock_value.confirmed_age_ms(now_ms).is_some_and(|a| a <= 120_000) {
+            if screen::probe_says_respawn(&lines, &probe) { scr = Screen::Dead; }
+            else if crate::vitals::bar_ratio(img).is_some() { scr = Screen::Gameplay; }
+        }
         // Only HUD screens yield data; menus, shop and loading yield an empty snapshot.
         laps.lap("screen + scoreboard check");
         self.seen_hud = scr.has_hud();
@@ -383,18 +434,33 @@ impl Scanner {
                 if let Some(v) = reading {
                     snap.hp=Some(v.hp); snap.max_hp=Some(v.max); snap.health_observations=v.observations; snap.health_delta_ratio=v.delta;
                     self.regions=v.regions;
+                } else if let Some((hp, max)) = self.vitals.from_bar(now_ms) {
+                    // Digits unreadable (damage vignette, effects): the bar is still a measurement.
+                    snap.hp=Some(hp); snap.max_hp=Some(max); snap.health_observations=1;
                 }
             }
             let souls = located.1.or_else(|| souls_line.and_then(|i| parse::parse_souls(text(i))));
             snap.souls = self.tracker.accept_souls(souls).or(self.tracker.last_souls());
-            // Items: non-flat slots matched against shop art with a confidence gate.
+            // Items: non-flat slots matched against shop art with a confidence gate. A slot's item
+            // is listed once the same match repeats on two scans, and only if it is a real shop
+            // item affordable by now (a recorded match listed 6,400 and placeholder tier-5 items,
+            // each for 1-5 frames, from blurred icons).
+            let clock = snap.game_clock_secs.or(raw_clock);
             for row in 0..2 {
                 for col in 0..6 {
+                    let vote = &mut self.item_votes[row * 6 + col];
                     let c = hud::crop(&img, hud::item_slot(col, row));
-                    if hud::contrast(&c) < 18.0 { continue; }
-                    if let Some((name, score, margin)) = self.items.identify(&c) {
-                        if score >= 0.5 && margin >= 0.1 && !name.contains("non_player") { snap.items.push(name); }
-                    }
+                    if hud::contrast(&c) < 18.0 { *vote = None; continue; } // empty slot
+                    let m = self.items.identify(&c)
+                        .filter(|(name, score, margin)| *score >= 0.5 && *margin >= 0.1 && !name.contains("non_player") && plausible_item(name, clock))
+                        .map(|(name, _, _)| name);
+                    *vote = match (m, vote.take()) {
+                        (Some(n), Some((p, k))) if n == p => Some((n, k.saturating_add(1))),
+                        (Some(n), _) => Some((n, 1)),
+                        // Unmatched this scan (blur, effects): a confirmed item stays.
+                        (None, prev) => prev.filter(|(_, k)| *k >= 2),
+                    };
+                    if let Some((n, k)) = vote { if *k >= 2 && !snap.items.contains(n) { snap.items.push(n.clone()); } }
                 }
             }
         }
@@ -440,10 +506,23 @@ impl Scanner {
             self.team_status=crate::team::apply_status_slots(img,&lines[status.clone()],&status_slots,&bar_status);
             crate::team::apply_respawn(&lines[respawn_lines.clone()],&dead_slots,&mut self.team_status);
             for(i,status)in self.team_status.iter_mut().enumerate(){status.hero=assign[i].clone();}
-            crate::team::apply_networth_slots(&lines[worth.clone()],&worth_slots,raw_clock.unwrap_or(0),&mut self.team_status);
+            crate::team::apply_networth_slots(&lines[worth.clone()],&worth_slots,snap.game_clock_secs.or(raw_clock).unwrap_or(0),&mut self.team_status);
             snap.hero_status=self.team_status.clone();
             crate::team::positions(&mut snap,map_crop,&self.heroes);
             self.team_status=snap.hero_status.clone();
+            // You are one of the six ally top-bar slots: the one whose health bar follows your own
+            // HP. Accumulate the gap per slot (rec2: 0.035 mean for the right slot, >= 0.25 for
+            // every other) and name your hero once one slot clearly wins.
+            if let (Some(hp), Some(max)) = (snap.hp, snap.max_hp.filter(|m| *m > 0)) {
+                let own = hp as f32 / max as f32;
+                for s in snap.hero_status.iter().filter(|s| s.ally && s.slot < 6) {
+                    if let Some(r) = s.health_ratio { let e = &mut self.own_slot[s.slot]; e.0 += (r - own).abs(); e.1 += 1; }
+                }
+            }
+            if let Some(slot) = own_slot(&self.own_slot) {
+                snap.hero = assign[slot].clone();
+                if snap.own_networth.is_none() { snap.own_networth = snap.hero_status.iter().find(|s| s.ally && s.slot == slot).and_then(|s| s.networth); }
+            }
         }
         // Enemy items seen on the most recent scoreboard.
         for r in self.last_board.iter().filter(|r| !r.ally) {
@@ -461,6 +540,12 @@ impl Scanner {
         }
         snap.ally_networth = self.last_totals.0;
         snap.enemy_networth = self.last_totals.1;
+        // One hero cannot hold more than ~45% of its team's total (a recorded match had 6.8%
+        // impossible per-hero values, e.g. 12.4k of a 15k team).
+        for s in snap.hero_status.iter_mut().chain(self.team_status.iter_mut()) {
+            let total = if s.ally { self.last_totals.0 } else { self.last_totals.1 };
+            if s.networth.zip(total).is_some_and(|(n, t)| n as f32 > t as f32 * 0.45) { s.networth = None; s.networth_observations = 0; }
+        }
         laps.lap("scoreboard + team");
         self.laps = laps;
         snap
