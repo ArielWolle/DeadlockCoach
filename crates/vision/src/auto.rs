@@ -69,7 +69,8 @@ impl AutoScanner {
         let expected=self.clock.expected_clock(now);
         let mut clock=clock_lines.and_then(|r|crate::screen::vote_clock(&lines[r],expected)).zip(self.clock_box.bounds)
             .map(|(v,b)|(v,observation("clock",&format!("{}:{:02} · tracked",v/60,v%60),b,"/game_clock_secs")));
-        let mut currency=currency_line.and_then(|r|lines[r].iter().find_map(|l|currency_value(l))).zip(self.currency_box.bounds)
+        let mut currency=currency_line.and_then(|r|lines[r].iter().find_map(|l|currency_value(l).map(|v|(v,l.clone())))).zip(self.currency_box.bounds)
+            .map(|((v,l),b)|(crate::localize::correct_souls(frame,b,v,&l),b))
             .map(|(v,b)|(v,observation("souls","Souls · tracked",b,"/souls")));
         if read_clock{match &clock{Some((_,r))=>self.clock_box.hit(r.bounds),None=>{self.clock_box.miss();}}}
         match &currency{Some((_,r))=>self.currency_box.hit(r.bounds),None=>{self.currency_box.miss();}}
@@ -103,7 +104,11 @@ impl AutoScanner {
         // The game context needs a landmark-verified map and a located currency label. The clock
         // is then read inside the canonical 1600x900 context (measured more reliable than at an
         // arbitrary window scale); the auto-tracked clock is the fallback outside a context.
-        let (Some(map),Some((souls,currency_box)))=(map,currency)else{independent!()};
+        // A landmark-verified map alone fixes the context scale and position. The souls label only
+        // validates it when read: on light backgrounds its small SOULS text is often unreadable,
+        // which used to drop the whole frame (57 of 120 frames in a recorded match).
+        let Some(map)=map else{independent!()};
+        let souls=currency.as_ref().map(|(v,_)|*v);let currency_box=currency.as_ref().map(|(_,r)|r.bounds);
         let clock_box=clock.as_ref().map(|(_,r)|r.bounds);
         let width=map.bounds.w as f32*1600./335.;let height=map.bounds.h as f32*900./350.;
         let x=map.bounds.x as f32-width*1255./1600.;let y=map.bounds.y as f32-height*525./900.;
@@ -114,7 +119,7 @@ impl AutoScanner {
         let w=(width as u32).min(frame.width()-left);let h=(height as u32).min(frame.height()-top);
         if w<320||h<180{independent!();}
         let within=|b:Bounds|b.x>=left.saturating_sub(10)&&b.y>=top.saturating_sub(10)&&b.x+b.w<=left+w+10&&b.y+b.h<=top+h+10;
-        if !within(currency_box.bounds)||clock_box.is_some_and(|b|!within(b)){independent!();}
+        if currency_box.is_some_and(|b|!within(b))||clock_box.is_some_and(|b|!within(b)){independent!();}
         // Box-filter downsampling is ~2x faster than a triangle filter for the common case of a
         // larger-than-1600 window; smaller sources still upsample smoothly.
         // A near-1:1 context (within 2%) is cropped pixel-exact: resampling by ~0.1% blurs the
@@ -144,7 +149,7 @@ impl AutoScanner {
         // The window-scale glyph read is independent of the context crop's pixel offset, so it
         // lets the scene's clock verifier skip the expensive glyph search when they agree.
         self.legacy.clock_hint=clock.as_ref().map(|(n,_)|*n);
-        let mut snapshot=self.legacy.scan_located(&DynamicImage::ImageRgba8(canonical),Some(&map_image),now,None,Some(souls));
+        let mut snapshot=self.legacy.scan_located(&DynamicImage::ImageRgba8(canonical),Some(&map_image),now,None,souls);
         laps.absorb("scene: ",&self.legacy.laps);
         if snapshot.screen.as_deref()==Some("Unknown"){independent!();}
         self.regions.push(RegionObservation{id:"game_context".into(),label:"Registered game context · compatibility".into(),bounds:Bounds{x:left,y:top,w,h},origin:RegionOrigin::Configured,score:None,value_path:None});

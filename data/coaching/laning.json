@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "threshold_note": "Numeric thresholds are tunable coach heuristics, not sourced game rules. Camp availability and enemy cooldowns are not inferred from absence.",
-  "thresholds": { "low_health": 0.45, "healthy": 0.65, "damage_drop": 0.08, "danger_front": 0.35, "crashed_front": 0.7, "camp_min_clock": 180, "laning_end": 900, "nearby_radius": 0.18 },
+  "thresholds": { "low_health": 0.45, "healthy": 0.65, "damage_drop": 0.15, "danger_front": 0.35, "crashed_front": 0.7, "camp_min_clock": 180, "laning_end": 900, "nearby_radius": 0.18 },
   "cards": [
     { "id": "wave_good", "speech": "Good wave position. {lane} is pushed out; check neighboring lanes before choosing a short camp or rotation.", "rationale": "Recognize a useful wave state without claiming a kill or a safe route.", "cooldown_secs": 75,
       "sources": [{ "path": "strategy/laning-phase.md", "section": "6. Wave states and lane equilibrium", "basis": "WIKI", "excerpt": "pushing the wave creates safe space for you" }] },

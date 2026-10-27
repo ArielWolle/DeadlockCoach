@@ -65,7 +65,9 @@ impl LaneCoach {
         let mut evidence=vec![]; let mut missing=vec![];
         if let Some(h)=health {evidence.push(format!("Personal health OCR: {:.0}% ({} reads)",h*100.0,s.health_observations));}
         else {missing.push("Personal health could not be read".into());}
-        if health.is_some_and(|h| h<cfg.low_health) || s.health_delta_ratio.is_some_and(|d| d < -cfg.damage_drop) {
+        // Low health needs two consistent reads; a sudden drop needs a real burst (a recorded match
+        // showed a stuck misread and small trades triggering this far too often).
+        if health.is_some_and(|h| h<cfg.low_health) && s.health_observations>=2 || s.health_delta_ratio.is_some_and(|d| d < -cfg.damage_drop) {
             if let Some(delta)=s.health_delta_ratio {evidence.push(format!("Health changed by {:.0} percentage points since the previous read",delta*100.0));}
             return Some(self.plan("back_off",Action::BackOff,s,Priority::High,evidence,missing,s.health_observations<2));
         }

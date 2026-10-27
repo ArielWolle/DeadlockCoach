@@ -11,12 +11,44 @@ use image::DynamicImage;
 pub const CURRENT_PANEL: Region = Region { x: 350.0 / 1600.0, y: 575.0 / 900.0, w: 145.0 / 1600.0, h: 100.0 / 900.0 };
 pub const MAX_PANEL: Region = Region { x: 145.0 / 1600.0, y: 675.0 / 900.0, w: 110.0 / 1600.0, h: 45.0 / 900.0 };
 
+/// Current-HP fraction from the large slanted health bar beside the number (1600x900 frame).
+/// Measured on recorded frames: the bar runs from about (385,580) at the top to (428,770) at the
+/// bottom and fills bottom-up. White = current HP; red = damage just taken; green = incoming
+/// heal; dark grey = missing. Returns None when the bar is not clearly visible.
+/// `bar_ratio` measured at full health (the top rows sit under the frame's tab).
+pub const BAR_FULL: f32 = 0.97;
+pub fn bar_ratio(frame: &DynamicImage) -> Option<f32> {
+    if frame.width() != 1600 || frame.height() != 900 { return None; }
+    let rgb = frame.crop_imm(360, 570, 90, 210).to_rgb8();
+    let (mut white, mut other_bar, mut rows) = (0u32, 0u32, 0u32);
+    for y in 582u32..=766 {
+        let cx = 385.0 + (y as f32 - 580.0) * 43.0 / 190.0 - 2.0;
+        let mut votes = [0u8; 3]; // white, bar non-white, unknown
+        for dx in -2i32..=2 {
+            let p = rgb.get_pixel((cx as i32 + dx - 360) as u32, y - 570);
+            let (h, s, v) = crate::minimap::hsv(p[0], p[1], p[2]);
+            let k = if v > 0.7 && s < 0.25 { 0 }
+                else if (h < 22.0 || h > 340.0) && s > 0.45 && v > 0.35 || (70.0..160.0).contains(&h) && s > 0.35 && v > 0.45 || s < 0.3 && (0.18..0.6).contains(&v) { 1 }
+                else { 2 };
+            votes[k] += 1;
+        }
+        rows += 1;
+        if votes[0] >= 3 { white += 1; } else if votes[1] >= 3 { other_bar += 1; }
+    }
+    // Most rows must be bar-coloured; otherwise the bar is hidden (menus, effects) or absent.
+    ((white + other_bar) as f32 >= rows as f32 * 0.85).then(|| white as f32 / rows as f32)
+}
+
 #[derive(Default)]
 pub struct Tracker {
     previous: Option<(u64, u32, u32, u32)>,
     hp: Tracked,
     max: Tracked,
     digits: (usize, usize),
+    /// Latest health-bar fraction (`bar_ratio`) for the frame being read.
+    bar: Option<f32>,
+    /// A >30% single-read jump seen once without health-bar support; accepted if repeated.
+    pending_jump: Option<(u32, u32)>,
 }
 pub struct Reading { pub hp: u32, pub max: u32, pub observations: u32, pub delta: Option<f32>, pub regions: Vec<RegionObservation> }
 
@@ -42,6 +74,11 @@ impl Tracker {
         Some([frame.crop_imm(a, b, c, d), frame.crop_imm(e, f, g, i)])
     }
     pub fn is_tracking(&self) -> bool { self.hp.bounds.is_some() && self.max.bounds.is_some() }
+    /// Set the health-bar fraction of the frame about to be read.
+    pub fn set_bar(&mut self, bar: Option<f32>) { self.bar = bar; }
+    fn bar_supports(&self, hp: u32, max: u32) -> bool {
+        self.bar.is_some_and(|b| (hp as f32 / max.max(1) as f32 - (b / BAR_FULL).min(1.0)).abs() <= 0.15)
+    }
 
     /// Interpret batched line reads of the tracked boxes.
     pub fn accept_lines(&mut self, current: &str, maximum: &str, now: u64) -> Option<Reading> {
@@ -52,7 +89,7 @@ impl Tracker {
         // immediate detector re-acquisition rather than trusted (real bursts are confirmed too).
         let jump = |hp: u32, max: u32| self.previous.is_some_and(|(t, old, _, _)| now >= t && now - t <= 20000 && hp.abs_diff(old) as f32 > max as f32 * 0.3);
         match (hp, maxima.as_slice()) {
-            (Some(hp), [max]) if hp <= *max && jump(hp, *max) => { self.hp.reset(); self.max.reset(); None }
+            (Some(hp), [max]) if hp <= *max && jump(hp, *max) && !self.bar_supports(hp, *max) => { self.hp.reset(); self.max.reset(); None }
             (Some(hp), [max]) if hp <= *max => {
                 let (hb, mb) = (self.hp.bounds?, self.max.bounds?);
                 let digits = (hp.to_string().len(), max.to_string().len());
@@ -88,10 +125,26 @@ impl Tracker {
         match raw {
             Some((hp, max, hb, mb)) => {
                 self.hp.hit(hb); self.max.hit(mb); self.digits = (hp.to_string().len(), max.to_string().len());
+                // A fresh detector read is not trusted over a >30% jump either (a fight frame read
+                // 104 for 386 while effects hid the bar): it needs the bar or a repeat next frame.
+                let jump = self.previous.is_some_and(|(t, old, _, _)| now >= t && now - t <= 20000 && hp.abs_diff(old) as f32 > max as f32 * 0.3);
+                if jump && !self.bar_supports(hp, max) && !self.pending_jump.is_some_and(|(p, m)| p.abs_diff(hp) as f32 <= m as f32 * 0.05) {
+                    self.pending_jump = Some((hp, max)); return None;
+                }
+                self.pending_jump = None;
                 let mut r = self.accept(hp, max, now); r.regions = vec![region("hp", hb), region("max_hp", mb)]; Some(r)
             }
             None => { self.previous = None; None }
         }
+    }
+    /// Cross-check a numeric reading against the health bar (`bar_ratio`). A tracked box can lock
+    /// onto a truncated number (794 read as "79" for 20 s in a recorded match); on a disagreement
+    /// beyond 15 percentage points the reading is rejected and both boxes are re-acquired.
+    pub fn agrees_with_bar(&mut self, r: &Reading, bar: Option<f32>) -> bool {
+        let Some(bar) = bar.map(|b| (b / BAR_FULL).min(1.0)) else { return true };
+        let ok = (r.hp as f32 / r.max.max(1) as f32 - bar).abs() <= 0.15;
+        if !ok { self.hp.reset(); self.max.reset(); self.previous = None; }
+        ok
     }
     /// Re-acquisition is throttled so a hidden HUD cannot cause a detector pass every frame.
     pub fn may_acquire(&mut self, now: u64) -> bool { self.hp.may_acquire(now, 2000) }

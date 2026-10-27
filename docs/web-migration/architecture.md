@@ -77,7 +77,7 @@ first use still requires downloading assets. Updates wait for old app tabs to cl
 
 ## Local recording and replay
 
-Recording is off by default. IndexedDB keeps at most 120 analyzed frames or 50 MB of image
+Recording is off by default. IndexedDB keeps at most 600 analyzed frames (about ten minutes) or 200 MB of image
 data, trimming the oldest first. Export snapshots as JSONL or frames+snapshots as a versioned
 JSON archive. Browser storage is not guaranteed durable. Imports are bounded and rendered as
 text; recording archives never fetch arbitrary remote image URLs. JSONL uses the same Rust

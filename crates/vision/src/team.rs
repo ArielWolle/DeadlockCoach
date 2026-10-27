@@ -43,7 +43,23 @@ fn bar_core_x(ally:bool,cx:f32,y:u32)->f32{let t=((y-BAR_TOP) as f32/38.).clamp(
 /// CRITICAL glow puts over an empty bar.
 fn cell(ally:bool,p:&image::Rgb<u8>)->Cell{
     let (h,s,v)=crate::minimap::hsv(p[0],p[1],p[2]);
-    if ally&&v>0.72&&s<0.3 || !ally&&(h<22.||h>338.)&&s>0.5&&v>0.6{Cell::Fill}else if v<0.48{Cell::Empty}else{Cell::Other}
+    // Recorded 1920x1080 captures show a vertical gradient: the top of an enemy fill is dim red
+    // (v 0.33-0.6, s ~0.55). The CRITICAL glow over an empty bar is darker and more saturated.
+    // Fill hue is 0-10 / 345-360 with saturation ~0.55-0.75; orange portrait art (hue ~24,
+    // saturation ~1) beside a missing bar must not count.
+    let red=(h<15.||h>335.)&&s>0.4&&s<0.88&&(v>0.6||v>0.3&&s<0.7);
+    if ally&&v>0.72&&s<0.3 || !ally&&red{Cell::Fill}else if v<0.48{Cell::Empty}else{Cell::Other}
+}
+/// Bright red-orange respawn-timer digit pixels in the portrait centre. Pale or grey-furred
+/// living portraits are desaturated too; only a dead portrait carries the timer.
+pub fn timer_pixels(frame:&image::RgbImage,cx:f32)->u32{
+    let mut n=0;
+    for y in 26u32..64{for x in (cx as u32).saturating_sub(16)..(cx as u32+16){
+        if x>=frame.width()||y>=frame.height(){continue;}
+        let p=frame.get_pixel(x,y);let (h,s,v)=crate::minimap::hsv(p[0],p[1],p[2]);
+        if (h<25.||h>335.)&&s>0.6&&v>0.65{n+=1;}
+    }}
+    n
 }
 fn portrait_dead(frame:&image::RgbImage,cx:f32)->bool{
     // Living portraits sit on a saturated team backdrop (orange / blue) with coloured art; a dead
@@ -80,14 +96,17 @@ pub fn read_bar(frame:&image::RgbImage,slot:usize)->BarReading{
             _=>break}}
         let above=&rows[..(BAR_ROWS-fill) as usize];
         let empty=above.iter().filter(|c|**c==Cell::Empty).count() as u32;
-        let empty_frac=if above.is_empty(){1.0}else{empty as f32/above.len() as f32};
+        // A (near-)full bar leaves only edge rows above the fill: nothing to check there.
+        let empty_frac=if above.len()<4{1.0}else{empty as f32/above.len() as f32};
         let visible=fill>=2&&empty_frac>=0.7;
         let all_empty=fill==0&&empty_frac>=0.92;
         let score=if visible{fill+empty}else{empty/2};
         if score>best.0||best.0==0&&all_empty{best=(score,BarReading{visible,ratio:visible.then(||fill as f32/BAR_ROWS as f32),empty:all_empty,dead});}
     }
     // A dead hero's bar is gone and the portrait is greyed; a pale living portrait keeps its bar.
-    best.1.dead=dead&&!best.1.visible&&!best.1.empty;
+    // ...and only a dead portrait carries the red respawn timer (dead: 78-216 px on recorded and
+    // fixture frames; pale living portraits without a bar: 0).
+    best.1.dead=dead&&!best.1.visible&&!best.1.empty&&timer_pixels(frame,cx)>=40;
     best.1
 }
 /// Update all twelve slots from their health bars (pixel-only, every gameplay frame).
@@ -103,9 +122,20 @@ pub fn apply_bars(frame:&DynamicImage,status:&mut Vec<HeroStatus>)->Vec<usize>{
         // be a missing bar over a dark scene.
         let near_zero=r.empty&&s.critical==Some(true);
         let ratio=if r.visible{r.ratio}else if near_zero{Some(0.02)}else{None};
+        let visible=if r.visible||near_zero{Some(true)}else if r.empty{None}else{Some(false)};
+        // Evidence before a state change: seen <-> not seen <-> dead switches only when two
+        // consecutive frames agree (a single blurred frame flipped full bars to "unseen").
+        let state=(visible,r.dead);
+        let known=s.dead.is_some()||s.bar_visible.is_some();
+        if known&&(s.bar_visible,s.dead==Some(true))!=state&&s.pending_state!=Some(state){
+            s.pending_state=Some(state);
+            if s.dead==Some(true){dead.push(i);}
+            continue;
+        }
+        s.pending_state=None;
         s.health_observations=match (ratio,s.health_ratio){(Some(a),Some(b)) if (a-b).abs()<=0.15=>s.health_observations.saturating_add(1),(Some(_),_)=>1,_=>0};
         s.health_ratio=ratio;
-        s.bar_visible=if r.visible||near_zero{Some(true)}else if r.empty{None}else{Some(false)};
+        s.bar_visible=visible;
         s.dead=Some(r.dead);
         if r.dead{dead.push(i);}else{s.respawn_secs=None;}
     }
@@ -198,7 +228,7 @@ pub fn positions(snapshot:&mut GameSnapshot,map:&image::RgbImage,library:&ColorL
         let position=if matched.len()==1{Some(matched[0])}else{None};
         slot.position_observations=if position.zip(slot.position).is_some_and(|(a,b)|(a.x-b.x).hypot(a.y-b.y)<0.12){slot.position_observations.saturating_add(1)}else if position.is_some(){1}else{0};
         slot.position=position;
-        slot.lane=position.and_then(|p|crate::minimap::Analyzer::new().project((p.x*335.,p.y*350.))).filter(|(_,_,d)|*d<22.).map(|(i,_,_)|[coach_core::Lane::Green,coach_core::Lane::Blue,coach_core::Lane::Yellow][i]);
+        slot.lane=position.and_then(|p|crate::minimap::Analyzer::new().project((p.x*335.,p.y*350.))).filter(|(_,_,d)|*d<22.).map(|(i,_,_)|crate::minimap::lane_of(i,state.lanes_mirrored.unwrap_or(false)));
     }
     snapshot.own_networth=snapshot.hero.as_ref().and_then(|hero|snapshot.hero_status.iter().find(|s|s.ally&&s.hero.as_ref()==Some(hero))).and_then(|s|s.networth);
 }

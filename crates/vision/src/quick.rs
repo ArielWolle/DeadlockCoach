@@ -39,6 +39,8 @@ impl Monitor {
         let raw=&lines[hp_i];
         let value=raw.trim().replace(',',"");if value.is_empty()||!value.chars().all(|c|c.is_ascii_digit()){return None;}
         let hp=value.parse::<u32>().ok()?;let max=c.snapshot.max_hp?;if hp>max||max<100{return None;}
+        // The health bar must agree; a truncated tracked box is re-acquired by the full scan.
+        if crate::vitals::bar_ratio(&game).is_some_and(|b|(hp as f32/max as f32-(b/crate::vitals::BAR_FULL).min(1.)).abs()>0.15){return None;}
         let v=self.vitals.accept(hp,max,now);
         let mut snapshot=c.snapshot.clone();snapshot.game_clock_secs=Some(clock);snapshot.hp=Some(hp);snapshot.health_observations=v.observations;snapshot.health_delta_ratio=v.delta;
         if !rich {

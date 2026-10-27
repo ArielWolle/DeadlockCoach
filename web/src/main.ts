@@ -292,6 +292,15 @@ async function start(forceEditor = false) {
   } catch (e) { capture.stop(); status('Ready to connect'); notice(String(e instanceof Error ? e.message : e), true); }
 }
 function schedule(delay = settings.interval * 1000) { clearTimeout(timer); if (running) timer = setTimeout(() => { void tick(); }, delay); }
+/** Every spoken cue from either analysis path, kept for recording exports (the fast path speaks
+ *  most cues but its results are not stored as frames). Bounded; persisted only while recording. */
+const CUE_LOG_KEY='deadlock-coach-cue-log-v1';
+const cueLog:{t:number;clock:number|null;source:'fast'|'full';key:string;text:string;priority:string;hp:number|null;max_hp:number|null}[]=(()=>{try{return JSON.parse(localStorage.getItem(CUE_LOG_KEY)||'[]');}catch{return [];}})();
+function logCue(cue:Cue,s:Snapshot,fast:boolean){
+  cueLog.push({t:Date.now(),clock:s.game_clock_secs??null,source:fast?'fast':'full',key:cue.key,text:cue.text,priority:cue.priority,hp:s.hp??null,max_hp:s.max_hp??null});
+  if(cueLog.length>3000)cueLog.splice(0,cueLog.length-3000);
+  if(settings.record)try{localStorage.setItem(CUE_LOG_KEY,JSON.stringify(cueLog));}catch{/* quota: export keeps the in-memory log */}
+}
 function deliver(analysis:Analysis,timestamp:number,fast=false){
   const now=Date.now(),age=Math.max(0,now-timestamp);const delivered:Cue[]=[];
   for(const original of analysis.cues){
@@ -305,7 +314,7 @@ function deliver(analysis:Analysis,timestamp:number,fast=false){
     }
     spokenAt.set(cue.key,now);if(spokenAt.size>200)spokenAt.delete(spokenAt.keys().next().value!);
     cue.text=cue.text.replace(/hero_[a-z_]+/g,id=>heroNames[id]||id.replace('hero_','').replaceAll('_',' '));
-    speaker.say(cue);delivered.push(cue);
+    speaker.say(cue);delivered.push(cue);logCue(cue,analysis.snapshot,fast);
   }
   return {...analysis,cues:delivered};
 }
@@ -609,7 +618,7 @@ async function importFiles() {
     current = await beginReplay();
     for (const file of files.sort((a, b) => a.name.localeCompare(b.name))) {
       if (current !== generation || !replaying) break;
-      const importLimit = /\.json$/i.test(file.name) ? 80 : 20;
+      const importLimit = /\.json$/i.test(file.name) ? 300 : 20;
       if (file.size > importLimit * 1024 * 1024) throw new Error(`${file.name} exceeds the ${importLimit} MB import limit`);
       if (/\.(jpg|jpeg|png)$/i.test(file.name)) {
         const calibrated = await replayImage(file, importCrop);
@@ -899,10 +908,10 @@ button('export-recording').onclick = async () => {
   try {
     const frames = await recordings(); if (!frames.length) { notice('No recorded frames to export.'); return; }
     const rows = []; for (const f of frames) rows.push({ timestamp: f.timestamp, snapshot: f.snapshot, cues: f.cues, perception: f.perception, profile_id: f.profile_id, image: await blobDataURL(f.image) });
-    download('deadlock-recording.json', new Blob([JSON.stringify({ schema: 1, assetVersion, frames: rows })], { type: 'application/json' }));
+    download('deadlock-recording.json', new Blob([JSON.stringify({ schema: 1, assetVersion, frames: rows, spoken: cueLog })], { type: 'application/json' }));
   } catch (e) { notice(`Export failed: ${String(e)}`, true); }
 };
-button('clear-recordings').onclick = async () => { try { await clearFrames(); await recordings(); notice('Local recordings deleted.'); } catch (e) { notice(String(e), true); } };
+button('clear-recordings').onclick = async () => { try { await clearFrames(); cueLog.length = 0; localStorage.removeItem(CUE_LOG_KEY); await recordings(); notice('Local recordings deleted.'); } catch (e) { notice(String(e), true); } };
 input('knowledge-search').oninput = renderKnowledge; $<HTMLSelectElement>('knowledge-category').onchange = renderKnowledge;
 $<HTMLFormElement>('settings-form').onsubmit = e => { e.preventDefault(); saveForm(); };
 input('rate').oninput = () => text('rate-value', `${Number(input('rate').value).toFixed(1)}×`);

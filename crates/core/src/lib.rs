@@ -99,6 +99,9 @@ pub struct HeroStatus {
     /// Greyed portrait with a respawn timer.
     pub dead:Option<bool>,
     pub respawn_secs:Option<u32>,
+    /// A different (bar visible, dead) state seen once; committed when the next frame agrees.
+    #[serde(skip)]
+    pub pending_state:Option<(Option<bool>,bool)>,
 }
 
 /// Positions are normalised minimap coordinates, (0,0) top-left, (1,1) bottom-right.
@@ -157,6 +160,9 @@ pub struct MinimapState {
     /// frame only), tracks remember where a hero was last seen, so "missing" and "approaching"
     /// can be judged. A track that is not visible is NOT known to be dead or safe.
     pub heroes: Vec<HeroTrack>,
+    /// Lane layout seen on the map: the side lanes swap between teams (`true` = Yellow on the
+    /// left, Green on the right). None when no lane colour was visible.
+    pub lanes_mirrored: Option<bool>,
 }
 
 /// One hero portrait followed across minimap observations.

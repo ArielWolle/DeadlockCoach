@@ -106,9 +106,55 @@ pub fn locate_currency_limited(frame:&DynamicImage,reader:&Reader,limit:usize)->
         let Ok(spans)=reader.read_spans(&frame.crop_imm(b.x,b.y,b.w,b.h),3)else{continue};
         for mut span in spans {
             let Some(value)=currency_value(&span.label)else{continue};
-            span.id="souls".into();span.value_path=Some("/souls".into());span.bounds.x+=b.x;span.bounds.y+=b.y;return Some((value,span));
+            span.id="souls".into();span.value_path=Some("/souls".into());span.bounds.x+=b.x;span.bounds.y+=b.y;
+            let value=correct_souls(frame,span.bounds,value,&span.label);return Some((value,span));
         }
     }None
+}
+/// Number of digit glyphs in a souls label box, from the mint text mask. The `$` glyph is taller
+/// than the digits (it sticks out above and below), commas are short; both are excluded.
+pub fn souls_digit_glyphs(frame:&DynamicImage,b:Bounds)->Option<usize>{
+    if b.x+b.w>frame.width()||b.y+b.h>frame.height()||b.w<6||b.h<6{return None;}
+    let rgb=frame.crop_imm(b.x,b.y,b.w,b.h).to_rgb8();let (w,h)=rgb.dimensions();
+    let mask:Vec<bool>=rgb.pixels().map(|p|{let (hh,s,v)=hsv(p[0],p[1],p[2]);(125.0..=180.0).contains(&hh)&&s>0.2&&v>0.6}).collect();
+    let mut glyphs:Vec<_>=components(&mask,w,h).into_iter().filter(|c|c.area>=4&&c.h()>=4).collect();
+    if glyphs.len()<2{return None;}
+    glyphs.sort_by_key(|c|c.min_x);
+    // Anchor on the `$`: the tallest glyph. Digits follow it at a common, smaller height; the
+    // level badge to its left and the smaller SOULS label after the number are not counted.
+    let (di,dollar)=glyphs.iter().enumerate().max_by_key(|(_,c)|c.h())?;
+    let after:Vec<_>=glyphs[di+1..].iter().filter(|c|c.min_x>dollar.max_x).collect();
+    let mut heights:Vec<u32>=after.iter().map(|c|c.h()).filter(|v|*v as f32>=dollar.h() as f32*0.5).collect();heights.sort();
+    let typical=*heights.get(heights.len()/2)? as f32;
+    if (dollar.h() as f32)<typical*1.15{return None;} // no distinct `$` glyph: do not guess
+    // Adjacent digits can merge into one blob ("23" in 1,232): count by width against the
+    // median digit-height glyph width.
+    let digit:Vec<_>=after.iter().filter(|c|(typical*0.8..=typical*1.15).contains(&(c.h() as f32))).collect();
+    let mut widths:Vec<u32>=digit.iter().map(|c|c.w()).collect();widths.sort();
+    let unit=(*widths.get(widths.len()/2)? as f32).max(1.);
+    let mut n=0;
+    for c in after{
+        let hh=c.h() as f32;
+        if (typical*0.8..=typical*1.15).contains(&hh){n+=((c.w() as f32/unit).round() as usize).max(1);}
+        else if n>0&&hh<typical*0.5{continue;} // thousands comma
+        else{break;}
+    }
+    (n>0).then_some(n)
+}
+/// Drop a leading digit the recognizer invented from the `$` glyph ("$717" read as 3717 or $3717),
+/// using the pixel digit count.
+pub fn correct_souls(frame:&DynamicImage,b:Bounds,value:u32,label:&str)->u32{
+    let digits=value.to_string();
+    let _=label;
+    if !matches!(digits.chars().next(),Some('3'|'5'|'6'|'7'|'8'|'9')){return value;}
+    // A tracked box can start just right of the `$` (and clip its taller strokes) while the
+    // recognizer read a padded crop that includes it: count glyphs in a box grown left/up/down.
+    let grow=b.h;let x=b.x.saturating_sub(grow);let y=b.y.saturating_sub(grow/3);
+    let wide=Bounds{x,y,w:(b.x+b.w-x).min(frame.width().saturating_sub(x)),h:(b.h+grow*2/3).min(frame.height().saturating_sub(y))};
+    match souls_digit_glyphs(frame,wide).or_else(||souls_digit_glyphs(frame,b)){
+        Some(n) if digits.len()==n+1=>digits[1..].parse().unwrap_or(value),
+        _=>value,
+    }
 }
 pub fn currency_value(text:&str)->Option<u32>{
     let upper=text.to_ascii_uppercase().replace('0',"O");let pos=upper.find("SOULS").or_else(||upper.find("SDULS"))?;

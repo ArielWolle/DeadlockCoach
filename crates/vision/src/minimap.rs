@@ -163,42 +163,6 @@ fn dilate(mask: &[bool], w: u32, h: u32, radius: i32) -> Vec<bool> {
 /// Circular support, rather than a component's rectangle, distinguishes portrait rings
 /// from diamonds and fragmented lines. Nearby maxima are suppressed; never invent heroes
 /// to split a merged component.
-fn rings_at(mask:&[bool],w:u32,h:u32,scale:f32,radii:&[f32]) -> Vec<(f32,f32)> {
-    let mut candidates = vec![];
-    let margin = ((radii.iter().copied().fold(0.0,f32::max)+1.0) * scale).ceil() as i32;
-    let step = scale.round().max(1.0) as usize;
-    // Precompute circle samples and dilate once. The old inner loop evaluated millions
-    // of sin/cos calls and 3x3 neighbourhood scans per frame, especially expensive in WASM.
-    let supported = dilate(mask, w, h, 1);
-    let circles: Vec<Vec<(i32, i32)>> = radii.iter().map(|radius| {
-        (0..32).map(|i| {
-            let a = i as f32 * std::f32::consts::TAU / 32.0;
-            ((a.cos() * radius * scale).round() as i32, (a.sin() * radius * scale).round() as i32)
-        }).collect()
-    }).collect();
-    for y in (margin..h as i32 - margin).step_by(step) {
-        for x in (margin..w as i32 - margin).step_by(step) {
-            let mut best = 0;
-            for circle in &circles {
-                let mut hits = 0;
-                for (i, (dx, dy)) in circle.iter().enumerate() {
-                    let (xx, yy) = (x + dx, y + dy);
-                    if supported[(yy as u32 * w + xx as u32) as usize] { hits += 1; }
-                    if hits + 31 - (i as i32) < 27 { break; }
-                }
-                best = best.max(hits);
-            }
-            if best >= 27 { candidates.push((best, x as f32 / scale, y as f32 / scale)); }
-        }
-    }
-    candidates.sort_by(|a, b| b.0.cmp(&a.0));
-    let mut out = vec![];
-    for (_, x, y) in candidates {
-        if !out.iter().any(|p| dist(*p, (x, y)) < 14.0) { out.push((x, y)); }
-    }
-    out
-}
-
 /// Team-ring colour masks for hero portraits (measured on saved frames): allied rings are
 /// cream-white (~242,231,213), enemy rings red-orange (~224,68,28).
 pub fn ring_masks(img: &RgbImage) -> (Vec<bool>, Vec<bool>) {
@@ -225,8 +189,14 @@ pub struct Ring { pub x: f32, pub y: f32, pub coverage: f32 }
 /// missing diagonal support just outside the ring (hollow diamonds reach the radius only on
 /// their axes). Heroes standing on towers are therefore kept instead of position-filtered.
 pub fn hero_rings(mask: &[bool], w: u32, h: u32, s: f32, min_coverage: f32) -> Vec<Ring> {
+    rings_scaled(mask, w, h, s, min_coverage, 1.0)
+}
+/// `hero_rings` for a ring of `scale` x the portrait size (e.g. the smaller player marker).
+pub fn rings_scaled(mask: &[bool], w: u32, h: u32, s0: f32, min_coverage: f32, scale: f32) -> Vec<Ring> {
     const RAYS: usize = 36;
     let radii = [9.0f32, 10.0, 11.0];
+    // Work in units of the portrait ring: every length below is multiplied by `scale`.
+    let s = s0 * scale;
     let at = |x: i32, y: i32| x >= 0 && y >= 0 && (x as u32) < w && (y as u32) < h && mask[(y as u32 * w + x as u32) as usize];
     // Integral image: skip centres whose neighbourhood cannot hold a ring (most of the map).
     let mut integral = vec![0u32; ((w + 1) * (h + 1)) as usize];
@@ -269,7 +239,7 @@ pub fn hero_rings(mask: &[bool], w: u32, h: u32, s: f32, min_coverage: f32) -> V
             [-1.0f32, 0.0].iter().any(|d| at(x + ((r + d) * s * a.cos()).round() as i32, y + ((r + d) * s * a.sin()).round() as i32))
         }).count();
         if diagonal < 4 { continue; }
-        found.push((Ring { x: x as f32 / s, y: y as f32 / s, coverage }, best.1));
+        found.push((Ring { x: x as f32 / s0, y: y as f32 / s0, coverage }, best.1));
     }}
     // Greedy explain-away: accept the strongest ring, claim its band pixels, then re-score the
     // rest on unclaimed pixels only. Arcs of two overlapping portraits no longer combine into
@@ -278,8 +248,8 @@ pub fn hero_rings(mask: &[bool], w: u32, h: u32, s: f32, min_coverage: f32) -> V
     let mut claimed = vec![false; mask.len()];
     let mut out: Vec<Ring> = vec![];
     for (ring, r) in found {
-        if out.iter().any(|o| dist((o.x, o.y), (ring.x, ring.y)) < 7.5) { continue; }
-        let (cx, cy) = ((ring.x * s) as i32, (ring.y * s) as i32);
+        if out.iter().any(|o| dist((o.x, o.y), (ring.x, ring.y)) < 7.5 * scale) { continue; }
+        let (cx, cy) = ((ring.x * s0) as i32, (ring.y * s0) as i32);
         let free = |x: i32, y: i32| at(x, y) && !claimed[(y as u32 * w + x as u32) as usize];
         let hits = rays.iter().filter(|(c, sn)| [-1.0f32, 0.0, 1.0].iter()
             .any(|d| free(cx + ((r + d) * s * c).round() as i32, cy + ((r + d) * s * sn).round() as i32))).count();
@@ -321,6 +291,17 @@ fn interior_is_portrait(img: &RgbImage, p: (f32, f32), s: f32) -> bool {
 }
 
 const MIDBOSS_POS: (f32, f32) = (162.0, 175.0);
+/// Mint shop icons (canonical px) that pass the player-marker colour test in every match.
+const SHOP_ICONS: [(f32, f32); 5] = [(23.0, 207.0), (104.0, 163.0), (243.0, 207.0), (217.0, 196.0), (177.0, 197.0)];
+
+/// Lane for a polyline index (0 = left, 1 = middle, 2 = right) under the detected layout.
+pub fn lane_of(k: usize, mirrored: bool) -> coach_core::Lane {
+    use coach_core::Lane::*;
+    match (k, mirrored) { (1, _) => Blue, (0, false) | (2, true) => Green, _ => Yellow }
+}
+fn lane_state(st: &mut MinimapState, k: usize, mirrored: bool) -> &mut coach_core::LaneState {
+    match lane_of(k, mirrored) { coach_core::Lane::Green => &mut st.green, coach_core::Lane::Blue => &mut st.blue, coach_core::Lane::Yellow => &mut st.yellow }
+}
 
 pub struct Analyzer {
     lanes: [Vec<(f32, f32)>; 3],
@@ -367,9 +348,10 @@ impl Analyzer {
     fn near_structure(&self, p: (f32, f32), r: f32) -> bool { self.structs.iter().any(|s| dist(*s, p) < r) }
 
     /// Fraction of the lane drawn in lane colour vs red, sampling the line pixels.
-    fn push_fraction(&self, img: &RgbImage, k: usize, s: f32) -> Option<f32> {
+    fn push_fraction(&self, img: &RgbImage, k: usize, s: f32, mirrored: bool) -> Option<f32> {
         let (w, h) = img.dimensions();
-        let (lo, hi) = [(85.0, 150.0), (190.0, 218.0), (38.0, 62.0)][k];
+        let (green, blue, yellow) = ((85.0, 150.0), (190.0, 218.0), (38.0, 62.0));
+        let (lo, hi) = match (k, mirrored) { (1, _) => blue, (0, false) | (2, true) => green, _ => yellow };
         let r = (1.6 * s).round().max(1.0) as i32;
         let total = *self.cum[k].last().unwrap();
         let (mut lc, mut red) = (0u32, 0u32);
@@ -401,6 +383,35 @@ impl Analyzer {
         if lc + red < 40 { None } else { Some(lc as f32 / (lc + red) as f32) }
     }
 
+    /// Lane colours depend on which team you are: the map is drawn from your base, so the
+    /// side lanes swap between Green and Yellow. Count green- vs yellow-hued pixels along the
+    /// left and right lane polylines (red, enemy-owned stretches ignored).
+    /// Returns (left green, left yellow, right green, right yellow).
+    pub fn side_lane_hues(&self, img: &RgbImage) -> (u32, u32, u32, u32) {
+        let (w, h) = img.dimensions(); let s = w as f32 / CW;
+        let mut out = [0u32; 4];
+        for (slot, k) in [(0usize, 0usize), (2, 2)] {
+            let total = *self.cum[k].last().unwrap();
+            let mut d = 0.0;
+            while d < total {
+                let i = self.cum[k].partition_point(|c| *c <= d).saturating_sub(1).min(self.lanes[k].len() - 2);
+                let (a, b) = (self.lanes[k][i], self.lanes[k][i + 1]);
+                let f = ((d - self.cum[k][i]) / (self.cum[k][i + 1] - self.cum[k][i]).max(1e-3)).clamp(0.0, 1.0);
+                let (px, py) = ((a.0 + (b.0 - a.0) * f) * s, (a.1 + (b.1 - a.1) * f) * s);
+                d += 1.0;
+                let r = (1.6 * s).round().max(1.0) as i32;
+                for dy in -r..=r { for dx in -r..=r {
+                    let (x, y) = (px as i32 + dx, py as i32 + dy);
+                    if x < 0 || y < 0 || x >= w as i32 || y >= h as i32 { continue; }
+                    let p = img.get_pixel(x as u32, y as u32); let (hh, ss, vv) = hsv(p[0], p[1], p[2]);
+                    if ss < 0.42 || vv < 0.42 { continue; }
+                    if (85.0..150.0).contains(&hh) { out[slot] += 1; } else if (38.0..62.0).contains(&hh) { out[slot + 1] += 1; }
+                }}
+            }
+        }
+        (out[0], out[1], out[2], out[3])
+    }
+
     pub fn analyze(&self, img: &RgbImage) -> MinimapState { self.run(img, &mut vec![]) }
 
     /// Analyze and also return debug markers: (x, y in canonical px, kind).
@@ -420,20 +431,30 @@ impl Analyzer {
             .map(|r| (r.x, r.y)).filter(plausible).take(6).collect();
         let ally_pts: Vec<(f32, f32)> = hero_rings(&ally_mask, w, h, s, 0.5).into_iter()
             .map(|r| (r.x, r.y)).filter(plausible).take(5).collect();
-        let own:Vec<_> = rings_at(&m.green,w,h,s,&[4.0,5.0,6.0,7.0]).into_iter()
-            .filter(|p| !self.near_structure(*p,12.0) && p.1>75.0 && p.1<305.0).collect();
+        // Side-lane colours swap between teams; detect the layout from the lane lines themselves.
+        let (lg, ly, rg, ry) = self.side_lane_hues(img);
+        let evidence = lg + ly + rg + ry;
+        let mirrored = evidence >= 100 && (ly + rg) as f32 > 1.5 * (lg + ry) as f32;
+        st.lanes_mirrored = (evidence >= 100).then_some(mirrored);
+        // Your marker: a green ring (hue ~136-142). Recorded captures measured saturation 0.49-0.58,
+        // below the general green mask, so it gets its own mask; the ring test rejects lane lines.
+        let own_mask: Vec<bool> = img.pixels().map(|p| { let (hh, ss, vv) = hsv(p[0], p[1], p[2]); (128.0..148.0).contains(&hh) && ss > 0.45 && vv > 0.45 }).collect();
+        // Occlusion-tolerant circle search at the marker size (~0.58 of a portrait ring), minus the
+        // mint shop icons that sit at fixed map positions in every match.
+        let own:Vec<_> = rings_scaled(&own_mask,w,h,s,0.6,0.58).into_iter().map(|r|(r.x,r.y))
+            .filter(|p| SHOP_ICONS.iter().all(|q| dist(*p, *q) > 8.0))
+            // Standing next to a tower is common; the ring test already rejects diamonds.
+            .filter(|p| p.1>75.0 && p.1<305.0).collect();
         // A unique bright-green ring is only a candidate; the temporal tracker confirms it.
         if let [p] = own.as_slice() {
             st.you=Some(norm(p.0,p.1,CW as u32,CH as u32)); mk.push((p.0,p.1,'Y'));
             if let Some((lane,progress,d))=self.project(*p) { if d<=18.0 {
-                st.your_lane=Some([coach_core::Lane::Green,coach_core::Lane::Blue,coach_core::Lane::Yellow][lane]); st.your_progress=Some(progress);
+                st.your_lane=Some(lane_of(lane, mirrored)); st.your_progress=Some(progress);
             }}
         }
 
         // Lane fronts.
-        for (k, lane) in [&mut st.green, &mut st.blue, &mut st.yellow].into_iter().enumerate() {
-            lane.push = self.push_fraction(img, k, s);
-        }
+        for k in 0..3 { let push = self.push_fraction(img, k, s, mirrored); lane_state(&mut st, k, mirrored).push = push; }
 
         // Troopers: small solid white (ally) / red (enemy) specks that sit on a lane.
         let min_a = (2.0 * s * s) as u32;
@@ -445,7 +466,8 @@ impl Analyzer {
                 let p = (b.cx / s, b.cy / s);
                 if self.near_structure(p, 9.0) { continue; }
                 // Small portrait highlights and fragmented rings are not trooper dots.
-                if ring_pts.iter().chain(ally_pts.iter()).any(|h| dist(*h, p) < 14.0) { continue; }
+                // The ring edge is ~11 px out; troopers fighting right next to a hero must still count.
+                if ring_pts.iter().chain(ally_pts.iter()).any(|h| dist(*h, p) < 11.5) { continue; }
                 if let Some((k, t, d)) = self.project(p) {
                     if d <= 6.0 && (0.10..=0.93).contains(&t) {
                         sums[k][team].0 += 1;
@@ -455,7 +477,8 @@ impl Analyzer {
                 }
             }
         }
-        for (k, lane) in [&mut st.green, &mut st.blue, &mut st.yellow].into_iter().enumerate() {
+        for k in 0..3 {
+            let lane = lane_state(&mut st, k, mirrored);
             lane.ally_troopers = sums[k][0].0;
             lane.enemy_troopers = sums[k][1].0;
             if sums[k][0].0 > 0 { lane.ally_progress = Some(sums[k][0].1 / sums[k][0].0 as f32); }
@@ -564,7 +587,7 @@ impl Tracker {
         self.heroes.iter().map(|h| {
             let unseen_ms = now_ms.saturating_sub(h.seen_ms);
             let lane = an.project((h.pos.x * CW, h.pos.y * CH)).filter(|(_, _, d)| *d <= 14.0)
-                .map(|(k, _, _)| [coach_core::Lane::Green, coach_core::Lane::Blue, coach_core::Lane::Yellow][k]);
+                .map(|(k, _, _)| lane_of(k, raw.lanes_mirrored.unwrap_or(false)));
             coach_core::HeroTrack { id: h.id, ally: h.ally, pos: h.pos, unseen_ms, hits: h.hits,
                 velocity: if unseen_ms == 0 { h.velocity } else { None }, lane }
         }).collect()

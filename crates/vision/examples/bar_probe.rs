@@ -8,7 +8,7 @@ fn main() {
         let r: Vec<_> = (0..12).map(|i| coach_vision::team::read_bar(&img, i)).collect();
         let el = start.elapsed();
         for (i, b) in r.iter().enumerate() {
-            println!("  {}{} visible={} ratio={} empty={} dead={}", if i < 6 { "A" } else { "E" }, i % 6, b.visible,
+            println!("  {}{} timer_px={} visible={} ratio={} empty={} dead={}", if i < 6 { "A" } else { "E" }, i % 6, coach_vision::team::timer_pixels(&img, coach_vision::hud::ALLY_CENTERS.into_iter().chain(coach_vision::hud::ENEMY_CENTERS).nth(i).unwrap()), b.visible,
                 b.ratio.map(|v| format!("{:.0}%", v * 100.0)).unwrap_or("-".into()), b.empty, b.dead);
         }
         println!("  ({el:?})");

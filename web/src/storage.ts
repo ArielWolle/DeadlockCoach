@@ -1,6 +1,7 @@
 import type { RecordedFrame } from './types';
 const DB = 'deadlock-coach-recordings-v1';
-const MAX_FRAMES = 120, MAX_BYTES = 50 * 1024 * 1024;
+// About ten minutes at the one-second cadence (~250-320 KB per 1080p JPEG frame).
+const MAX_FRAMES = 600, MAX_BYTES = 200 * 1024 * 1024;
 let opening: Promise<IDBDatabase> | undefined;
 function open() {
   return opening ||= new Promise<IDBDatabase>((resolve, reject) => {

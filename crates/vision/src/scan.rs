@@ -372,10 +372,13 @@ impl Scanner {
         } else {
             self.death_cause = None;
             if scr == Screen::Gameplay {
-                let mut reading = vitals.clone().and_then(|r| self.vitals.accept_lines(text(r.start), text(r.start + 1), now_ms));
+                let bar = crate::vitals::bar_ratio(img);
+                self.vitals.set_bar(bar);
+                let mut reading = vitals.clone().and_then(|r| self.vitals.accept_lines(text(r.start), text(r.start + 1), now_ms))
+                    .filter(|r| self.vitals.agrees_with_bar(r, bar));
                 // Lost or suspicious tracking re-acquires (detector) right away, throttled.
                 if reading.is_none() && !self.vitals.is_tracking() && self.vitals.may_acquire(now_ms) {
-                    reading = self.vitals.read(&self.ocr, img, now_ms);
+                    reading = self.vitals.read(&self.ocr, img, now_ms).filter(|r| self.vitals.agrees_with_bar(r, bar));
                 }
                 if let Some(v) = reading {
                     snap.hp=Some(v.hp); snap.max_hp=Some(v.max); snap.health_observations=v.observations; snap.health_delta_ratio=v.delta;
