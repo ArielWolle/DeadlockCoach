@@ -108,7 +108,9 @@ impl Coach {
             rules.push(Box::new(coach_engine::NetworthLeadRule::new(self.rules.clone())));
             rules.push(Box::new(coach_engine::economy::PaceRule));
         }
-        if self.options.deaths { rules.push(Box::new(coach_engine::DeathCauseRule)); }
+        // Death review (why you died, from the minutes before), play-pattern summaries and the
+        // fight-lost / walking-out-alone warnings. Replaces the single death-cause sentence.
+        if self.options.deaths { rules.push(Box::new(coach_engine::review::ReviewCoach::default())); }
         if self.options.counters { rules.push(coach_engine::counter_rule_from_json(&self.counters).map_err(js_error)?); }
         Ok(Engine::new(rules))
     }

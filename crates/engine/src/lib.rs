@@ -8,6 +8,7 @@ pub mod laning;
 pub mod positioning;
 pub mod jungle;
 pub mod economy;
+pub mod review;
 mod counter_explanations;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -189,8 +190,14 @@ pub struct DeathCauseRule;
 impl Rule for DeathCauseRule {
     fn evaluate(&self, snap: &GameSnapshot) -> Vec<Cue> {
         let (true, Some(cause)) = (snap.dead, snap.death_cause.as_deref()) else { return vec![] };
+        let (tag, text) = death_cause_advice(cause);
+        vec![Cue { key: format!("death:{tag}"), text: text.into(), priority: Priority::High, cooldown_secs: 60 }]
+    }
+}
+/// What a death-panel cause means for the player: (tag, advice). "heroes" is the generic case.
+pub fn death_cause_advice(cause: &str) -> (&'static str, &'static str) {
         let c = cause.to_lowercase();
-        let (tag, text) = if c.contains("temple") || c.contains("midboss") || c.contains("mid boss") {
+        if c.contains("temple") || c.contains("midboss") || c.contains("mid boss") {
             ("midboss", "You died to the Midboss. Only take it with your whole team, and wait for its shield to drop.")
         } else if c.contains("walker") {
             ("walker", "A Walker killed you. Let troopers tank its shots before you push in.")
@@ -200,9 +207,7 @@ impl Rule for DeathCauseRule {
             ("trooper", "Troopers killed you. Watch your health when you walk into waves.")
         } else {
             ("heroes", "Enemy heroes killed you. Check the scoreboard before you re-engage.")
-        };
-        vec![Cue { key: format!("death:{tag}"), text: text.into(), priority: Priority::High, cooldown_secs: 60 }]
-    }
+        }
 }
 /// Speaks only after the same state (ahead/behind) is seen on 3 snapshots in a row and the gap
 /// is at least `lead_min_abs` souls, so noisy reads near parity do not flip-flop.
@@ -231,7 +236,7 @@ impl Rule for NetworthLeadRule {
     }
 }
 pub fn default_rules(cfg: RulesConfig) -> Vec<Box<dyn Rule>> {
-    vec![Box::new(positioning::PositionCoach::default()), Box::new(jungle::JungleCoach::default()), Box::new(laning::LaneCoach::default()), Box::new(map_rules::MapRule), Box::new(UnspentSoulsRule(cfg.clone())), Box::new(DeathCauseRule), Box::new(NetworthLeadRule::new(cfg)),Box::new(economy::PaceRule),Box::new(economy::WaveReportRule::default())]
+    vec![Box::new(positioning::PositionCoach::default()), Box::new(jungle::JungleCoach::default()), Box::new(laning::LaneCoach::default()), Box::new(map_rules::MapRule), Box::new(UnspentSoulsRule(cfg.clone())), Box::new(review::ReviewCoach::default()), Box::new(NetworthLeadRule::new(cfg)),Box::new(economy::PaceRule),Box::new(economy::WaveReportRule::default())]
 }
 
 pub struct Engine {
@@ -273,7 +278,9 @@ impl Engine {
         }}
         // Among equal priorities the critical-health call goes first: at 24% falling, "get out"
         // beats a gank warning (rec3 spoke the gank and died before the critical call).
-        out.sort_by(|a, b| b.priority.cmp(&a.priority).then((b.key == "lane:critical").cmp(&(a.key == "lane:critical"))));
+        // The death review goes before the generic dead-with-souls reminder (it names the souls too).
+        let first = |c: &Cue| c.key == "lane:critical" || c.key.starts_with("death:review");
+        out.sort_by(|a, b| b.priority.cmp(&a.priority).then(first(b).cmp(&first(a))));
         out.truncate(self.max_per_step);
         for c in &out { self.last_said.insert(c.key.clone(), now); }
         for c in out.iter().filter(|c|c.key.starts_with("counter:")){

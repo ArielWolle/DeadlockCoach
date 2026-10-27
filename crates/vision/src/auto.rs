@@ -40,16 +40,37 @@ fn observation(id:&str,label:&str,b:Bounds,path:&str)->RegionObservation{
 pub struct AutoScanner {legacy:Scanner,reader:Reader,map:MapLocator,clock:crate::parse::Tracker,regions:Vec<RegionObservation>,previous_map:Option<Bounds>,
     clock_box:Tracked,currency_box:Tracked,map_tracker:crate::minimap::Tracker,
     /// Per-phase timing of the most recent scan (includes the nested scanner).
-    pub laps:coach_perception::track::Laps,had_context:bool}
+    pub laps:coach_perception::track::Laps,had_context:bool,
+    /// Last landmark-verified minimap box and the frame size it was found in.
+    verified_map:Option<(Bounds,(u32,u32))>}
+/// Template similarity needed to keep the verified map box without landmarks (normal frames
+/// measured 0.52-0.61, late-game base fights 0.26-0.37, the end screen 0.0).
+const MAP_HOLD_SCORE:f32=0.2;
 impl AutoScanner {
     pub fn new(legacy:Scanner,reader:Reader)->Self{Self{legacy,reader,map:MapLocator::default(),clock:Default::default(),regions:vec![],previous_map:None,
-        clock_box:Tracked::default(),currency_box:Tracked::default(),map_tracker:Default::default(),laps:Default::default(),had_context:false}}
-    pub fn reset(&mut self){self.legacy.reset();self.clock=Default::default();self.regions.clear();self.previous_map=None;self.clock_box.reset();self.currency_box.reset();self.map_tracker=Default::default();self.had_context=false;}
+        clock_box:Tracked::default(),currency_box:Tracked::default(),map_tracker:Default::default(),laps:Default::default(),had_context:false,verified_map:None}}
+    pub fn reset(&mut self){self.legacy.reset();self.clock=Default::default();self.regions.clear();self.previous_map=None;self.clock_box.reset();self.currency_box.reset();self.map_tracker=Default::default();self.had_context=false;self.verified_map=None;}
     pub fn regions(&self)->Vec<RegionObservation>{self.regions.clone()}
     pub fn scan(&mut self,frame:&DynamicImage,now:u64)->GameSnapshot{
         self.regions.clear();
         let mut laps=coach_perception::track::Laps::default();
-        let map=self.previous_map.and_then(|b|self.map.track(frame,b)).or_else(||self.map.locate(frame));self.previous_map=map.map(|m|m.bounds);
+        let dims=(frame.width(),frame.height());
+        let verified=self.verified_map.filter(|(_,d)|*d==dims).map(|(b,_)|b);
+        let tracked=self.previous_map.and_then(|b|self.map.track(frame,b));
+        let map=tracked.or_else(||{
+            let found=self.map.locate(frame);
+            let same=|a:Bounds,b:Bounds|(a.w as f32/b.w.max(1) as f32-1.).abs()<=0.05&&(a.h as f32/b.h.max(1) as f32-1.).abs()<=0.05;
+            match (found,verified) {
+                // The minimap does not move within a match: a differently sized box is a false find
+                // while the verified one still matches (rec4 frame 500 found a 340-px box).
+                (Some(f),Some(v)) if !same(f.bounds,v) => self.map.hold(frame,v,MAP_HOLD_SCORE).or(Some(f)),
+                (Some(f),_) => Some(f),
+                (None,Some(v)) => self.map.hold(frame,v,MAP_HOLD_SCORE),
+                (None,None) => None,
+            }
+        });
+        if let Some(m)=tracked.or_else(||map.filter(|m|verified!=Some(m.bounds))) {self.verified_map=Some((m.bounds,dims));}
+        self.previous_map=map.map(|m|m.bounds);
         if let Some(m)=map{self.regions.push(detected_map(m));}
         laps.lap("map track/locate");
         // Steady state: located clock/currency boxes are read in one recognition batch.

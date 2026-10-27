@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "threshold_note": "Thresholds are tunable coach heuristics from three reviewed recordings, not game rules. Every reason is stated only when the screenshots showed it.",
+  "thresholds": { "death_window_secs": 15, "alone_distance": 0.25, "unseen_enemies": 3, "souls_at_death": 1500, "pattern_window_secs": 300, "fight_radius": 0.13, "missed_fight_distance": 0.3, "hoard_souls": 3000, "respawn_window_secs": 40 },
+  "cards": [
+    { "id": "burst", "speech": "You went from {from}% to dead in {secs} seconds.", "lesson": "Leave on the first big hit, not at low health, and stay behind your front line.",
+      "sources": [{ "path": "strategy/common-mistakes.md", "section": "17. Standing in front of the tank (inverted formation)", "basis": "COMMUNITY", "excerpt": "Hold back behind your front line." }] },
+    { "id": "fight_lost", "speech": "{count} died just before you.", "lesson": "When teammates fall in front of you, the fight is lost: retreat together.",
+      "sources": [{ "path": "strategy/common-mistakes.md", "section": "19. Engaging without an advantage / continuing after opener whiffs", "basis": "COMMUNITY", "excerpt": "Fight is lost. Retreat together." }] },
+    { "id": "forward_missing", "speech": "You were in their half with {count} not seen by your team.", "lesson": "When enemies are missing, don't push past your wave.",
+      "sources": [{ "path": "strategy/common-mistakes.md", "section": "22. Ignoring the minimap / missing alerts", "basis": "WIKI", "excerpt": "Enemy is missing. Watch your back." }] },
+    { "id": "respawn_alone", "speech": "You walked out alone {secs} seconds after respawning.", "lesson": "After a respawn, group with a teammate or catch a wave near your guardian first.",
+      "sources": [{ "path": "strategy/common-mistakes.md", "section": "16. Fighting split / piecemeal", "basis": "COMMUNITY", "excerpt": "Fall back and regroup. Don't fight split." }] },
+    { "id": "alone", "speech": "No teammate was near you.", "lesson": "Stay within reach of a teammate, especially when enemies are missing.",
+      "sources": [{ "path": "strategy/common-mistakes.md", "section": "16. Fighting split / piecemeal", "basis": "COMMUNITY", "excerpt": "Fall back and regroup. Don't fight split." }] },
+    { "id": "souls", "speech": "You died holding {souls} souls.", "lesson": "Spend them before you go back in.",
+      "sources": [{ "path": "strategy/common-mistakes.md", "section": "6. Hoarding souls (unspent)", "basis": "COMMUNITY", "excerpt": "You have unspent souls. Go shop when the wave is safe." }] },
+    { "id": "repeat_cause", "speech": "That is {count} deaths to {cause}.", "lesson": "Check what is killing you and buy a counter or a defensive item.",
+      "sources": [{ "path": "strategy/common-mistakes.md", "section": "8. Not countering the enemy build", "basis": "COMMUNITY", "excerpt": "Check what is killing you and buy a counter." },
+                  { "path": "strategy/common-mistakes.md", "section": "7. No defensive/sustain item (glass cannon)", "basis": "COMMUNITY", "excerpt": "You keep dying. Add a defensive item." }] },
+    { "id": "no_reason", "speech": "The screenshots before this death showed no clear cause.", "lesson": "Check the damage panel to see what killed you.",
+      "sources": [{ "path": "strategy/common-mistakes.md", "section": "8. Not countering the enemy build", "basis": "COMMUNITY", "excerpt": "Check what is killing you and buy a counter." }] },
+
+    { "id": "pattern_deaths", "speech": "Last {min} minutes: you died {deaths} and were dead for {dead}.", "lesson": "Play for zero deaths: fight from behind your front line.",
+      "sources": [{ "path": "strategy/common-mistakes.md", "section": "7. No defensive/sustain item (glass cannon)", "basis": "COMMUNITY", "excerpt": "You keep dying. Add a defensive item." },
+                  { "path": "strategy/common-mistakes.md", "section": "17. Standing in front of the tank (inverted formation)", "basis": "COMMUNITY", "excerpt": "Hold back behind your front line." }] },
+    { "id": "pattern_missed", "speech": "Your team fought {fights} without you, more than a third of the map away.", "lesson": "When your team groups, shove your wave and go help.",
+      "sources": [{ "path": "strategy/common-mistakes.md", "section": "25. Spending too long in a dead lane", "basis": "COMMUNITY", "excerpt": "Lane is dead. Shove it and go help." }] },
+    { "id": "pattern_jungle", "speech": "You spent {jungle}% of the last {min} minutes in the jungle.", "lesson": "Take camps between waves, then go back to a lane or your team.",
+      "sources": [{ "path": "jungle/jungle-tactics.md", "section": "Verified quotes for coaching cards (retrieved 2026-10-27)", "basis": "WIKI", "excerpt": "it's recommended to clear camps in between trooper waves." }] },
+    { "id": "pattern_waves", "speech": "A wave sat deep on your side for {secs} seconds while you were away from it.", "lesson": "Catch that wave before taking camps.",
+      "sources": [{ "path": "strategy/common-mistakes.md", "section": "1. Lane-hopping / leaving lane for nothing (early)", "basis": "COMMUNITY", "excerpt": "Your lane is getting pushed in. Get back and clear the wave." }] },
+    { "id": "pattern_hoard", "speech": "You held over {hoard} souls for {secs} seconds.", "lesson": "Shop when the wave is safe.",
+      "sources": [{ "path": "strategy/common-mistakes.md", "section": "6. Hoarding souls (unspent)", "basis": "COMMUNITY", "excerpt": "You have unspent souls. Go shop when the wave is safe." }] },
+    { "id": "pattern_good", "speech": "Last {min} minutes: no deaths, {lane}% in lanes, {jungle}% jungle, with your team for {joined} fights.", "lesson": "Good balance. Keep catching waves between fights.",
+      "sources": [{ "path": "jungle/jungle-tactics.md", "section": "Verified quotes for coaching cards (retrieved 2026-10-27)", "basis": "WIKI", "excerpt": "it's recommended to clear camps in between trooper waves." }] },
+
+    { "id": "live_fight_lost", "speech": "{count} just died near you. The fight is lost: back off now.", "lesson": "",
+      "sources": [{ "path": "strategy/common-mistakes.md", "section": "19. Engaging without an advantage / continuing after opener whiffs", "basis": "COMMUNITY", "excerpt": "Fight is lost. Retreat together." }] },
+    { "id": "live_respawn_alone", "speech": "{count} are unseen and no teammate is near. Walk out with a teammate, not alone.", "lesson": "",
+      "sources": [{ "path": "strategy/common-mistakes.md", "section": "16. Fighting split / piecemeal", "basis": "COMMUNITY", "excerpt": "Fall back and regroup. Don't fight split." }] }
+  ]
+}

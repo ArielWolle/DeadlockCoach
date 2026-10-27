@@ -117,9 +117,25 @@ fn digit_diff(a: u64, b: u64) -> usize {
 /// "T2 Walker Killing Blow x30" -> "T2 Walker".
 fn clean_cause(s: &str) -> Option<String> {
     let first = s.lines().next()?;
-    let cut = first.to_lowercase().find("killing").unwrap_or(first.len());
-    let t: String = first[..cut].chars().filter(|c| c.is_alphanumeric() || *c == ' ').collect();
-    let t = t.trim().to_string();
+    // Stop at the "Killing Blow" tag (OCR: "kiling Bow", "gilling Blow", "Meleegilling") or a hit
+    // count ("x32", "7"): recorded panels read "Melee kiling Bow 3", "Chimera MKI x232".
+    let mut words = vec![];
+    for w in first.split_whitespace() {
+        let w: String = w.chars().filter(|c| c.is_alphanumeric()).collect();
+        let l = w.to_lowercase();
+        if l.is_empty() { continue; }
+        // "x232", "×32", "23": hit counts end the name.
+        let count = l.trim_start_matches(['x', '×']);
+        if count.len() < l.len() + 1 && !count.is_empty() && count.chars().all(|c| c.is_ascii_digit()) { break; }
+        if let Some(i) = ["lling", "ling", "iing", "blow"].iter().filter_map(|k| l.find(k)).min().or_else(|| (l == "bow").then_some(0)) {
+            // "Meleegilling" / "Meleeiing": keep the name glued in front of the tag.
+            let stem = w[..i].trim_end_matches(['k', 'g', 'i', 'l', 'K', 'G', 'I', 'L']).to_string();
+            if words.is_empty() && stem.len() >= 3 { words.push(stem); }
+            break;
+        }
+        words.push(w);
+    }
+    let t = words.join(" ").trim().to_string();
     if t.len() >= 3 { Some(t) } else { None }
 }
 
@@ -549,5 +565,15 @@ impl Scanner {
         laps.lap("scoreboard + team");
         self.laps = laps;
         snap
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn death_cause_drops_the_killing_blow_tag_and_counts() {
+        for (raw, want) in [("Melee kiling Bow 3", "Melee"), ("Meleegilling Blow  23", "Melee"), ("Chimera MKI x232", "Chimera MKI"), ("Hyper Beam 7", "Hyper Beam"), ("T2 Walker Killing Blow x30", "T2 Walker"), ("Meleeiing Bow", "Melee"), ("Chimera MKI ×232", "Chimera MKI"), ("Temple Guardian Killing Blow", "Temple Guardian")] {
+            assert_eq!(super::clean_cause(raw).as_deref(), Some(want), "{raw}");
+        }
     }
 }

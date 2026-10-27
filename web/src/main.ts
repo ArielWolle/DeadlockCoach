@@ -302,7 +302,7 @@ function logCue(cue:Cue,s:Snapshot,fast:boolean){
   if(settings.record)try{localStorage.setItem(CUE_LOG_KEY,JSON.stringify(cueLog));}catch{/* quota: export keeps the in-memory log */}
 }
 /** Cue keys (or key prefixes) only the full scan's engine produces (QuickCoach::configure). */
-const FULL_ONLY=['counter','death','lead','behind','unspent-dead'];
+const FULL_ONLY=['counter','death','review','lead','behind','unspent-dead'];
 function deliver(analysis:Analysis,timestamp:number,fast=false){
   const now=Date.now(),age=Math.max(0,now-timestamp);const delivered:Cue[]=[];
   for(const original of analysis.cues){

@@ -33,6 +33,14 @@ impl MapLocator {
         if landmark(frame,b,true).is_none()||landmark(frame,b,false).is_none(){return None;}
         let score=self.template.similarity(frame,b);(score>=0.48).then_some(Located{bounds:b,score})
     }
+    /// Keep a previously verified map box without the landmark checks. The minimap does not move
+    /// within a match, but late game its landmarks change (rec4 from 34:41: the home-base icon
+    /// under attack failed the white-landmark test on every frame, so no game context formed and
+    /// the coach went silent for the last death). Only the template must still roughly match.
+    pub fn hold(&self,frame:&DynamicImage,b:Bounds,min_score:f32)->Option<Located>{
+        if b.x+b.w>frame.width()||b.y+b.h>frame.height(){return None;}
+        let score=self.template.similarity(frame,b);(score>=min_score).then_some(Located{bounds:b,score})
+    }
     pub fn locate(&self,frame:&DynamicImage)->Option<Located> {
         let gray=frame.to_luma8();
         let reference_box=Bounds{x:0,y:0,w:self.reference.width(),h:self.reference.height()};
