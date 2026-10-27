@@ -53,8 +53,10 @@ pub struct Tracker {
     bar: Option<f32>,
     /// A >30% single-read jump seen once without health-bar support; accepted if repeated.
     pending_jump: Option<(u32, u32)>,
-    /// Last accepted max HP and when: scales the bar when the digits are unreadable.
-    last_max: Option<(u64, u32)>,
+    /// An implausible max-HP value and how many reads in a row repeated it.
+    max_pending: Option<(u32, u8)>,
+    /// Last max HP that passed max_plausible (the bar fallback scales by it).
+    trusted_max: Option<(u64, u32)>,
 }
 pub struct Reading { pub hp: u32, pub max: u32, pub observations: u32, pub delta: Option<f32>, pub regions: Vec<RegionObservation> }
 
@@ -158,8 +160,19 @@ impl Tracker {
     /// the last 60 s (max changes only with items and levels).
     pub fn from_bar(&self, now: u64) -> Option<(u32, u32)> {
         let b = (self.bar? / BAR_FULL).min(1.0);
-        let (_, max) = self.last_max.filter(|(t, _)| now >= *t && now - *t <= 60_000)?;
+        let (_, max) = self.trusted_max.filter(|(t, _)| now >= *t && now - *t <= 60_000)?;
         Some(((b * max as f32).round() as u32, max))
+    }
+    /// Max HP changes only with items and levels, never by +-40% between reads: rec3 read 13009/13572
+    /// for 1301/1357 (an extra leading digit). Such a value needs three identical reads.
+    pub fn max_plausible(&mut self, max: u32, now: u64) -> bool {
+        let ok = match self.trusted_max.filter(|(t, _)| now >= *t && now - *t <= 120_000) {
+            None => true,
+            Some((_, last)) if (max as f32) <= last as f32 * 1.4 && (max as f32) >= last as f32 * 0.6 => true,
+            Some(_) => { let n = self.max_pending.filter(|(v, _)| *v == max).map(|(_, n)| n + 1).unwrap_or(1); self.max_pending = Some((max, n)); n >= 3 }
+        };
+        if ok { self.max_pending = None; self.trusted_max = Some((now, max)); }
+        ok
     }
     /// Re-acquisition is throttled so a hidden HUD cannot cause a detector pass every frame.
     pub fn may_acquire(&mut self, now: u64) -> bool { self.hp.may_acquire(now, 2000) }
@@ -169,7 +182,6 @@ impl Tracker {
         let observations = previous.map(|p| p.3.saturating_add(1)).unwrap_or(1);
         let delta = previous.map(|(_, old, old_max, _)| hp as f32 / max as f32 - old as f32 / old_max as f32);
         self.previous = Some((now, hp, max, observations));
-        self.last_max = Some((now, max));
         Reading { hp, max, observations, delta, regions: vec![] }
     }
 }

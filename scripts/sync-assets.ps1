@@ -42,3 +42,6 @@ foreach ($h in ($heroes | ? { $_.player_selectable -and $_.images })) {
     if ($u -and -not (Test-Path $o)) { try { Invoke-WebRequest $u -OutFile $o -UseBasicParsing } catch {} }
   }
 }
+
+# In-game tooltip text (desc / effect) for item explanations in spoken counter tips.
+python (Join-Path $PSScriptRoot 'sync-item-text.py')

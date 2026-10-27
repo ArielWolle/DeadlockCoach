@@ -463,11 +463,14 @@ impl Analyzer {
         let own:Vec<_> = rings_scaled(&own_mask,w,h,s,0.6,0.58).into_iter().map(|r|(r.x,r.y))
             .filter(|p| SHOP_ICONS.iter().all(|q| dist(*p, *q) > 8.0))
             // Standing next to a tower is common; the ring test already rejects diamonds.
-            .filter(|p| p.1>75.0 && p.1<305.0).collect();
+            // On the map disc only: rec3 read green game world beside the minimap as you (x=0.01).
+            .filter(|p| p.1>75.0 && p.1<325.0 && p.0>22.0 && p.0<313.0).collect();
         // A unique bright-green ring is only a candidate; the temporal tracker confirms it.
         if let [p] = own.as_slice() {
             st.you=Some(norm(p.0,p.1,CW as u32,CH as u32)); mk.push((p.0,p.1,'Y'));
-            if let Some((lane,progress,d))=self.project(*p) { if d<=18.0 {
+            // 24 px: standing beside your own guardian puts the marker 19-23 px off the lane line
+            // (rec3: five such frames had no lane); jungle paths measured 27+ px away.
+            if let Some((lane,progress,d))=self.project(*p) { if d<=24.0 {
                 st.your_lane=Some(lane_of(lane, mirrored)); st.your_progress=Some(progress);
             }}
         }
@@ -507,8 +510,10 @@ impl Analyzer {
         for p in &ring_pts { mk.push((p.0, p.1, 'E')); }
         st.enemy_count = ring_pts.len() as u32;
         st.enemies = ring_pts.iter().map(|(x, y)| norm(*x, *y, CW as u32, CH as u32)).collect();
+        // Drop only the ring that is your own marker (centres within ~0.01); a teammate stacked
+        // on you sat 0.017 away in rec3 and was deleted by the old 0.02 radius.
         st.allies = ally_pts.iter().map(|(x, y)| norm(*x, *y, CW as u32, CH as u32))
-            .filter(|p| st.you.is_none_or(|me| (me.x-p.x).hypot(me.y-p.y)>0.02)).collect();
+            .filter(|p| st.you.is_none_or(|me| (me.x-p.x).hypot(me.y-p.y)>0.01)).collect();
 
         // Midboss: gold winged icon near the map centre.
         let mut gold = 0u32;
@@ -555,6 +560,10 @@ pub struct Tracker {
     heroes: Vec<HeroSighting>,
     next_id: u32,
     midboss: MidbossState,
+    /// Last raw player-marker sighting (confirms the next one within 10 s).
+    last_you: Option<(u64, Pt)>,
+    /// Last confirmed lane, with where and when: held through short gaps nearby.
+    last_lane: Option<(u64, Pt, coach_core::Lane, Option<f32>)>,
 }
 
 /// The Midboss is alive from 0:00 and only leaves the map when killed (respawning 7 / 6 / 5 min
@@ -563,6 +572,8 @@ pub struct Tracker {
 #[derive(Default)]
 struct MidbossState { seen: bool, absent_since: Option<u64>, down_at: Option<u64>, back_at: Option<u64> }
 pub const MIDBOSS_GONE_MS: u64 = 20_000;
+/// Shortest Midboss respawn (5 min after the third and later kills), minus tracking slack.
+pub const MIDBOSS_MIN_RESPAWN_MS: u64 = 270_000;
 
 /// Internal track state: last sighting plus the one before it (for velocity).
 #[derive(Clone)]
@@ -650,12 +661,25 @@ impl Tracker {
         self.history.push_back((now_ms, raw.clone()));
         while self.history.len() > 3 { self.history.pop_front(); }
         raw.observations = self.history.len() as u32;
-        let own_confirmed = self.history.len() >= 2 && raw.you.is_some_and(|p| self.history.iter().rev().nth(1)
-            .and_then(|(_,m)| m.you).is_some_and(|old| (p.x-old.x).hypot(p.y-old.y)<0.30));
+        // Confirm the marker against the last sighting within 10 s, not strictly the previous
+        // frame: one missed frame used to drop two (rec3: 64 frames without a position).
+        let own_confirmed = raw.you.is_some_and(|p| self.last_you.is_some_and(|(t, old)| now_ms >= t && now_ms - t <= 10_000 && (p.x-old.x).hypot(p.y-old.y)<0.30));
+        if let Some(p) = raw.you { self.last_you = Some((now_ms, p)); }
         if !own_confirmed { raw.you=None; raw.your_lane=None; raw.your_progress=None; }
+        // Hold the lane through a short gap while you stay close to where it was last confirmed
+        // (lane edges, portraits over the line); a respawn or a walk into the jungle ends it.
+        match (raw.you, raw.your_lane) {
+            (Some(p), Some(l)) => self.last_lane = Some((now_ms, p, l, raw.your_progress)),
+            (Some(p), None) => if let Some((t, q, l, prog)) = self.last_lane {
+                if now_ms >= t && now_ms - t <= 8000 && (p.x-q.x).hypot(p.y-q.y) < 0.05 { raw.your_lane = Some(l); raw.your_progress = prog; }
+            },
+            _ => {}
+        }
         let mb = &mut self.midboss;
         if raw.midboss_up {
-            if mb.down_at.is_some() { mb.back_at = Some(now_ms); mb.down_at = None; }
+            // A real kill keeps it away at least 5 minutes (respawn 7 / 6 / 5 min); a shorter
+            // absence was a covered icon (rec3 announced a return 8 s after a phantom kill at 1:23).
+            if let Some(d) = mb.down_at { if now_ms.saturating_sub(d) >= MIDBOSS_MIN_RESPAWN_MS { mb.back_at = Some(now_ms); } mb.down_at = None; }
             mb.seen = true; mb.absent_since = None;
         } else if mb.seen {
             let since = *mb.absent_since.get_or_insert(now_ms);

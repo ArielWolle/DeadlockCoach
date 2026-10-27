@@ -80,14 +80,16 @@ impl LaneCoach {
         else {missing.push("Personal health could not be read".into());}
         // Critical health overrides every plan on a single reading: each reading is already
         // checked against the health bar (or is the bar), and a recorded match stayed silent at 6%.
-        if health.is_some_and(|h| h<CRITICAL) {
+        // Falling fast under 30% is the same emergency a second later (rec3: 32% -> 24% -> dead).
+        if health.is_some_and(|h| h<CRITICAL || h<0.30 && s.health_delta_ratio.is_some_and(|d| d < -0.05)) {
             return Some(self.plan("critical",Action::BackOff,s,Priority::High,evidence,missing,false));
         }
         // Low health needs two consistent reads; a sudden drop needs a real burst (a recorded match
         // showed a stuck misread and small trades triggering this far too often).
         // Low but clearly rising health is already healing (fountain, regen item): no warning.
         let healing=s.health_delta_ratio.is_some_and(|d| d>0.05);
-        if health.is_some_and(|h| h<cfg.low_health) && s.health_observations>=2 && !healing || s.health_delta_ratio.is_some_and(|d| d < -cfg.damage_drop) {
+        let falling=s.health_delta_ratio.is_some_and(|d| d < -0.03);
+        if health.is_some_and(|h| h<cfg.low_health) && (s.health_observations>=2 || falling) && !healing || s.health_delta_ratio.is_some_and(|d| d < -cfg.damage_drop) {
             if let Some(delta)=s.health_delta_ratio {evidence.push(format!("Health changed by {:.0} percentage points since the previous read",delta*100.0));}
             return Some(self.plan("back_off",Action::BackOff,s,Priority::High,evidence,missing,s.health_observations<2));
         }

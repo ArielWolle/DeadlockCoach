@@ -8,6 +8,6 @@ test('real replay gives one explained Rem item and spaces other enemy suggestion
   await expect(page.locator('#replay-status')).toContainText('Replay complete.',{timeout:110000});
   await page.locator('[data-page="coach"]').click();
   await expect(page.locator('#cue-list li')).toHaveCount(2);
-  await expect(page.locator('#cue-list')).toContainText('Healing Nova. It heals you and nearby allies');
+  await expect(page.locator('#cue-list')).toContainText(/consider Healing Nova for \d+ souls\. It heals you and nearby allies/);
   await expect(page.locator('#cue-list')).not.toContainText('Good items against them');
 });

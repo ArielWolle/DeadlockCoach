@@ -173,3 +173,38 @@ fn lane_plan_defers_to_gank_warnings_instead_of_contradicting_them() {
     assert_eq!(spoken[0].key, "pos:gank");
     assert!(!spoken.iter().any(|c| c.key.starts_with("lane:push") || c.key.starts_with("lane:poke")), "{spoken:?}");
 }
+
+#[test]
+fn heroes_hidden_under_your_portrait_still_count() {
+    // rec3: 2 enemies vs you + a teammate standing on you, whose ring your portrait covers.
+    let mut mate = hero(3, true, 0.51, 0.61); mate.unseen_ms = 5000;
+    let two = vec![hero(1, false, 0.55, 0.6), hero(2, false, 0.5, 0.66), mate.clone()];
+    assert_ne!(advice(&snap(two)).as_deref(), Some("outnumbered"), "2v2, not 2 vs just you");
+    // ...but not once it has been gone too long, or was seen far from you.
+    let mut stale = mate.clone(); stale.unseen_ms = 16_000;
+    assert_eq!(advice(&snap(vec![hero(1, false, 0.55, 0.6), hero(2, false, 0.5, 0.66), stale])).as_deref(), Some("outnumbered"));
+    // A hidden enemy on you is present, not "missing".
+    let mut foe = hero(4, false, 0.52, 0.62); foe.unseen_ms = 6000;
+    assert_ne!(advice(&snap(vec![foe])).as_deref(), Some("missing"));
+}
+
+#[test]
+fn an_even_fight_elsewhere_is_not_a_teammate_in_trouble() {
+    let s = |n_foes: usize| { let mut h = vec![hero(3, true, 0.5, 0.3)]; for i in 0..n_foes { h.push(hero(10 + i as u32, false, 0.52 + 0.01 * i as f32, 0.28)); } snap(h) };
+    assert_eq!(advice(&s(1)), None, "1 against 1");
+    assert_eq!(advice(&s(2)).as_deref(), Some("help"));
+}
+
+#[test]
+fn positional_calls_need_two_consistent_reads_and_do_not_flip() {
+    let mut e = Engine::new(vec![Box::new(PositionCoach::default())]); e.min_gap_secs = 0;
+    let out = vec![hero(1, false, 0.55, 0.6), hero(2, false, 0.5, 0.66)];
+    let at = |t: u32, h: Vec<HeroTrack>| { let mut s = snap(h); s.game_clock_secs = Some(t); s };
+    assert!(e.step(&at(500, out.clone())).is_empty(), "one read");
+    assert_eq!(e.step(&at(502, out)).first().map(|c| c.key.as_str()), Some("pos:outnumbered"));
+    let ahead = vec![hero(1, false, 0.56, 0.6), hero(3, true, 0.47, 0.6)];
+    assert!(e.step(&at(504, ahead.clone())).is_empty());
+    assert!(e.step(&at(506, ahead.clone())).is_empty(), "no 'go in' right after 'outnumbered'");
+    e.step(&at(534, ahead.clone()));
+    assert_eq!(e.step(&at(536, ahead)).first().map(|c| c.key.as_str()), Some("pos:go_in"));
+}

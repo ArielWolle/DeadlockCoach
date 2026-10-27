@@ -24,13 +24,14 @@ test('crashed wave produces sourced camp advice and the source guide can be open
   await expect(page.locator('#knowledge-body')).toContainText('Push first, then camp');
 });
 
-test('healthy wave cover allows poke but falling health preempts it',async({page})=>{
+test('healthy wave cover allows poke but falling health preempts it with the critical call',async({page})=>{
   const poke=snapshot(300);poke.minimap.enemies=[{x:.54,y:.54}];
   await replay(page,[poke]);await expect(page.locator('#lane-action')).toHaveText('Short poke window');
   const low={...poke,game_clock_secs:303,hp:200,health_delta_ratio:-.6};
   await replay(page,[poke,low]);
   await expect(page.locator('#lane-action')).toHaveText('Back off');
-  await expect(page.locator('#current-advice')).toContainText('Back behind cover');
+  // 20% and falling fast: the critical retreat, not the trade warning.
+  await expect(page.locator('#current-advice')).toContainText('Health critical');
   await expect(page.locator('#player-readings')).toContainText('200/1000 HP');
 });
 

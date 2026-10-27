@@ -82,15 +82,20 @@ impl Rule for CounterRule {
         if snap.screen.as_deref()==Some("Gameplay") {
             if snap.game_clock_secs.unwrap_or(0)<180||snap.souls.unwrap_or(0)<800{return vec![];}
             if snap.minimap.as_ref().is_some_and(|m|m.you.is_some_and(|me|m.enemies.iter().any(|p|(me.x-p.x).hypot(me.y-p.y)<0.18))){return vec![];}
+            // A purchase tip is for a shop window: dead, on the scoreboard, or back at base. A
+            // recorded match spoke both counters mid-fight. (Unknown position is not blocked:
+            // the tip carries no risk, it just may come early.)
+            if snap.minimap.as_ref().and_then(|m|m.you).is_some_and(|me|me.y<0.8){return vec![];}
         }
         // A suggestion must be affordable from souls actually read (a recorded match suggested
         // items with no souls reading at all), and fit the build you are seen buying: a damage
-        // item of the other category is skipped once you own three of one and none of the other.
+        // damage item is skipped when you own more items of the other damage category (rec3
+        // suggested Long Range, a weapon item, to a spirit Baba). Vitality items fit everyone.
         let owned = |kind: &str| snap.items.iter().filter(|i| counter_explanations::slot(i) == Some(kind)).count();
         let (weapon, spirit) = (owned("weapon"), owned("spirit"));
         let fits = |class: &str| match counter_explanations::slot(class) {
-            Some("weapon") => !(spirit >= 3 && weapon == 0),
-            Some("spirit") => !(weapon >= 3 && spirit == 0),
+            Some("weapon") => spirit <= weapon,
+            Some("spirit") => weapon <= spirit,
             _ => true,
         };
         let affordable = |class: &str| counter_explanations::cost(class).is_none_or(|cost| snap.souls.is_some_and(|souls| souls >= cost));
@@ -106,11 +111,19 @@ impl Rule for CounterRule {
                 .take(1).collect();
             let Some(first) = mine.first() else { continue };
             let who = if first.label.is_empty() { trigger.as_str() } else { first.label.as_str() };
-            let explanation=counter_explanations::summary(&first.suggest_class).map(str::to_string)
-                .unwrap_or_else(||counter_explanations::statistical_reason(&first.reason));
+            // What the item does (curated summary, else the game's tooltip), what it costs, and
+            // the evidence for it against this opponent.
+            let what=counter_explanations::summary(&first.suggest_class).map(str::to_string)
+                .or_else(||counter_explanations::tooltip(&first.suggest_class));
+            let cost=counter_explanations::cost(&first.suggest_class).map(|c|format!(" for {c} souls")).unwrap_or_default();
+            let why=counter_explanations::statistical_reason(&first.reason,who);
+            let text=match what {
+                Some(w)=>format!("Against {who}, consider {}{cost}. {}. {why}",first.suggest,w.trim_end_matches('.')),
+                None=>format!("Against {who}, consider {}{cost}. {why}",first.suggest),
+            };
             cues.push(Cue {
                 key: format!("counter:{trigger}:{}",if first.suggest_class.is_empty(){&first.suggest}else{&first.suggest_class}),
-                text: format!("Statistical option against {who}: {}. {explanation}",first.suggest),
+                text,
                 priority: Priority::Low,
                 cooldown_secs: 1200,
             });
@@ -243,6 +256,11 @@ impl Engine {
             else {return vec![];} // small OCR backsteps are not a new match
         }}
         let mut out: Vec<Cue> = self.rules.iter().flat_map(|r| r.evaluate(snap)).collect();
+        // In danger only safety calls speak: rec3 said "secure last hits" at 38% health falling
+        // 15 points a read, five seconds before dying.
+        let health = snap.hp.zip(snap.max_hp).filter(|(h, m)| *m >= 100 && h <= m).map(|(h, m)| h as f32 / m as f32);
+        let falling = snap.health_delta_ratio.is_some_and(|d| d < -0.03);
+        if health.is_some_and(|h| h < 0.30 || h < 0.45 && falling) { out.retain(|c| c.priority == Priority::High); }
         out.retain(|c| match self.last_said.get(&c.key) {
             Some(&t) if now >= t && now - t < c.cooldown_secs => false,
             _ => true,
@@ -253,7 +271,9 @@ impl Engine {
         if let Some(l)=self.last_cue_at { if now-l<self.min_gap_secs {
             out.retain(|c| c.priority==Priority::High && (now-l>=3 || c.key=="lane:back_off" || c.key=="lane:critical"));
         }}
-        out.sort_by(|a, b| b.priority.cmp(&a.priority));
+        // Among equal priorities the critical-health call goes first: at 24% falling, "get out"
+        // beats a gank warning (rec3 spoke the gank and died before the critical call).
+        out.sort_by(|a, b| b.priority.cmp(&a.priority).then((b.key == "lane:critical").cmp(&(a.key == "lane:critical"))));
         out.truncate(self.max_per_step);
         for c in &out { self.last_said.insert(c.key.clone(), now); }
         for c in out.iter().filter(|c|c.key.starts_with("counter:")){
@@ -303,7 +323,7 @@ mod tests {
         let r = counter_rule_from_json(r#"[{"when_enemy_has":"A","suggest":"B","reason":"test."}]"#).unwrap();
         let mut e = Engine::new(vec![r]);
         let mut s = at(100); s.enemy_items = vec!["A".into()];
-        assert_eq!(e.step(&s)[0].text, "Statistical option against A: B. test.");
+        assert_eq!(e.step(&s)[0].text, "Against A, consider B. test.");
         assert!(e.step(&s).is_empty());
         let mut s2 = at(1000); s2.enemy_items = vec!["A".into()]; s2.items = vec!["B".into()];
         assert!(e.step(&s2).is_empty());

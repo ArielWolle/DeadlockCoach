@@ -68,9 +68,9 @@ pub fn group_range(pool: &[Option<f32>], k: usize) -> (f32, f32) {
 }
 
 #[derive(Clone)]
-pub struct PositionCoach { catalog: Arc<Catalog> }
+pub struct PositionCoach { catalog: Arc<Catalog>, spoken: Spoken }
 impl Default for PositionCoach {
-    fn default() -> Self { Self { catalog: Arc::new(serde_json::from_str(include_str!("../../../data/coaching/positioning.json")).expect("shipped positioning policy")) } }
+    fn default() -> Self { Self { catalog: Arc::new(serde_json::from_str(include_str!("../../../data/coaching/positioning.json")).expect("shipped positioning policy")), spoken: Spoken::default() } }
 }
 
 fn count(n: usize, what: &str) -> String {
@@ -127,12 +127,20 @@ impl PositionCoach {
     #[allow(clippy::too_many_arguments)]
     fn local(&self, s: &GameSnapshot, map: &MinimapState, me: Pt, team: Option<&TeamPicture>, health: Option<f32>, healthy: bool, hp_note: &str, team_note: Option<String>) -> Option<Advice> {
         let t = &self.catalog.thresholds;
-        let live = |h: &&HeroTrack| h.confirmed() && h.visible();
+        // Present = seen now, seen in the last 3 s (single-frame dropouts undercounted 121 of 298
+        // rec3 frames), or last seen within 0.08 of you in the last 10 s: your own portrait covers
+        // heroes standing on you (9 of 9 wrong rec3 fight calls were such overlaps).
+        let live = |h: &&HeroTrack| h.confirmed() && (h.visible() || h.unseen_ms <= RECENT_MS || h.unseen_ms <= HIDDEN_MS && h.distance(me) <= HIDDEN_RADIUS);
         let enemies: Vec<&HeroTrack> = map.heroes.iter().filter(|h| !h.ally).filter(live).collect();
         let allies: Vec<&HeroTrack> = map.heroes.iter().filter(|h| h.ally).filter(live).collect();
         let near_e: Vec<&&HeroTrack> = enemies.iter().filter(|h| h.distance(me) <= t.near_radius).collect();
         let near_allies = allies.iter().filter(|h| h.distance(me) <= t.near_radius).count();
         let near_a = near_allies + 1; // + you
+        // For "you are outnumbered / being ganked" only, a teammate hidden under your portrait
+        // counts for 15 s (rec3 frame 72: unseen 11 s, still standing on you). Commit calls keep the
+        // stricter count, so an old sighting can never talk you into a fight.
+        let guard_a = near_a + map.heroes.iter().filter(|h| h.ally && h.confirmed() && !live(h)
+            && h.unseen_ms <= HIDDEN_ALLY_MS && h.distance(me) <= HIDDEN_RADIUS).count();
         let mut ev_base = vec![hp_note.to_string()]; ev_base.extend(team_note);
         // Health ranges for groups of k enemies / k allies besides you (None = no top-bar data).
         let enemy_range = |k: usize| team.map(|p| group_range(&p.enemies_seen_hp, k)).unwrap_or((0.0, k as f32));
@@ -149,7 +157,7 @@ impl PositionCoach {
         let closing: Vec<&&HeroTrack> = enemies.iter().filter(|h| h.distance(me) > t.near_radius * 0.6
             && h.distance(me) <= t.watch_radius && h.closing_speed(me) >= t.closing_speed).collect();
         let threat = closing.len() + near_e.len();
-        if !closing.is_empty() && threat >= near_a {
+        if !closing.is_empty() && threat >= guard_a {
             let (_, hi) = enemy_range(threat);
             let weak = team.is_some() && hi / threat as f32 <= t.low_enemy && healthy;
             if !weak {
@@ -169,7 +177,7 @@ impl PositionCoach {
         let (a_lo, _) = ally_range(near_allies);
         let our_floor = mine + a_lo;
         // 2. Outnumbered around you, unless the enemies there are certainly weaker than your group.
-        if k >= 2 && k > near_a && e_hi > our_floor {
+        if k >= 2 && k > guard_a && e_hi > our_floor {
             let mut ev = vec![format!("{k} enemy and {near_a} allied markers (including you) within {:.2}", t.near_radius),
                 format!("Nearby enemy health total between {e_lo:.1} and {e_hi:.1} heroes' worth; your side at least {our_floor:.1}")];
             ev.extend(ev_base.clone());
@@ -187,7 +195,7 @@ impl PositionCoach {
         // 4. Missing: confirmed enemies last seen near you that left the minimap recently. Dead
         //    enemies are not missing: the count is capped by alive enemies not on the map.
         let mut missing: Vec<&HeroTrack> = map.heroes.iter().filter(|h| !h.ally && h.confirmed() && h.distance(me) <= t.watch_radius
-            && (t.missing_min_ms..=t.missing_max_ms).contains(&h.unseen_ms)).collect();
+            && (t.missing_min_ms..=t.missing_max_ms).contains(&h.unseen_ms) && !live(h)).collect();
         if let Some(p) = team { missing.truncate(p.enemies_alive.saturating_sub(enemies.len())); }
         let forward = map.your_progress.is_some_and(|p| p >= 0.45);
         if !missing.is_empty() && (forward || missing.len() >= 2) && near_e.is_empty() {
@@ -213,17 +221,20 @@ impl PositionCoach {
         }
         // 7. A teammate fighting nearby: help if they are losing, join if they are winning.
         if near_e.is_empty() && healthy {
+            // Enemies are counted in a wider circle than allies: a group arriving is part of the
+            // fight (rec3 said "join, 2 against 1" next to five enemies), allies must be in it.
             let fight = allies.iter().filter(|a| (t.near_radius..=t.help_max_distance).contains(&a.distance(me))).filter_map(|a| {
-                let foes = enemies.iter().filter(|e| e.distance(a.pos) <= t.fight_radius).count();
+                let foes = enemies.iter().filter(|e| e.distance(a.pos) <= t.fight_radius * 1.6).count();
                 let friends = allies.iter().filter(|o| o.distance(a.pos) <= t.fight_radius).count();
                 (foes > 0).then_some((*a, friends, foes))
             }).max_by(|x, y| (x.2 as i32 - x.1 as i32).cmp(&(y.2 as i32 - y.1 as i32)).then(y.0.distance(me).total_cmp(&x.0.distance(me))));
-            if let Some((a, friends, foes)) = fight {
+            // An even fight is not "trouble" (rec3: six "1 against 1" help calls during laning).
+            if let Some((a, friends, foes)) = fight.filter(|(_, f, e)| e > f || f > e) {
                 let place = area(a.pos, a.lane);
                 let mut ev = vec![format!("{friends} allied vs {foes} enemy markers within {:.2} of a teammate {:.2} map away", t.fight_radius, a.distance(me))];
                 ev.extend(ev_base.clone());
                 let vars = [("area", place), ("allies", count(friends, "ally")), ("enemies", count(foes, "enemy"))];
-                return Some(if foes >= friends { self.advice("help", &vars, ev) } else { self.advice("join", &vars, ev) });
+                return Some(if foes > friends { self.advice("help", &vars, ev) } else { self.advice("join", &vars, ev) });
             }
         }
         let _ = s;
@@ -231,8 +242,36 @@ impl PositionCoach {
     }
 }
 
+/// A track unseen this long still counts as present (one-frame dropouts).
+pub const RECENT_MS: u64 = 3_000;
+/// A track last seen this close to you, this recently, is assumed hidden under your portrait.
+pub const HIDDEN_MS: u64 = 10_000;
+pub const HIDDEN_RADIUS: f32 = 0.08;
+/// How long a teammate hidden under you still cancels an outnumbered / gank warning.
+pub const HIDDEN_ALLY_MS: u64 = 15_000;
+/// How long a teammate hidden under you still cancels an outnumbered / gank warning.
+
+/// Positional calls on the minimap are only as good as one frame's ring detection, so a call is
+/// spoken when the same advice holds on two consecutive assessments (gank warnings, which are
+/// about motion, excepted), and a "commit" call never follows a "back off" call within 30 s or
+/// vice versa (rec3 said "outnumbered" then "go in" 3 s apart as a teammate's ring flickered).
+#[derive(Clone, Default)]
+pub struct Spoken { last: std::cell::RefCell<(Option<(String, u32)>, Option<(String, u32)>)> }
+fn aggressive(id: &str) -> bool { matches!(id, "go_in" | "join" | "kill_window" | "enemies_down") }
+fn defensive(id: &str) -> bool { matches!(id, "outnumbered" | "gank" | "allies_down") }
+
 impl Rule for PositionCoach {
     fn evaluate(&self, s: &GameSnapshot) -> Vec<Cue> {
-        self.assess(s).map(|a| vec![Cue { key: format!("pos:{}", a.id), text: a.text, priority: a.priority, cooldown_secs: a.cooldown_secs }]).unwrap_or_default()
+        let Some(clock) = s.game_clock_secs else { return vec![] };
+        let advice = self.assess(s);
+        let mut st = self.spoken.last.borrow_mut();
+        let (prev, said) = (st.0.clone(), st.1.clone());
+        st.0 = advice.as_ref().map(|a| (a.id.clone(), clock));
+        let Some(a) = advice else { return vec![] };
+        let stable = a.id == "gank" || prev.is_some_and(|(id, t)| id == a.id && clock >= t && clock - t <= 6);
+        let contradicts = said.is_some_and(|(id, t)| clock >= t && clock - t < 30 && (aggressive(&a.id) && defensive(&id) || defensive(&a.id) && aggressive(&id) && a.id != "gank"));
+        if !stable || contradicts { return vec![]; }
+        st.1 = Some((a.id.clone(), clock));
+        vec![Cue { key: format!("pos:{}", a.id), text: a.text, priority: a.priority, cooldown_secs: a.cooldown_secs }]
     }
 }
