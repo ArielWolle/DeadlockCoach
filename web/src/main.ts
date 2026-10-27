@@ -11,7 +11,7 @@ import {regionsFromReport,drawRegions} from './region-overlays';
 import {QuickMonitor} from './quick';
 import {freshCue} from './live-cues';
 import { clearFrames, download, listFrames, recordFrame, snapshotLines } from './storage';
-import type { Analysis, Cue, GameItem, Knowledge, Options, Settings, Snapshot, WorkerReply, ProfileReply, PerceptionReport, TacticalDecision, PoolStatus } from './types';
+import type { Analysis, Cue, GameItem, Knowledge, Options, Settings, Snapshot, WorkerReply, ProfileReply, PerceptionReport, TacticalDecision, PoolStatus, HeroStatus } from './types';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const button = (id: string) => $<HTMLButtonElement>(id);
@@ -482,6 +482,23 @@ function renderItems(id: string, items: string[] = []) {
   const list = $(id); list.replaceChildren();
   for (const item of items.length ? items : ['Nothing confidently observed.']) { const li = document.createElement('li'); li.textContent = label(item, itemNames); list.append(li); }
 }
+/** One top-bar slot: hero (when identified) and its observed state from the health bar. */
+function heroState(p: HeroStatus): { text: string; ratio: number | null; kind: 'dead' | 'unseen' | 'critical' | 'hp' | 'unknown' } {
+  if (p.dead === true) return { text: `Dead${p.respawn_secs != null ? ` · respawn in ${p.respawn_secs}s` : ''}`, ratio: null, kind: 'dead' };
+  if (p.bar_visible === false) return { text: p.ally ? 'No health bar' : 'Not seen recently · health unknown', ratio: null, kind: 'unseen' };
+  if (p.health_ratio != null) { const pct = Math.round(p.health_ratio * 100); return { text: `${pct}% health${p.critical === true ? ' · CRITICAL' : ''}`, ratio: p.health_ratio, kind: p.critical === true || p.health_ratio < 0.35 ? 'critical' : 'hp' }; }
+  return { text: p.critical === true ? 'CRITICAL · exact health unread' : 'Health unread', ratio: null, kind: p.critical === true ? 'critical' : 'unknown' };
+}
+function rosterRow(p: HeroStatus, fallbackHero?: string): HTMLElement {
+  const row = document.createElement('div'), name = document.createElement('span'), state = document.createElement('span'), meter = document.createElement('span'), fill = document.createElement('span');
+  const st = heroState(p), hero = p.hero || fallbackHero;
+  row.className = `roster-row roster-${st.kind}`; name.className = 'roster-name'; state.className = 'roster-state'; meter.className = 'roster-meter'; fill.className = 'roster-fill';
+  name.textContent = hero ? label(hero, heroNames) : `${p.ally ? 'Ally' : 'Enemy'} ${p.slot + 1} · identity unknown`;
+  state.textContent = st.text;
+  fill.style.width = st.ratio == null ? '0%' : `${Math.max(2, Math.round(st.ratio * 100))}%`;
+  meter.setAttribute('role', 'img'); meter.setAttribute('aria-label', st.text); meter.append(fill);
+  row.append(name, meter, state); return row;
+}
 function renderSnapshot(s: Snapshot) {
   const knownWorth=(s.hero_status||[]).filter(p=>p.networth!=null&&p.networth_observations>=2).map(p=>p.networth!).sort((a,b)=>a-b);
   text('earned-pace',s.own_networth!=null?`Earned souls: ${format(s.own_networth)} · ${s.game_clock_secs?Math.round(s.own_networth*60/s.game_clock_secs).toLocaleString():'—'} per minute over the match${knownWorth.length>=6?` · observed lobby median ${format(knownWorth[Math.floor(knownWorth.length/2)])}`:' · waiting for stable comparison reads'}.`
@@ -510,9 +527,12 @@ function renderSnapshot(s: Snapshot) {
   }
   renderItems('own-items', s.items); renderItems('enemy-items', s.enemy_items);
   $('roster').replaceChildren();
-  for (const [team, heroes] of [['Your team', s.ally_heroes], ['Enemy team', s.enemy_heroes]] as const) {
+  const slots = s.hero_status?.length === 12 ? s.hero_status : null;
+  for (const [team, ally, heroes] of [['Your team', true, s.ally_heroes], ['Enemy team', false, s.enemy_heroes]] as const) {
     const div = document.createElement('div'), heading = document.createElement('h3'); heading.textContent = team; div.append(heading);
-    for (const h of heroes?.length ? heroes : ['No confident hero observations yet.']) { const p = document.createElement('p'); p.textContent = label(h, heroNames); div.append(p); }
+    if (!slots) {
+      for (const h of heroes?.length ? heroes : ['No confident hero observations yet.']) { const p = document.createElement('p'); p.textContent = label(h, heroNames); div.append(p); }
+    } else for (const p of slots.filter(h => h.ally === ally)) div.append(rosterRow(p, heroes?.[p.slot]));
     $('roster').append(div);
   }
   text('snapshot-json', JSON.stringify(s, null, 2)); drawMap(s);
