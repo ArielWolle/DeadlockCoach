@@ -89,6 +89,18 @@ pub fn team_total_candidates(s: &str) -> Vec<u32> {
     c
 }
 
+/// Plausible team net worth at `clock` seconds. Recorded matches ran 70-120 souls/s per team
+/// (rec5: 86k at 17:54, 184k at 33:45, 312k at 44:24); the band is ~3x wider on both sides, so it
+/// only removes the wrong decimal interpretations ("184" as 18k at 33:45, "231" as 231k at 5:00).
+pub fn team_total_range(clock: u32) -> (u32, u32) { ((clock * 30).saturating_sub(3000).max(500), clock * 220 + 15000) }
+
+/// [`team_total_candidates`] restricted to [`team_total_range`] when the clock is known.
+pub fn team_total_candidates_at(s: &str, clock: Option<u32>) -> Vec<u32> {
+    let mut c = team_total_candidates(s);
+    if let Some(t) = clock { let (lo, hi) = team_total_range(t); c.retain(|v| *v >= lo && *v <= hi); }
+    c
+}
+
 /// Choose the candidate nearest `prev`; without history only an unambiguous reading is taken.
 pub fn pick_total(cands: &[u32], prev: Option<u32>) -> Option<u32> {
     match (prev, cands) {

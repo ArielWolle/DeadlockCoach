@@ -19,13 +19,16 @@ export interface Snapshot {
   dead?: boolean; respawn_secs?: number | null; death_cause?: string | null; match_id?: number | null;
   items?: string[]; enemy_items?: string[]; ally_heroes?: string[]; enemy_heroes?: string[];
   ally_networth?: number | null; enemy_networth?: number | null;
-  minimap?: MinimapState | null; players?: { ally: boolean; hero?: string; items: string[] }[];
+  minimap?: MinimapState | null; players?: { ally: boolean; hero?: string; items: string[]; kills?: number | null; deaths?: number | null; assists?: number | null }[];
+  kills?: number | null; deaths?: number | null; assists?: number | null;
   hp?:number|null; max_hp?:number|null; health_observations?:number; health_delta_ratio?:number|null;
   coaching_context?:{focus_lane?:'Green'|'Blue'|'Yellow'|null};
 }
 export interface HeroStatus {ally:boolean;slot:number;hero?:string|null;critical?:boolean|null;health_ratio?:number|null;networth?:number|null;networth_observations:number;observations:number;position?:Point|null;position_observations:number;lane?:string|null;
   /** false = enemy not seen recently (no top-bar health bar); not dead. */
-  bar_visible?:boolean|null;health_observations?:number;dead?:boolean|null;respawn_secs?:number|null}
+  bar_visible?:boolean|null;health_observations?:number;dead?:boolean|null;respawn_secs?:number|null;
+  /** Consecutive respawn reads consistent with a 1 s/s countdown. */
+  respawn_observations?:number}
 export interface Reading { status: 'ok' | 'missing' | 'pending' | 'skipped' | 'error'; value: unknown; score: number | null;
   bounds: { x: number; y: number; w: number; h: number } | null; source: string; bounds_origin?:'configured'|'detected' }
 export interface StageTrace extends Omit<Reading, 'source'> { id: string; operation: string; inputs: string[]; elapsed_ms: number;
