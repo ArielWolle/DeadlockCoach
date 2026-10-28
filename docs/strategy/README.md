@@ -15,6 +15,7 @@ Source material for a coach that watches HUD screenshots and speaks short cues. 
 | [economy-and-buy-order.md](economy-and-buy-order.md) | Souls, haunted souls, comeback mechanics, slots, buying |
 | [common-mistakes.md](common-mistakes.md) | Coachable mistakes with detection signal and cue text |
 | [coach-cue-library.md](coach-cue-library.md) | ~40 spoken cues with HUD triggers and priority |
+| [hero-threats.md](hero-threats.md) | Victor's aura, Drifter's mark, Grey Talon's range, base healing (live reactions; retrieved 2026-10-28) |
 
 ## Sources fetched (all Retrieved: 2026-10-25)
 Wiki (deadlock.wiki), format text:

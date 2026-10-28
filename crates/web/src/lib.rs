@@ -112,6 +112,9 @@ impl Coach {
         // fight-lost / walking-out-alone warnings. Replaces the single death-cause sentence.
         if self.options.deaths { rules.push(Box::new(coach_engine::review::ReviewCoach::default())); }
         if self.options.counters { rules.push(coach_engine::counter_rule_from_json(&self.counters).map_err(js_error)?); }
+        // Active calls (debuff on you, CC, enemy-dead window, heading out weak, unsecured souls,
+        // repeat killer, missed team fight) go first so their specific text wins ties.
+        if self.options.laning { rules.insert(0, Box::new(coach_engine::active::ActiveCoach::default())); }
         Ok(Engine::new(rules))
     }
     fn step(&mut self, snap: &GameSnapshot) -> Result<Vec<coach_engine::Cue>, JsValue> {
@@ -183,6 +186,10 @@ impl QuickCoach {
         if self.options.laning{rules.push(Box::new(coach_engine::positioning::PositionCoach::default()));rules.push(Box::new(coach_engine::jungle::JungleCoach::default()));rules.push(Box::new(self.lane.clone()));}
         if self.options.map{rules.push(Box::new(coach_engine::economy::WaveReportRule::default()));rules.push(Box::new(coach_engine::map_rules::MapRule));}
         if self.options.economy{rules.push(Box::new(coach_engine::economy::PaceRule));rules.push(Box::new(coach_engine::UnspentSoulsRule(RulesConfig::default())));}
+        // Fast path: only the position-based active call (missed team fight). Status effects, top-bar
+        // respawn timers and death panels are copied from the last full scan here, so those calls
+        // stay in the full engine (listed in FULL_ONLY in web/src/main.ts).
+        if self.options.laning{rules.insert(0,Box::new(coach_engine::active::ActiveCoach::fast()));}
         self.engine=Engine::new(rules);Ok(())
     }
     pub fn reset(&mut self)->Result<(),JsValue>{self.monitor.reset();let options=serde_json::to_string(&self.options).map_err(js_error)?;self.configure(&options)}

@@ -9,6 +9,7 @@ pub mod positioning;
 pub mod jungle;
 pub mod economy;
 pub mod review;
+pub mod active;
 mod counter_explanations;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -172,6 +173,9 @@ impl Rule for UnspentSoulsRule {
                 cooldown_secs: 90,
             }];
         }
+        // In your own base the call is specific ("spend them before you walk out") and only for
+        // an amount that buys a useful upgrade; the generic field reminder stays quiet there.
+        if let Some(base) = active::base_spend(snap) { return base.into_iter().collect(); }
         if let Some(lane)=laning::focus(snap) {
             if snap.game_clock_secs.is_some_and(|t|t<900) && snap.minimap.as_ref().is_some_and(|m|
                 m.lane(lane).push.is_none_or(|p|p<0.7)) {return vec![];}
@@ -241,7 +245,10 @@ impl Rule for NetworthLeadRule {
     }
 }
 pub fn default_rules(cfg: RulesConfig) -> Vec<Box<dyn Rule>> {
-    vec![Box::new(positioning::PositionCoach::default()), Box::new(jungle::JungleCoach::default()), Box::new(laning::LaneCoach::default()), Box::new(map_rules::MapRule), Box::new(UnspentSoulsRule(cfg.clone())), Box::new(review::ReviewCoach::default()), Box::new(NetworthLeadRule::new(cfg)),Box::new(economy::PaceRule),Box::new(economy::WaveReportRule::default())]
+    // The active coach goes first: among equal priorities its specific call (the debuff on you,
+    // the lane to push in an enemy-dead window, souls to spend in base) wins the step over the
+    // generic one, and the shared keys keep the generic one quiet for its cooldown.
+    vec![Box::new(active::ActiveCoach::default()), Box::new(positioning::PositionCoach::default()), Box::new(jungle::JungleCoach::default()), Box::new(laning::LaneCoach::default()), Box::new(map_rules::MapRule), Box::new(UnspentSoulsRule(cfg.clone())), Box::new(review::ReviewCoach::default()), Box::new(NetworthLeadRule::new(cfg)),Box::new(economy::PaceRule),Box::new(economy::WaveReportRule::default())]
 }
 
 pub struct Engine {
@@ -288,6 +295,9 @@ impl Engine {
         out.sort_by(|a, b| b.priority.cmp(&a.priority).then(first(b).cmp(&first(a))));
         out.truncate(self.max_per_step);
         for c in &out { self.last_said.insert(c.key.clone(), now); }
+        // A debuff / crowd-control call already says "get out" with the reason: the generic
+        // health back-off would repeat it a second later (rec5 17:53 aura, 17:54 back off).
+        if out.iter().any(|c| active::is_escape_call(&c.key)) { self.last_said.insert("lane:back_off".into(), now); }
         for c in out.iter().filter(|c|c.key.starts_with("counter:")){
             self.last_said.insert("$counter-category".into(),now);
             self.last_said.insert(format!("$counter-item:{}",c.key.rsplit(':').next().unwrap_or("")),now);
