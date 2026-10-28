@@ -270,6 +270,55 @@ fn a_recording_gap_is_named_and_starts_a_new_death() {
     assert!(second[0].key != first[0].key, "{second:?}");
 }
 
+/// Runs `frame(t)` every 5 s over [from, to] and returns every pattern summary offered.
+fn patterns(from: u32, to: u32, frame: &dyn Fn(u32) -> GameSnapshot) -> Vec<String> {
+    let r = ReviewCoach::default();
+    let mut out = vec![];
+    for t in (from..=to).step_by(5) { out.extend(r.evaluate(&frame(t)).into_iter().filter(|c| c.key.starts_with("review:pattern")).map(|c| c.text)); }
+    out
+}
+fn lane_frame(t: u32, souls: u32) -> GameSnapshot { alive(t, 2400, Pt { x: 0.5, y: 0.6 }, Some(Lane::Blue), vec![track(1, true, 0.52, 0.6)], team(0, 0), souls) }
+
+#[test]
+fn the_hoarding_summary_names_the_tier_that_applied() {
+    // rec8 22:07: "held over 6,400 souls ... up to 5,130": 5,130 was over the 3,200 tier before
+    // 20:00, never over 6,400.
+    let p = patterns(1000, 1300, &|t| lane_frame(t, 5130));
+    let h = p.iter().find(|t| t.contains("You held over")).unwrap_or_else(|| panic!("{p:?}"));
+    assert!(h.contains("You held over 3,200 souls for") && h.contains("up to 5,130"), "{h}");
+}
+#[test]
+fn time_in_the_shop_while_dead_counts_as_dead() {
+    // rec8 42:44: "dead for 29 seconds" of an 83 s respawn spent partly in the shop.
+    let p = patterns(1000, 1300, &|t| match t {
+        1100..=1104 | 1155..=1184 => { let mut d = dead(t, Some("Gun Damage")); d.respawn_secs = Some(1185 - t); d }
+        1105..=1154 => GameSnapshot { game_clock_secs: Some(t), screen: Some("Shop".into()), ..Default::default() },
+        _ => lane_frame(t, 500),
+    });
+    assert!(p.iter().any(|t| t.contains("you died 1 time and were dead for 85 seconds")), "{p:?}");
+}
+#[test]
+fn a_death_while_still_dead_counts_the_rest_of_the_timer() {
+    // At 1110 (50 s into an 85 s death) the summary says 85, not 50.
+    let r = ReviewCoach::default();
+    let mut last = String::new();
+    for t in (800..=1110).step_by(5) {
+        let s = if t >= 1060 { let mut d = dead(t, Some("Gun Damage")); d.respawn_secs = Some(1145 - t); d } else { lane_frame(t, 500) };
+        for c in r.evaluate(&s) { if c.key.starts_with("review:pattern") { last = c.text; } }
+    }
+    assert!(last.contains("were dead for 85 seconds"), "{last}");
+}
+#[test]
+fn gameplay_frames_without_a_minimap_split_two_deaths() {
+    // rec8 50:26: "1 death" for deaths at 46:43 and 49:42; 48:07-49:34 had no minimap reading.
+    let p = patterns(1000, 1300, &|t| match t {
+        1050..=1079 | 1150..=1179 => dead(t, Some("Gun Damage")),
+        1080..=1149 => GameSnapshot { game_clock_secs: Some(t), screen: Some("Gameplay".into()), hp: Some(2500), max_hp: Some(2500), health_observations: 3, ..Default::default() },
+        _ => lane_frame(t, 500),
+    });
+    assert!(p.iter().any(|t| t.contains("you died 2 times")), "{p:?}");
+}
+
 #[test]
 fn going_back_in_at_half_health_is_called_out() {
     let r = ReviewCoach::default();

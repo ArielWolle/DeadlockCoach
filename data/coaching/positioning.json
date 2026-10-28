@@ -13,8 +13,8 @@
       "rationale": "More visible enemies than allies around you is a numbers disadvantage.",
       "sources": [
         { "path": "strategy/teamfighting.md", "section": "## 4. Engage / disengage", "basis": "COMMUNITY", "excerpt": "Engage only with an advantage: pick available, key ability landed, ult advantage, numbers/respawns" } ] },
-    { "id": "missing", "speech": "{count} near you went missing {seconds} seconds ago. Watch your back and don't push past your wave.", "priority": "normal", "cooldown_secs": 40,
-      "rationale": "Enemies seen near you that left the minimap may be repositioning for a gank.",
+    { "id": "missing", "speech": "{count} near you went missing {seconds} seconds ago. Watch your back and don't push past your wave.", "priority": "normal", "cooldown_secs": 90,
+      "rationale": "Enemies seen near you that left the minimap may be repositioning for a gank. Said at most every 90 s: rec8 repeated it 11 times, often about the same enemies under new track ids.",
       "sources": [
         { "path": "strategy/common-mistakes.md", "section": "## 22. Ignoring the minimap / missing alerts", "basis": "WIKI", "excerpt": "enemy markers disappear from the minimap while the player pushes forward" },
         { "path": "strategy/midgame-macro.md", "section": "## 5. Rotations and presence", "basis": "WIKI", "excerpt": "Missing: pinging an enemy portrait (Tab + middle-click) warns allies the enemy is unaccounted for." } ] },

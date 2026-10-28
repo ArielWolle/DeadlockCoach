@@ -82,3 +82,29 @@ badges it reads on the player.
 - [WIKI] Dispel Magic (3,200): "Purge all non-ultimate negative effects currently applied to you."
 - [WIKI] Reactive Barrier (1,600): "Gain a Barrier when you are Stunned, Chained, Immobilized, Slept or Silenced."
 - [WIKI] Debuff Reducer (1,600): "Reduces the duration of all negative effects applied to you."
+
+---
+
+# Part 3: damage types of recorded killers (counter items)
+
+Retrieved: 2026-10-28
+
+Sources:
+- https://deadlock.wiki/Pocket [WIKI]
+- https://deadlock.wiki/Haze [WIKI]
+
+Purpose: the counter-item suggestion names the item for the damage that topped your recent death
+panels (rec8: Pocket's Affliction, Haze's Bullet Dance). Quotes are verbatim (markup removed).
+
+## Pocket: Affliction
+- [WIKI] Affliction: "Applies damage over time to enemies nearby." (in the ability text the damage is marked as Spirit Damage)
+- [WIKI] Affliction: "Affliction's damage is non-lethal and does not apply item procs."
+- [WIKI] Affliction: "Debuff duration reduced by Debuff Resist"
+- [INFERENCE] Spirit damage over time: spirit resist (Spirit Shielding) answers it. The page does
+  not mark Affliction as dispellable, so Dispel Magic is not suggested against it.
+
+## Haze: Bullet Dance
+- [WIKI] Bullet Dance: "Enter a flurry, firing your weapon at nearby enemies with perfect accuracy and added Bullet Damage."
+- [WIKI] Haze "eliminates solitary enemies swiftly."
+- [INFERENCE] Bullet Dance is gun damage: bullet resist items (Weapon Shielding, Bullet Resilience,
+  Metal Skin) answer it.

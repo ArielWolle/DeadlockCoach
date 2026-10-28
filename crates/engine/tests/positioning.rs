@@ -152,6 +152,25 @@ fn dead_enemies_are_not_missing_and_create_a_team_window() {
 }
 
 #[test]
+fn an_enemy_window_needs_time_left_and_a_wipe_is_named_once() {
+    // rec8 30:04: "2 enemies are dead, the first back in about 1 seconds".
+    let mut s = snap(vec![]);
+    team(&mut s, [Some(0.9), FULL, FULL, FULL, FULL, FULL], [FULL, FULL, FULL, FULL, Some(-1.0), Some(-1.0)]);
+    for h in s.hero_status.iter_mut().filter(|h| !h.ally && h.dead == Some(true)) { h.respawn_secs = Some(3); }
+    assert_ne!(advice(&s).as_deref(), Some("enemies_down"));
+    // Teammates on long timers: one call per wipe, however long it lasts.
+    let mut e = Engine::new(vec![Box::new(PositionCoach::default())]); e.min_gap_secs = 0;
+    let mut said = 0;
+    for t in (500..600).step_by(2) {
+        let mut s = snap(vec![]); s.game_clock_secs = Some(t);
+        team(&mut s, [Some(0.9), Some(-1.0), Some(-1.0), FULL, FULL, FULL], [FULL; 6]);
+        for h in s.hero_status.iter_mut().filter(|h| h.ally && h.dead == Some(true)) { h.respawn_secs = Some(120 - (t - 500)); }
+        said += e.step(&s).iter().filter(|c| c.key == "pos:allies_down").count();
+    }
+    assert_eq!(said, 1);
+}
+
+#[test]
 fn dead_teammates_and_unseen_enemies_while_pushed_up() {
     let mut s = snap(vec![]); team(&mut s, [Some(0.9), Some(-1.0), Some(-1.0), FULL, FULL, FULL], [FULL; 6]);
     let a = PositionCoach::default().assess(&s).unwrap(); assert_eq!(a.id, "allies_down"); assert!(a.text.contains("2 teammates are dead"), "{}", a.text);

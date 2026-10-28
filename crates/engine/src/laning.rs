@@ -26,9 +26,28 @@ pub struct Decision {
 }
 
 #[derive(Clone)]
-pub struct LaneCoach { catalog:Arc<Catalog>, position:crate::positioning::PositionCoach, jungle:crate::jungle::JungleCoach }
+pub struct LaneCoach { catalog:Arc<Catalog>, position:crate::positioning::PositionCoach, jungle:crate::jungle::JungleCoach, health:std::cell::RefCell<HealthMemo> }
 impl Default for LaneCoach {
-    fn default() -> Self { Self { catalog:Arc::new(serde_json::from_str(include_str!("../../../data/coaching/laning.json")).expect("shipped lane policy")), position:Default::default(), jungle:Default::default() } }
+    fn default() -> Self { Self { catalog:Arc::new(serde_json::from_str(include_str!("../../../data/coaching/laning.json")).expect("shipped lane policy")), position:Default::default(), jungle:Default::default(), health:Default::default() } }
+}
+/// Health warnings per episode. rec8 said "Health critical" three times in 41 s at the same low
+/// (44:03 / 44:23 / 44:44) and 4 of 9 came 3-6 s before death: the critical call is said once per
+/// low episode (until health is back to 60%), and also on a fast fall (30% of max health lost
+/// within 6 s while under half; 25%, or crowd control while falling, under 45%); the back-off call
+/// once per damage episode (until health recovers to the healthy mark).
+#[derive(Clone,Default)]
+struct HealthMemo { reads:std::collections::VecDeque<(u32,f32)>, critical_said:bool, back_said:bool, last_clock:u32 }
+/// Fraction of max health lost within FALL_SECS that counts as a fast fall.
+pub const FAST_FALL:f32 = 0.30;
+pub const FALL_SECS:u32 = 6;
+/// Own health ratio, or None when the reading is implausible: 0 HP on a live gameplay frame, or
+/// a value far from your own top-bar health bar when that bar is read.
+pub fn plausible_health(s:&GameSnapshot) -> Option<f32> {
+    let h=s.hp.zip(s.max_hp).filter(|(hp,max)| *max>=100 && hp<=max).map(|(hp,max)| hp as f32/max as f32)?;
+    if s.hp==Some(0) && !s.dead {return None;}
+    let bar=s.hero.as_ref().and_then(|me| s.hero_status.iter().find(|p| p.ally && p.hero.as_ref()==Some(me))).filter(|p| p.health_observations>=2).and_then(|p| p.health_ratio);
+    if bar.is_some_and(|b| (b-h).abs()>0.35) {return None;}
+    Some(h)
 }
 /// Health fraction below which the retreat call preempts everything.
 pub const CRITICAL:f32 = 0.15;
@@ -74,7 +93,7 @@ impl LaneCoach {
         let clock=s.game_clock_secs?;
         if s.dead || s.screen.as_deref().is_some_and(|v| v!="Gameplay") {return None;}
         let cfg=&self.catalog.thresholds;
-        let health=s.hp.zip(s.max_hp).filter(|(hp,max)| *max>=100 && hp<=max).map(|(hp,max)| hp as f32/max as f32);
+        let health=plausible_health(s);
         let mut evidence=vec![]; let mut missing=vec![];
         if let Some(h)=health {evidence.push(format!("Personal health OCR: {:.0}% ({} reads)",h*100.0,s.health_observations));}
         else {missing.push("Personal health could not be read".into());}
@@ -178,6 +197,48 @@ impl LaneCoach {
 }
 impl Rule for LaneCoach {
     fn evaluate(&self,s:&GameSnapshot) -> Vec<Cue> {
-        self.decide(s).filter(|d|d.speak).map(|d|vec![Cue {key:d.cue_key,text:d.text,priority:d.priority,cooldown_secs:d.cooldown_secs}]).unwrap_or_default()
+        let mut d=self.decide(s);
+        let Some(clock)=s.game_clock_secs else {return vec![]};
+        let mut m=self.health.borrow_mut();
+        if clock+120<m.last_clock || s.dead {*m=HealthMemo::default();}
+        m.last_clock=clock;
+        let h=if s.screen.as_deref()==Some("Gameplay") {plausible_health(s)} else {None};
+        if let Some(h)=h {
+            m.reads.push_back((clock,h));
+            while m.reads.front().is_some_and(|(t,_)| t+FALL_SECS<clock) {m.reads.pop_front();}
+            if h>=0.6 {m.critical_said=false;}
+            if h>=self.catalog.thresholds.healthy {m.back_said=false;}
+        }
+        // A fast fall is the emergency before the health is critical.
+        let peak=m.reads.iter().map(|r| r.1).fold(0.0f32,f32::max);
+        let fx=|e:&str| s.status_effects.iter().any(|x| x.to_lowercase().contains(e));
+        let cc=["stunned","silenced","frozen","afflicted","knocked_off_zipline"].iter().any(|e| fx(e));
+        let falling=s.health_delta_ratio.is_some_and(|d| d < -0.05);
+        // Already under 45%, a quarter of max health in seconds is the same emergency (rec8
+        // 39:05-39:09: 73% -> 43%, dead 8 s later).
+        let fast=h.is_some_and(|h| h<0.5 && peak-h>=FAST_FALL || h<0.45 && (peak-h>=0.25 || cc && falling));
+        if fast && d.as_ref().is_some_and(|d| d.cue_key!="lane:critical") {
+            if let Some(x)=d.as_mut() {
+                let c=self.catalog.cards.iter().find(|c| c.id=="critical").expect("critical card");
+                x.cue_key="lane:critical".into();x.text=c.speech.clone();x.priority=Priority::High;x.cooldown_secs=c.cooldown_secs;x.speak=true;x.action=Action::BackOff;
+                x.evidence.push(format!("Health fell {:.0} points within {FALL_SECS} s",(peak-h.unwrap_or(peak))*100.0));
+            }
+        }
+        let Some(d)=d.filter(|d| d.speak) else {return vec![]};
+        match d.cue_key.as_str() {
+            "lane:critical" if m.critical_said => return vec![],
+            "lane:back_off" if m.back_said => return vec![],
+            _ => {}
+        }
+        vec![Cue {key:d.cue_key,text:d.text,priority:d.priority,cooldown_secs:d.cooldown_secs}]
+    }
+    fn spoken(&self,cue:&Cue) {
+        let mut m=self.health.borrow_mut();
+        // A debuff / crowd-control escape call is the back-off call for this episode.
+        match cue.key.as_str() {
+            "lane:critical" => {m.critical_said=true;m.back_said=true;}
+            k if k=="lane:back_off" || crate::active::is_escape_call(k) => m.back_said=true,
+            _ => {}
+        }
     }
 }

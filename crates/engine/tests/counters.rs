@@ -31,6 +31,41 @@ fn at(t:u32)->GameSnapshot{GameSnapshot{game_clock_secs:Some(t),..Default::defau
     s.items=vec!["upgrade_improved_spirit".into()];
     assert!(!rule.evaluate(&s).iter().any(|c|c.key.contains("long_range")));
 }
+fn dead_with(t:u32,rows:&[(&str,u32)],souls:u32)->GameSnapshot{
+    let mut s=at(t);s.screen=Some("Dead".into());s.dead=true;s.souls=Some(souls);s.hero=Some("hero_orion".into());
+    s.enemy_heroes=["hero_synth","hero_yamato","hero_haze","hero_kelvin","hero_deadpack","hero_magician"].map(String::from).to_vec();
+    s.death_damage=rows.iter().map(|(src,d)|coach_core::DamageRow{source:src.to_string(),hits:None,damage:*d}).collect();s
+}
+#[test]fn a_ranged_hero_is_never_offered_a_melee_item(){
+    // rec8 34:54: Lifestrike against Yamato for Grey Talon.
+    let rule=counter_rule_from_json(include_str!("../../../data/counters.json")).unwrap();
+    let mut s=at(2000);s.screen=Some("Dead".into());s.souls=Some(5000);s.enemy_heroes=vec!["hero_yamato".into()];
+    s.items=vec!["upgrade_tech_damage_pulse".into(),"upgrade_restorative_locket".into()];
+    s.hero=Some("hero_haze".into());
+    assert!(rule.evaluate(&s).iter().any(|c|c.key.contains("boxing_glove")),"a melee-capable hero may get it");
+    let rule=counter_rule_from_json(include_str!("../../../data/counters.json")).unwrap();
+    s.hero=Some("hero_orion".into());
+    assert!(!rule.evaluate(&s).iter().any(|c|c.key.contains("boxing_glove")),"{:?}",rule.evaluate(&s));
+}
+#[test]fn the_damage_that_killed_you_picks_the_counter(){
+    // rec8 46:51: Pocket's Affliction topped the panel; 50:14: Haze's Bullet Dance.
+    let rule=counter_rule_from_json(include_str!("../../../data/counters.json")).unwrap();
+    let c=rule.evaluate(&dead_with(2810,&[("Affliction",2172),("Spirit Armor",1104),("Frost Grenade",1017)],3580));
+    assert_eq!(c[0].key,"counter:hero_synth:upgrade_spirit_bubble","{c:?}");
+    assert!(c[0].text.starts_with("Pocket's Affliction did 2,172 damage when you last died. Consider Spirit Shielding for 1,600 souls"),"{}",c[0].text);
+    let rule=counter_rule_from_json(include_str!("../../../data/counters.json")).unwrap();
+    let c=rule.evaluate(&dead_with(2990,&[("Bullet Dance",2017),("Fixation",932),("Capacitor",398)],4474));
+    assert_eq!(c[0].key,"counter:hero_haze:upgrade_weapon_shielding","{c:?}");
+    // Once panels name who hurts you, a hero who did not is not countered (rec8: Metal Skin vs Deadman Danny).
+    assert!(!c.iter().any(|c|c.key.starts_with("counter:hero_deadpack")),"{c:?}");
+}
+#[test]fn the_same_item_is_suggested_once_per_match(){
+    let mut e=Engine::new(vec![counter_rule_from_json(include_str!("../../../data/counters.json")).unwrap()]);
+    let mut s=at(1000);s.screen=Some("Dead".into());s.souls=Some(2000);s.enemy_heroes=vec!["hero_viscous".into()];
+    assert!(e.step(&s).iter().any(|c|c.key.contains("long_range")));
+    s.game_clock_secs=Some(2900);
+    assert!(!e.step(&s).iter().any(|c|c.key.contains("long_range")),"rec8 said Long Range vs Pocket at 17:18 and 48:20");
+}
 #[test]fn counter_tips_wait_for_a_shop_window(){
     let rule=counter_rule_from_json(include_str!("../../../data/counters.json")).unwrap();
     let mut s=at(400);s.screen=Some("Gameplay".into());s.souls=Some(3500);s.enemy_heroes=vec!["hero_familiar".into()];

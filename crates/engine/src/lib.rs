@@ -36,6 +36,10 @@ pub struct TimerDef {
 
 pub trait Rule {
     fn evaluate(&self, snap: &GameSnapshot) -> Vec<Cue>;
+    /// Called by the engine for every cue it speaks (from any rule), after `evaluate` on the same
+    /// snapshot. Rules that say something once per situation commit here, so a cue that lost the
+    /// step to another one is offered again instead of being lost.
+    fn spoken(&self, _cue: &Cue) {}
 }
 
 pub struct TimerRule(pub TimerDef);
@@ -74,11 +78,48 @@ pub struct CounterDef {
     pub label: String,
 }
 
-pub struct CounterRule(pub Vec<CounterDef>);
+/// Counter-item suggestions. What actually hurt you comes first: enemy heroes named on recent
+/// death panels get the item for that damage (data/coaching/review.json threats and counters:
+/// Haze's Bullet Dance -> bullet resist), then the statistical counters of data/counters.json.
+/// Melee items are never suggested to a long-range hero (rec8 offered Lifestrike to Grey Talon).
+pub struct CounterRule { defs: Vec<CounterDef>, memo: std::cell::RefCell<CounterMemo> }
+impl CounterRule { pub fn new(defs: Vec<CounterDef>) -> Self { Self { defs, memo: Default::default() } } }
+/// Deaths seen: (clock, panel rows attributed to one enemy hero: (hero, ability, damage)), your
+/// hero by vote, and the death state.
+#[derive(Default)]
+struct CounterMemo { deaths: Vec<(u32, Vec<(String, String, u32)>)>, dead: bool, me: Option<String>, votes: HashMap<String, u32>, enemies: Vec<String>, last_clock: u32 }
+fn review_catalog() -> &'static review::Catalog {
+    static C: std::sync::OnceLock<review::Catalog> = std::sync::OnceLock::new();
+    C.get_or_init(|| serde_json::from_str(include_str!("../../../data/coaching/review.json")).expect("shipped review policy"))
+}
+/// How long a death panel keeps steering counter suggestions.
+const COUNTER_DEATH_SECS: u32 = 600;
+impl CounterRule {
+    fn remember(&self, snap: &GameSnapshot) {
+        let mut m = self.memo.borrow_mut();
+        let Some(clock) = snap.game_clock_secs else { return };
+        if clock + 120 < m.last_clock { *m = CounterMemo::default(); }
+        m.last_clock = clock;
+        // Your hero by majority over the match: a misread for a few minutes (rec8 read Grey Talon
+        // as another hero 34:56-41:41) must not unlock melee items for a ranged hero.
+        if let Some(h) = &snap.hero { *m.votes.entry(h.clone()).or_default() += 1; }
+        m.me = m.votes.iter().max_by(|a, b| a.1.cmp(b.1).then(b.0.cmp(a.0))).map(|(h, _)| h.clone());
+        if snap.enemy_heroes.len() >= 3 { m.enemies = snap.enemy_heroes.clone(); }
+        if !snap.dead { m.dead = false; return; }
+        if !m.dead { m.deaths.push((clock, vec![])); m.dead = true; }
+        if snap.death_damage.is_empty() { return; }
+        // Panel rows naming one enemy hero's ability (shared abilities and items stay unattributed).
+        let data = review::game_data();
+        let per: Vec<(String, String, u32)> = snap.death_damage.iter()
+            .filter_map(|r| data.ability_hero(&r.source, &m.enemies).map(|h| (h, r.source.clone(), r.damage))).collect();
+        if let Some(d) = m.deaths.last_mut() { d.1 = per; }
+    }
+}
 
 impl Rule for CounterRule {
     /// One explained item, deferred during combat and gated by observed shopping budget.
     fn evaluate(&self, snap: &GameSnapshot) -> Vec<Cue> {
+        self.remember(snap);
         if snap.hp.zip(snap.max_hp).is_some_and(|(hp,max)|max>0&&(hp as f32)/(max as f32)<0.65)
             ||snap.health_delta_ratio.is_some_and(|d|d < -0.05){return vec![];}
         if snap.screen.as_deref()==Some("Gameplay") {
@@ -101,14 +142,49 @@ impl Rule for CounterRule {
             _ => true,
         };
         let affordable = |class: &str| counter_explanations::cost(class).is_none_or(|cost| snap.souls.is_some_and(|souls| souls >= cost));
-        let mut seen: Vec<&str> = vec![];
+        let m = self.memo.borrow();
+        let roles = &review_catalog().roles;
+        let ranged = m.me.as_ref().is_some_and(|h| roles.ranged.contains(h));
+        let usable = |class: &str| !(ranged && roles.melee_items.iter().any(|x| x == class));
+        let owned_item = |class: &str, name: &str| snap.items.iter().any(|i| i == class || i == name);
+        let mut seen: Vec<String> = vec![];
         let mut cues = vec![];
-        for trigger in snap.enemy_items.iter().chain(snap.enemy_heroes.iter()) {
-            if seen.contains(&trigger.as_str()) { continue; }
-            seen.push(trigger);
-            let mine: Vec<&CounterDef> = self.0.iter()
+        // 1. Heroes on recent death panels, most damage first: the item for that damage.
+        let clock = snap.game_clock_secs.unwrap_or(0);
+        let mut hurt: Vec<(String, String, u32)> = vec![];
+        for (_, rows) in m.deaths.iter().filter(|d| d.0 + COUNTER_DEATH_SECS >= clock) {
+            for (h, a, d) in rows { match hurt.iter_mut().find(|x| &x.0 == h) { Some(x) => { x.2 += d; } None => hurt.push((h.clone(), a.clone(), *d)) } }
+        }
+        hurt.sort_by(|a, b| b.2.cmp(&a.2));
+        let catalog = review_catalog();
+        let data = review::game_data();
+        for (hero, _, _) in &hurt {
+            // The hero's ability with a known counter need, as seen on a panel.
+            let need = m.deaths.iter().rev().filter(|d| d.0 + COUNTER_DEATH_SECS >= clock).flat_map(|d| d.1.iter()).filter(|r| &r.0 == hero)
+                .find_map(|r| catalog.threats.iter().find(|t| &t.hero == hero && !t.counter.is_empty() && t.source.eq_ignore_ascii_case(&r.1)).map(|t| (t, r.2)));
+            let Some((threat, dmg)) = need else { continue };
+            let Some(counter) = catalog.counters.iter().find(|c| c.need == threat.counter) else { continue };
+            let item = counter.items.iter().filter_map(|n| data.item(n))
+                .filter(|i| !owned_item(&i.class_name, &i.name) && usable(&i.class_name) && fits(&i.class_name) && snap.souls.is_some_and(|s| s >= i.cost)).next();
+            let Some(item) = item else { continue };
+            seen.push(hero.clone());
+            let name = data.hero_name(hero);
+            let why = counter.why.replace("{hero}", &name).replace("{threat}", &threat.source);
+            cues.push(Cue { key: format!("counter:{hero}:{}", item.class_name),
+                text: format!("{name}'s {} did {} damage when you last died. Consider {} for {} souls: {why}.", threat.source, thousands_souls(dmg), item.name, thousands_souls(item.cost)),
+                priority: Priority::Low, cooldown_secs: 1200 });
+        }
+        // 2. Statistical counters. Once death panels name who hurts you, only those heroes
+        //    ("Counter-buy against what is actually hurting you", moba-fundamentals): rec8
+        //    suggested Metal Skin against Deadman Danny while Yamato and Pocket did the damage.
+        let triggers: Vec<&String> = if hurt.is_empty() { snap.enemy_items.iter().chain(snap.enemy_heroes.iter()).collect() } else { hurt.iter().map(|h| &h.0).collect() };
+        for trigger in triggers {
+            if seen.contains(trigger) { continue; }
+            seen.push(trigger.clone());
+            let mine: Vec<&CounterDef> = self.defs.iter()
                 .filter(|c| &c.when_enemy_has == trigger
-                    && !snap.items.iter().any(|i| i == &c.suggest || i == &c.suggest_class)
+                    && !owned_item(&c.suggest_class, &c.suggest)
+                    && usable(&c.suggest_class)
                     && affordable(&c.suggest_class) && fits(&c.suggest_class))
                 .take(1).collect();
             let Some(first) = mine.first() else { continue };
@@ -134,7 +210,7 @@ impl Rule for CounterRule {
     }
 }
 pub fn counter_rule_from_json(json: &str) -> Result<Box<dyn Rule>, String> {
-    Ok(Box::new(CounterRule(serde_json::from_str(json.trim_start_matches('\u{feff}')).map_err(|e| e.to_string())?)))
+    Ok(Box::new(CounterRule::new(serde_json::from_str(json.trim_start_matches('\u{feff}')).map_err(|e| e.to_string())?)))
 }
 
 /// Parse data/timings.json into timer rules.
@@ -164,7 +240,7 @@ impl Default for RulesConfig {
 pub struct UnspentSoulsRule(pub RulesConfig, std::cell::Cell<SoulsEpisode>);
 impl UnspentSoulsRule { pub fn new(cfg: RulesConfig) -> Self { Self(cfg, Default::default()) } }
 #[derive(Default, Clone, Copy)]
-pub struct SoulsEpisode { peak: u32, said: u8, said_at: u32, dead_said: bool }
+pub struct SoulsEpisode { peak: u32, said: u8, said_at: u32, dead_said: bool, base_said: bool, dead_since: Option<u32> }
 fn thousands_souls(v: u32) -> String { if v >= 1000 { format!("{},{:03}", v / 1000, v % 1000) } else { v.to_string() } }
 impl Rule for UnspentSoulsRule {
     fn evaluate(&self, snap: &GameSnapshot) -> Vec<Cue> {
@@ -173,26 +249,37 @@ impl Rule for UnspentSoulsRule {
         let mut cur = self.1.get();
         let out = (|| { let ep = &mut cur;
             // A purchase (souls fall well below the episode's peak) or a new match starts over.
-            if s + 400 < ep.peak || clock + 120 < ep.said_at { *ep = SoulsEpisode::default(); }
+            if s + 400 < ep.peak || clock + 120 < ep.said_at { let dead_since = ep.dead_since; *ep = SoulsEpisode::default(); ep.dead_since = dead_since; }
             ep.peak = ep.peak.max(s);
             let target = economy::spend_target(clock).max(self.0.unspent_souls);
             if snap.dead {
                 // The death screen is a shop window: named once per death when the souls buy at
                 // least the tier below what you would normally buy now.
+                let since = *ep.dead_since.get_or_insert(clock);
+                ep.base_said = false; // the next base visit is a new shop window
                 let need = economy::death_spend(clock);
                 if s < need || ep.dead_said { return vec![]; }
+                // A revive (rec8 39:17: health back 5 s later, no timer ever read) is not a
+                // shop window: without a respawn timer, wait 5 s into the death screen.
+                if snap.respawn_secs.is_none() && clock < since + 5 { return vec![]; }
                 ep.dead_said = true;
                 let wait = snap.respawn_secs.map(|r| format!(" You respawn in {r} seconds.")).unwrap_or_default();
                 return vec![Cue { key: "unspent-dead".into(), text: format!("You are dead with {} souls. Buy items now.{wait}", thousands_souls(s)), priority: Priority::High, cooldown_secs: 90 }];
             }
-            ep.dead_said = false;
-            if s < target { return vec![]; } // saving for the next item
-            if ep.said >= 2 || ep.said == 1 && clock < ep.said_at + 180 { return vec![]; }
-            // In your own base the call is specific ("spend them before you walk out").
+            if snap.screen.as_deref() == Some("Gameplay") && snap.hp.is_some() { ep.dead_since = None; ep.dead_said = false; }
+            // In your own base the call is specific ("spend them before you walk out"), from the
+            // tier below the usual buy (the base is the shop: rec8 walked out at 21:39 with 4,522
+            // souls, enough for a 3,200 item), once per buy episode.
             if let Some(base) = active::base_spend(snap) {
                 let Some(c) = base else { return vec![] };
-                ep.said += 1; ep.said_at = clock; return vec![c];
+                if ep.base_said { return vec![]; }
+                ep.base_said = true; ep.said = ep.said.max(1); ep.said_at = clock; return vec![c];
             }
+            if s < target { return vec![]; } // saving for the next item
+            if ep.said >= 2 || ep.said == 1 && clock < ep.said_at + 180 { return vec![]; }
+            // Under half health the next call is about surviving, not shopping (rec5 38:04 named
+            // 6,585 souls at 44% health with unsecured souls on the line).
+            if snap.hp.zip(snap.max_hp).is_some_and(|(h, m)| m >= 100 && h * 2 < m) { return vec![]; }
             if let Some(lane)=laning::focus(snap) {
                 if clock<900 && snap.minimap.as_ref().is_some_and(|m| m.lane(lane).push.is_none_or(|p|p<0.7)) {return vec![];}
             }
@@ -279,10 +366,12 @@ pub struct Engine {
     /// Minimum game-seconds between any two spoken cues.
     pub min_gap_secs: u32,
     last_cue_at: Option<u32>,
+    /// Text of the last spoken wave overview (which lanes it named).
+    wave_text: Option<String>,
 }
 
 impl Engine {
-    pub fn new(rules: Vec<Box<dyn Rule>>) -> Self { Engine { rules, last_said: HashMap::new(), max_per_step: 1, min_gap_secs: 8, last_cue_at: None } }
+    pub fn new(rules: Vec<Box<dyn Rule>>) -> Self { Engine { rules, last_said: HashMap::new(), max_per_step: 1, min_gap_secs: 8, last_cue_at: None, wave_text: None } }
 
     /// Evaluate all rules; returns cues not suppressed by cooldown, highest priority first.
     pub fn step(&mut self, snap: &GameSnapshot) -> Vec<Cue> {
@@ -302,9 +391,21 @@ impl Engine {
             Some(&t) if now >= t && now - t < c.cooldown_secs => false,
             _ => true,
         });
+        // A counter item is suggested once per match (rec8 suggested Long Range twice, 31 min apart).
         out.retain(|c|!c.key.starts_with("counter:")||(
             self.last_said.get("$counter-category").is_none_or(|t|now.saturating_sub(*t)>=180)
-            &&self.last_said.get(&format!("$counter-item:{}",c.key.rsplit(':').next().unwrap_or(""))).is_none_or(|t|now.saturating_sub(*t)>=1200)));
+            &&!self.last_said.contains_key(&format!("$counter-item:{}",c.key.rsplit(':').next().unwrap_or("")))));
+        // One wave call per lane per minute: the lane-by-lane overview is not said within 60 s of a
+        // deep-wave call, and a deep-wave call is not said for a lane the overview just named as
+        // coming toward you (rec8 spoke both families 25 times).
+        let recent = |k: &str, secs: u32| self.last_said.get(k).is_some_and(|t| now >= *t && now - t < secs);
+        let deep_recent = self.last_said.iter().any(|(k, t)| k.starts_with("map:wave:") && now >= *t && now - t < 60);
+        let overview = self.wave_text.clone().filter(|_| recent("wave:overview", 60)).unwrap_or_default();
+        // "Hold in base" already covers "play safe until they're back".
+        let held = recent("active:hold_base", 60) || recent("active:hold_base:out", 60);
+        out.retain(|c| !(held && c.key.starts_with("pos:allies_down")));
+        out.retain(|c| if c.key == "wave:overview" { !deep_recent }
+            else if let Some(lane) = c.key.strip_prefix("map:wave:") { !overview.contains(&format!("{lane} coming toward")) } else { true });
         if let Some(l)=self.last_cue_at { if now-l<self.min_gap_secs {
             out.retain(|c| c.priority==Priority::High && (now-l>=3 || c.key=="lane:back_off" || c.key=="lane:critical"));
         }}
@@ -315,9 +416,13 @@ impl Engine {
         out.sort_by(|a, b| b.priority.cmp(&a.priority).then(first(b).cmp(&first(a))));
         out.truncate(self.max_per_step);
         for c in &out { self.last_said.insert(c.key.clone(), now); }
+        for c in &out { for r in &self.rules { r.spoken(c); } }
         // A debuff / crowd-control call already says "get out" with the reason: the generic
         // health back-off would repeat it a second later (rec5 17:53 aura, 17:54 back off).
         if out.iter().any(|c| active::is_escape_call(&c.key)) { self.last_said.insert("lane:back_off".into(), now); }
+        // The specific call covers the generic one: holding the urn replaces "head for delivery".
+        if out.iter().any(|c| c.key == "active:urn_hold") { self.last_said.insert("map:urn-you".into(), now); }
+        if let Some(c) = out.iter().find(|c| c.key == "wave:overview") { self.wave_text = Some(c.text.clone()); }
         for c in out.iter().filter(|c|c.key.starts_with("counter:")){
             self.last_said.insert("$counter-category".into(),now);
             self.last_said.insert(format!("$counter-item:{}",c.key.rsplit(':').next().unwrap_or("")),now);
