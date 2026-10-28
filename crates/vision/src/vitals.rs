@@ -174,8 +174,14 @@ impl Tracker {
         if ok { self.max_pending = None; self.trusted_max = Some((now, max)); }
         ok
     }
+    /// Forget the remembered max HP (it changes with levels and items): the bar-only estimate
+    /// then waits for a fresh max read instead of scaling by a stale one.
+    pub fn forget_max(&mut self) { self.trusted_max = None; self.previous = None; }
     /// Re-acquisition is throttled so a hidden HUD cannot cause a detector pass every frame.
     pub fn may_acquire(&mut self, now: u64) -> bool { self.hp.may_acquire(now, 2000) }
+
+    #[cfg(test)]
+    fn trusted(&self) -> Option<u32> { self.trusted_max.map(|(_, m)| m) }
 
     pub fn accept(&mut self, hp: u32, max: u32, now: u64) -> Reading {
         let previous = self.previous.filter(|(t, _, m, _)| now >= *t && now - *t <= 20000 && max.abs_diff(*m) <= max / 10);
@@ -183,5 +189,22 @@ impl Tracker {
         let delta = previous.map(|(_, old, old_max, _)| hp as f32 / max as f32 - old as f32 / old_max as f32);
         self.previous = Some((now, hp, max, observations));
         Reading { hp, max, observations, delta, regions: vec![] }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn a_level_up_drops_the_held_max_so_the_bar_cannot_scale_a_stale_value() {
+        // rec5 frame 481: 2786/3144 reported from the bar x the old max while the screen showed
+        // 3199/3199 after a level-up.
+        let mut t = Tracker::default();
+        assert!(t.max_plausible(3144, 0));
+        t.set_bar(Some(0.86));
+        assert_eq!(t.from_bar(1000).map(|(_, m)| m), Some(3144));
+        t.forget_max();
+        assert_eq!(t.trusted(), None);
+        assert_eq!(t.from_bar(2000), None, "unknown until a fresh max read");
     }
 }

@@ -1,0 +1,3120 @@
+[
+ {
+  "name": "Abstract Landscape",
+  "kind": "ability",
+  "heroes": [
+   "hero_artist"
+  ]
+ },
+ {
+  "name": "Acrobat",
+  "kind": "ability",
+  "heroes": [
+   "hero_swan"
+  ]
+ },
+ {
+  "name": "Active Reload",
+  "kind": "item"
+ },
+ {
+  "name": "Aerial Supremacy",
+  "kind": "item"
+ },
+ {
+  "name": "Affliction",
+  "kind": "ability",
+  "heroes": [
+   "hero_synth"
+  ]
+ },
+ {
+  "name": "Afterburn",
+  "kind": "ability",
+  "heroes": [
+   "hero_inferno"
+  ]
+ },
+ {
+  "name": "Air Drop",
+  "kind": "ability",
+  "heroes": [
+   "hero_tengu"
+  ]
+ },
+ {
+  "name": "Alchemical Fire",
+  "kind": "item"
+ },
+ {
+  "name": "Alchemical Flask",
+  "kind": "ability",
+  "heroes": [
+   "hero_warden"
+  ]
+ },
+ {
+  "name": "Alekhine's Gun",
+  "kind": "weapon",
+  "heroes": [
+   "hero_chessmaster"
+  ]
+ },
+ {
+  "name": "Ambush",
+  "kind": "ability"
+ },
+ {
+  "name": "Ammo Scavenger",
+  "kind": "item"
+ },
+ {
+  "name": "Ancient Shield",
+  "kind": "item"
+ },
+ {
+  "name": "Apex Combat",
+  "kind": "item"
+ },
+ {
+  "name": "Arcane Surge",
+  "kind": "item"
+ },
+ {
+  "name": "Arctic Beam",
+  "kind": "ability",
+  "heroes": [
+   "hero_kelvin"
+  ]
+ },
+ {
+  "name": "Arctic Blast",
+  "kind": "item"
+ },
+ {
+  "name": "Armor Piercer",
+  "kind": "item"
+ },
+ {
+  "name": "Assassinate",
+  "kind": "ability",
+  "heroes": [
+   "hero_hornet"
+  ]
+ },
+ {
+  "name": "Astral Walk",
+  "kind": "ability"
+ },
+ {
+  "name": "Audience Participation",
+  "kind": "ability",
+  "heroes": [
+   "hero_magician"
+  ]
+ },
+ {
+  "name": "Aura of Suffering",
+  "kind": "ability",
+  "heroes": [
+   "hero_frank"
+  ]
+ },
+ {
+  "name": "Ava",
+  "kind": "ability",
+  "heroes": [
+   "hero_nano"
+  ]
+ },
+ {
+  "name": "Baba's Brew",
+  "kind": "ability",
+  "heroes": [
+   "hero_baba"
+  ]
+ },
+ {
+  "name": "Back Off!",
+  "kind": "ability"
+ },
+ {
+  "name": "Ballistic Enchantment",
+  "kind": "item"
+ },
+ {
+  "name": "Barrage",
+  "kind": "ability",
+  "heroes": [
+   "hero_synth"
+  ]
+ },
+ {
+  "name": "Base Guardian",
+  "kind": "world"
+ },
+ {
+  "name": "Bashdown",
+  "kind": "ability",
+  "heroes": [
+   "hero_punkgoat"
+  ]
+ },
+ {
+  "name": "Battle Vest",
+  "kind": "item"
+ },
+ {
+  "name": "Berserker",
+  "kind": "item"
+ },
+ {
+  "name": "Binding Word",
+  "kind": "ability",
+  "heroes": [
+   "hero_warden"
+  ]
+ },
+ {
+  "name": "Bio Blast",
+  "kind": "ability",
+  "heroes": [
+   "hero_wrecker"
+  ]
+ },
+ {
+  "name": "Biquette",
+  "kind": "weapon",
+  "heroes": [
+   "hero_punkgoat"
+  ]
+ },
+ {
+  "name": "Blasted",
+  "kind": "ability",
+  "heroes": [
+   "hero_punkgoat"
+  ]
+ },
+ {
+  "name": "Blessed Tac-Vest",
+  "kind": "ability"
+ },
+ {
+  "name": "Blindside",
+  "kind": "ability",
+  "heroes": [
+   "hero_operative"
+  ]
+ },
+ {
+  "name": "Blood Tribute",
+  "kind": "item"
+ },
+ {
+  "name": "Bloodletting",
+  "kind": "ability",
+  "heroes": [
+   "hero_shiv"
+  ]
+ },
+ {
+  "name": "Bloodscent",
+  "kind": "ability",
+  "heroes": [
+   "hero_drifter"
+  ]
+ },
+ {
+  "name": "Bookwyrm",
+  "kind": "ability",
+  "heroes": [
+   "hero_bookworm"
+  ]
+ },
+ {
+  "name": "Boot Kick",
+  "kind": "ability",
+  "heroes": [
+   "hero_werewolf"
+  ]
+ },
+ {
+  "name": "Borrow Life",
+  "kind": "ability"
+ },
+ {
+  "name": "Borrowed Decree",
+  "kind": "ability",
+  "heroes": [
+   "hero_necro"
+  ]
+ },
+ {
+  "name": "Bottled Phantasmicide",
+  "kind": "ability",
+  "heroes": [
+   "hero_trapper"
+  ]
+ },
+ {
+  "name": "Bounce Pad",
+  "kind": "ability",
+  "heroes": [
+   "hero_astro"
+  ]
+ },
+ {
+  "name": "Boundless Spirit",
+  "kind": "item"
+ },
+ {
+  "name": "Bullet Armor",
+  "kind": "item"
+ },
+ {
+  "name": "Bullet Dance",
+  "kind": "ability",
+  "heroes": [
+   "hero_haze"
+  ]
+ },
+ {
+  "name": "Bullet Lifesteal",
+  "kind": "item"
+ },
+ {
+  "name": "Bullet Resilience",
+  "kind": "item"
+ },
+ {
+  "name": "Bullet Resist Shredder",
+  "kind": "item"
+ },
+ {
+  "name": "Bunko-Night Special",
+  "kind": "weapon",
+  "heroes": [
+   "hero_baba"
+  ]
+ },
+ {
+  "name": "Burrow",
+  "kind": "ability",
+  "heroes": [
+   "hero_krill"
+  ]
+ },
+ {
+  "name": "Burst Fire",
+  "kind": "item"
+ },
+ {
+  "name": "Busted Flush",
+  "kind": "weapon",
+  "heroes": [
+   "hero_shiv"
+  ]
+ },
+ {
+  "name": "Call Bell",
+  "kind": "ability",
+  "heroes": [
+   "hero_doorman"
+  ]
+ },
+ {
+  "name": "Capacitor",
+  "kind": "item"
+ },
+ {
+  "name": "Captivating Read",
+  "kind": "ability",
+  "heroes": [
+   "hero_bookworm"
+  ]
+ },
+ {
+  "name": "Captive Audience",
+  "kind": "ability"
+ },
+ {
+  "name": "Card Trick",
+  "kind": "ability",
+  "heroes": [
+   "hero_wraith"
+  ]
+ },
+ {
+  "name": "Carny Life",
+  "kind": "weapon",
+  "heroes": [
+   "hero_unicorn"
+  ]
+ },
+ {
+  "name": "Case Closed",
+  "kind": "weapon",
+  "heroes": [
+   "hero_atlas"
+  ]
+ },
+ {
+  "name": "Celestial Blessing",
+  "kind": "item"
+ },
+ {
+  "name": "Censure & Penance",
+  "kind": "weapon",
+  "heroes": [
+   "hero_haze"
+  ]
+ },
+ {
+  "name": "Chain Gang",
+  "kind": "ability",
+  "heroes": [
+   "hero_punkgoat"
+  ]
+ },
+ {
+  "name": "Chapter's End",
+  "kind": "weapon"
+ },
+ {
+  "name": "Charged Shot",
+  "kind": "ability",
+  "heroes": [
+   "hero_orion"
+  ]
+ },
+ {
+  "name": "Cheat Death",
+  "kind": "item"
+ },
+ {
+  "name": "Chimera Mk1",
+  "kind": "ability",
+  "heroes": [
+   "hero_deadpack"
+  ]
+ },
+ {
+  "name": "Chimera Peace Bringer",
+  "kind": "weapon",
+  "heroes": [
+   "hero_deadpack"
+  ]
+ },
+ {
+  "name": "Choking Incense",
+  "kind": "ability"
+ },
+ {
+  "name": "Civil Servant",
+  "kind": "weapon",
+  "heroes": [
+   "hero_trapper"
+  ]
+ },
+ {
+  "name": "Cloak of Opportunity",
+  "kind": "item"
+ },
+ {
+  "name": "Close Doors",
+  "kind": "ability"
+ },
+ {
+  "name": "Close Quarters",
+  "kind": "item"
+ },
+ {
+  "name": "Close The Deal",
+  "kind": "ability",
+  "heroes": [
+   "hero_deadpack"
+  ]
+ },
+ {
+  "name": "Code Blue",
+  "kind": "weapon",
+  "heroes": [
+   "hero_nurse"
+  ]
+ },
+ {
+  "name": "Cold Calculus",
+  "kind": "weapon",
+  "heroes": [
+   "hero_gigawatt"
+  ]
+ },
+ {
+  "name": "Cold Front",
+  "kind": "item"
+ },
+ {
+  "name": "Colossus",
+  "kind": "item"
+ },
+ {
+  "name": "Combo",
+  "kind": "ability",
+  "heroes": [
+   "hero_krill"
+  ]
+ },
+ {
+  "name": "Compress Cooldown",
+  "kind": "item"
+ },
+ {
+  "name": "Concussive Combustion",
+  "kind": "ability",
+  "heroes": [
+   "hero_inferno"
+  ]
+ },
+ {
+  "name": "Conjure Missiles",
+  "kind": "item"
+ },
+ {
+  "name": "Consecrating Grenade",
+  "kind": "ability",
+  "heroes": [
+   "hero_priest"
+  ]
+ },
+ {
+  "name": "Consume",
+  "kind": "ability",
+  "heroes": [
+   "hero_wrecker"
+  ]
+ },
+ {
+  "name": "Counterspell",
+  "kind": "item"
+ },
+ {
+  "name": "Crackshot",
+  "kind": "ability",
+  "heroes": [
+   "hero_astro"
+  ]
+ },
+ {
+  "name": "Crawling Plague",
+  "kind": "ability",
+  "heroes": [
+   "hero_trapper"
+  ]
+ },
+ {
+  "name": "Creative Solutions",
+  "kind": "weapon",
+  "heroes": [
+   "hero_artist"
+  ]
+ },
+ {
+  "name": "Crimson Grasp",
+  "kind": "weapon",
+  "heroes": [
+   "hero_drifter"
+  ]
+ },
+ {
+  "name": "Crimson Slash",
+  "kind": "ability",
+  "heroes": [
+   "hero_yamato"
+  ]
+ },
+ {
+  "name": "Crippling Headshot",
+  "kind": "item"
+ },
+ {
+  "name": "Crow Familiar",
+  "kind": "ability",
+  "heroes": [
+   "hero_hornet"
+  ]
+ },
+ {
+  "name": "Crushing Fists",
+  "kind": "item"
+ },
+ {
+  "name": "Crushing Leap",
+  "kind": "ability"
+ },
+ {
+  "name": "Cultist Sacrifice",
+  "kind": "item"
+ },
+ {
+  "name": "Cursed Relic",
+  "kind": "item"
+ },
+ {
+  "name": "Dash",
+  "kind": "ability",
+  "heroes": [
+   "hero_inferno",
+   "hero_gigawatt",
+   "hero_hornet",
+   "hero_ghost",
+   "hero_atlas",
+   "hero_wraith",
+   "hero_forge",
+   "hero_chrono",
+   "hero_dynamo",
+   "hero_kelvin",
+   "hero_haze",
+   "hero_astro",
+   "hero_bebop",
+   "hero_nano",
+   "hero_orion",
+   "hero_krill",
+   "hero_shiv",
+   "hero_tengu",
+   "hero_kali",
+   "hero_warden",
+   "hero_yamato",
+   "hero_lash",
+   "hero_viscous",
+   "hero_gunslinger",
+   "hero_yakuza",
+   "hero_wrecker",
+   "hero_rutger",
+   "hero_synth",
+   "hero_thumper",
+   "hero_mirage",
+   "hero_slork",
+   "hero_cadence",
+   "hero_bomber",
+   "hero_shieldguy",
+   "hero_viper",
+   "hero_vandal",
+   "hero_magician",
+   "hero_trapper",
+   "hero_operative",
+   "hero_vampirebat",
+   "hero_drifter",
+   "hero_priest",
+   "hero_frank",
+   "hero_bookworm",
+   "hero_boho",
+   "hero_doorman",
+   "hero_skyrunner",
+   "hero_swan",
+   "hero_punkgoat",
+   "hero_druid",
+   "hero_graf",
+   "hero_fortuna",
+   "hero_necro",
+   "hero_fencer",
+   "hero_deadpack",
+   "hero_familiar",
+   "hero_werewolf",
+   "hero_unicorn",
+   "hero_opera",
+   "hero_testhero",
+   "hero_ratking",
+   "hero_chessmaster",
+   "hero_artist",
+   "hero_nurse",
+   "hero_baba"
+  ]
+ },
+ {
+  "name": "Dazzling Trick",
+  "kind": "ability",
+  "heroes": [
+   "hero_unicorn"
+  ]
+ },
+ {
+  "name": "Death Slam",
+  "kind": "ability",
+  "heroes": [
+   "hero_lash"
+  ]
+ },
+ {
+  "name": "Debuff Reducer",
+  "kind": "item"
+ },
+ {
+  "name": "Decay",
+  "kind": "item"
+ },
+ {
+  "name": "Deep Sea Interpreter",
+  "kind": "weapon",
+  "heroes": [
+   "hero_viscous"
+  ]
+ },
+ {
+  "name": "Demontrigger Blitz",
+  "kind": "ability",
+  "heroes": [
+   "hero_gunslinger",
+   "hero_skyrunner"
+  ]
+ },
+ {
+  "name": "Develop Queen",
+  "kind": "ability",
+  "heroes": [
+   "hero_chessmaster"
+  ]
+ },
+ {
+  "name": "Digging...",
+  "kind": "ability"
+ },
+ {
+  "name": "Disarming Hex",
+  "kind": "item"
+ },
+ {
+  "name": "Disengaging Sigil",
+  "kind": "ability",
+  "heroes": [
+   "hero_fencer"
+  ]
+ },
+ {
+  "name": "Dispel Magic",
+  "kind": "item"
+ },
+ {
+  "name": "Divine Barrier",
+  "kind": "item"
+ },
+ {
+  "name": "Diviner's Kevlar",
+  "kind": "item"
+ },
+ {
+  "name": "Djinn's Mark",
+  "kind": "ability",
+  "heroes": [
+   "hero_mirage"
+  ]
+ },
+ {
+  "name": "Doc's Orders",
+  "kind": "weapon",
+  "heroes": [
+   "hero_astro"
+  ]
+ },
+ {
+  "name": "Doorway",
+  "kind": "ability",
+  "heroes": [
+   "hero_doorman"
+  ]
+ },
+ {
+  "name": "Drifter Alt Weapon",
+  "kind": "weapon"
+ },
+ {
+  "name": "Duration Extender",
+  "kind": "item"
+ },
+ {
+  "name": "Dust Devil",
+  "kind": "ability",
+  "heroes": [
+   "hero_mirage"
+  ]
+ },
+ {
+  "name": "Echo Shard",
+  "kind": "item"
+ },
+ {
+  "name": "Electric Slippers",
+  "kind": "item"
+ },
+ {
+  "name": "Enchanter's Emblem",
+  "kind": "item"
+ },
+ {
+  "name": "Enchanter's Satchel",
+  "kind": "ability",
+  "heroes": [
+   "hero_synth"
+  ]
+ },
+ {
+  "name": "End the Curse",
+  "kind": "ability"
+ },
+ {
+  "name": "Endless Magazine",
+  "kind": "item"
+ },
+ {
+  "name": "Enduring Speed",
+  "kind": "item"
+ },
+ {
+  "name": "Enduring Spirit",
+  "kind": "item"
+ },
+ {
+  "name": "Entangling Bola",
+  "kind": "ability",
+  "heroes": [
+   "hero_werewolf"
+  ]
+ },
+ {
+  "name": "Entangling Thorns",
+  "kind": "ability",
+  "heroes": [
+   "hero_tengu"
+  ]
+ },
+ {
+  "name": "Escalating Exposure",
+  "kind": "item"
+ },
+ {
+  "name": "Escalating Resilience",
+  "kind": "item"
+ },
+ {
+  "name": "Escape Artist",
+  "kind": "ability"
+ },
+ {
+  "name": "Essence Bomb",
+  "kind": "ability",
+  "heroes": [
+   "hero_ghost"
+  ]
+ },
+ {
+  "name": "Essence Theft",
+  "kind": "ability",
+  "heroes": [
+   "hero_necro"
+  ]
+ },
+ {
+  "name": "Eternal Gift",
+  "kind": "item"
+ },
+ {
+  "name": "Eternal Night",
+  "kind": "ability",
+  "heroes": [
+   "hero_drifter"
+  ]
+ },
+ {
+  "name": "Ethereal Shift",
+  "kind": "item"
+ },
+ {
+  "name": "Expedition's End",
+  "kind": "weapon",
+  "heroes": [
+   "hero_kelvin"
+  ]
+ },
+ {
+  "name": "Exploding Uppercut",
+  "kind": "ability",
+  "heroes": [
+   "hero_bebop"
+  ]
+ },
+ {
+  "name": "Express Shot",
+  "kind": "item"
+ },
+ {
+  "name": "Extended Magazine",
+  "kind": "item"
+ },
+ {
+  "name": "Extra Charge",
+  "kind": "item"
+ },
+ {
+  "name": "Extra Health",
+  "kind": "item"
+ },
+ {
+  "name": "Extra Regen",
+  "kind": "item"
+ },
+ {
+  "name": "Extra Spirit",
+  "kind": "item"
+ },
+ {
+  "name": "Extra Stamina",
+  "kind": "item"
+ },
+ {
+  "name": "Fall Damage",
+  "kind": "world"
+ },
+ {
+  "name": "Feed The Birds",
+  "kind": "ability",
+  "heroes": [
+   "hero_baba"
+  ]
+ },
+ {
+  "name": "Fire Scarabs",
+  "kind": "ability",
+  "heroes": [
+   "hero_mirage"
+  ]
+ },
+ {
+  "name": "Fixation",
+  "kind": "ability",
+  "heroes": [
+   "hero_haze"
+  ]
+ },
+ {
+  "name": "Flakshot",
+  "kind": "ability",
+  "heroes": [
+   "hero_skyrunner"
+  ]
+ },
+ {
+  "name": "Flame Dash",
+  "kind": "ability",
+  "heroes": [
+   "hero_inferno"
+  ]
+ },
+ {
+  "name": "Flame Imp",
+  "kind": "ability"
+ },
+ {
+  "name": "Flawless Advance",
+  "kind": "ability",
+  "heroes": [
+   "hero_fencer"
+  ]
+ },
+ {
+  "name": "Fleetfoot",
+  "kind": "item"
+ },
+ {
+  "name": "Flight",
+  "kind": "ability",
+  "heroes": [
+   "hero_hornet"
+  ]
+ },
+ {
+  "name": "Flog",
+  "kind": "ability",
+  "heroes": [
+   "hero_lash"
+  ]
+ },
+ {
+  "name": "Flow State",
+  "kind": "ability",
+  "heroes": [
+   "hero_artist"
+  ]
+ },
+ {
+  "name": "Flying Cloak",
+  "kind": "ability",
+  "heroes": [
+   "hero_synth"
+  ]
+ },
+ {
+  "name": "Flying Slash",
+  "kind": "ability",
+  "heroes": [
+   "hero_yamato"
+  ]
+ },
+ {
+  "name": "Focus Lens",
+  "kind": "item"
+ },
+ {
+  "name": "Fortitude",
+  "kind": "item"
+ },
+ {
+  "name": "Freedom's Cost",
+  "kind": "weapon",
+  "heroes": [
+   "hero_warden"
+  ]
+ },
+ {
+  "name": "Frenzy",
+  "kind": "item"
+ },
+ {
+  "name": "Frost Grenade",
+  "kind": "ability",
+  "heroes": [
+   "hero_kelvin"
+  ]
+ },
+ {
+  "name": "Frostbite Charm",
+  "kind": "item"
+ },
+ {
+  "name": "Frozen Shelter",
+  "kind": "ability",
+  "heroes": [
+   "hero_kelvin"
+  ]
+ },
+ {
+  "name": "Full Auto",
+  "kind": "ability",
+  "heroes": [
+   "hero_wraith",
+   "hero_operative"
+  ]
+ },
+ {
+  "name": "Fury Trance",
+  "kind": "item"
+ },
+ {
+  "name": "Glass Cannon",
+  "kind": "item"
+ },
+ {
+  "name": "Glass Cannon v2",
+  "kind": "item"
+ },
+ {
+  "name": "Gloom Bombs",
+  "kind": "ability",
+  "heroes": [
+   "hero_nano"
+  ]
+ },
+ {
+  "name": "Go For The Throat",
+  "kind": "ability"
+ },
+ {
+  "name": "Golden Goose Egg",
+  "kind": "item"
+ },
+ {
+  "name": "Goo Ball",
+  "kind": "ability",
+  "heroes": [
+   "hero_viscous"
+  ]
+ },
+ {
+  "name": "Grand Finale!",
+  "kind": "ability"
+ },
+ {
+  "name": "Granny Long Legs",
+  "kind": "ability",
+  "heroes": [
+   "hero_baba"
+  ]
+ },
+ {
+  "name": "Grapple",
+  "kind": "ability",
+  "heroes": [
+   "hero_lash"
+  ]
+ },
+ {
+  "name": "Grapple Arm",
+  "kind": "ability",
+  "heroes": [
+   "hero_bebop"
+  ]
+ },
+ {
+  "name": "Grasping Hands",
+  "kind": "ability",
+  "heroes": [
+   "hero_necro"
+  ]
+ },
+ {
+  "name": "Greater Expansion",
+  "kind": "item"
+ },
+ {
+  "name": "Grit",
+  "kind": "item"
+ },
+ {
+  "name": "Ground Strike",
+  "kind": "ability",
+  "heroes": [
+   "hero_lash"
+  ]
+ },
+ {
+  "name": "Guardian",
+  "kind": "world"
+ },
+ {
+  "name": "Guardian Ward",
+  "kind": "item"
+ },
+ {
+  "name": "Guided Owl",
+  "kind": "ability",
+  "heroes": [
+   "hero_orion"
+  ]
+ },
+ {
+  "name": "Gun Damage",
+  "kind": "weapon",
+  "heroes": [
+   "hero_familiar"
+  ]
+ },
+ {
+  "name": "Gutshot",
+  "kind": "ability",
+  "heroes": [
+   "hero_priest"
+  ]
+ },
+ {
+  "name": "Hair of the Dog",
+  "kind": "weapon",
+  "heroes": [
+   "hero_werewolf"
+  ]
+ },
+ {
+  "name": "Haunting Scream",
+  "kind": "item"
+ },
+ {
+  "name": "Haunting Shot",
+  "kind": "item"
+ },
+ {
+  "name": "Haunting Spectres",
+  "kind": "ability"
+ },
+ {
+  "name": "Headhunter",
+  "kind": "item"
+ },
+ {
+  "name": "Headshot Booster",
+  "kind": "item"
+ },
+ {
+  "name": "Healbane",
+  "kind": "item"
+ },
+ {
+  "name": "Healing Booster",
+  "kind": "item"
+ },
+ {
+  "name": "Healing Needles",
+  "kind": "ability",
+  "heroes": [
+   "hero_nurse"
+  ]
+ },
+ {
+  "name": "Healing Nova",
+  "kind": "item"
+ },
+ {
+  "name": "Healing Rite",
+  "kind": "item"
+ },
+ {
+  "name": "Healing Tempo",
+  "kind": "item"
+ },
+ {
+  "name": "Heavy Barrage",
+  "kind": "ability",
+  "heroes": [
+   "hero_forge"
+  ]
+ },
+ {
+  "name": "Hellfire Salvo",
+  "kind": "ability"
+ },
+ {
+  "name": "Heroic Aura",
+  "kind": "item"
+ },
+ {
+  "name": "Hex-Lined Snap Trap",
+  "kind": "ability",
+  "heroes": [
+   "hero_priest"
+  ]
+ },
+ {
+  "name": "Hex-Sealed Knuckles",
+  "kind": "item"
+ },
+ {
+  "name": "Hexafoil Ward",
+  "kind": "item"
+ },
+ {
+  "name": "High-Velocity Rounds",
+  "kind": "item"
+ },
+ {
+  "name": "Hollow Point",
+  "kind": "item"
+ },
+ {
+  "name": "Hook Blade",
+  "kind": "ability"
+ },
+ {
+  "name": "Hop To Ally",
+  "kind": "ability"
+ },
+ {
+  "name": "Hotel Guest",
+  "kind": "ability",
+  "heroes": [
+   "hero_doorman"
+  ]
+ },
+ {
+  "name": "Humble Pie",
+  "kind": "weapon",
+  "heroes": [
+   "hero_bebop"
+  ]
+ },
+ {
+  "name": "Hunter's Aura",
+  "kind": "item"
+ },
+ {
+  "name": "Hyper Beam",
+  "kind": "ability",
+  "heroes": [
+   "hero_bebop"
+  ]
+ },
+ {
+  "name": "Ice Path",
+  "kind": "ability",
+  "heroes": [
+   "hero_kelvin"
+  ]
+ },
+ {
+  "name": "Improved Spirit",
+  "kind": "item"
+ },
+ {
+  "name": "Incendiary Remarks",
+  "kind": "weapon",
+  "heroes": [
+   "hero_inferno"
+  ]
+ },
+ {
+  "name": "Indomitable",
+  "kind": "item"
+ },
+ {
+  "name": "Infernal Brand",
+  "kind": "ability",
+  "heroes": [
+   "hero_gunslinger"
+  ]
+ },
+ {
+  "name": "Infernal Resilience",
+  "kind": "ability",
+  "heroes": [
+   "hero_atlas"
+  ]
+ },
+ {
+  "name": "Infinite Rounds",
+  "kind": "item"
+ },
+ {
+  "name": "Infuser",
+  "kind": "item"
+ },
+ {
+  "name": "Inhibitor",
+  "kind": "item"
+ },
+ {
+  "name": "Intensifying Magazine",
+  "kind": "item"
+ },
+ {
+  "name": "Ira Domini",
+  "kind": "weapon"
+ },
+ {
+  "name": "Itani Lo Sahn",
+  "kind": "ability",
+  "heroes": [
+   "hero_fencer"
+  ]
+ },
+ {
+  "name": "Jar of Dead",
+  "kind": "ability",
+  "heroes": [
+   "hero_necro"
+  ]
+ },
+ {
+  "name": "Jettison Fuel",
+  "kind": "ability",
+  "heroes": [
+   "hero_deadpack"
+  ]
+ },
+ {
+  "name": "Jeté",
+  "kind": "ability",
+  "heroes": [
+   "hero_swan"
+  ]
+ },
+ {
+  "name": "Johann's Gift",
+  "kind": "weapon",
+  "heroes": [
+   "hero_ghost"
+  ]
+ },
+ {
+  "name": "Juggernaut",
+  "kind": "item"
+ },
+ {
+  "name": "Jump",
+  "kind": "ability",
+  "heroes": [
+   "hero_inferno",
+   "hero_gigawatt",
+   "hero_hornet",
+   "hero_ghost",
+   "hero_atlas",
+   "hero_wraith",
+   "hero_forge",
+   "hero_chrono",
+   "hero_dynamo",
+   "hero_kelvin",
+   "hero_haze",
+   "hero_astro",
+   "hero_bebop",
+   "hero_nano",
+   "hero_orion",
+   "hero_krill",
+   "hero_shiv",
+   "hero_tengu",
+   "hero_kali",
+   "hero_warden",
+   "hero_yamato",
+   "hero_lash",
+   "hero_viscous",
+   "hero_gunslinger",
+   "hero_yakuza",
+   "hero_wrecker",
+   "hero_rutger",
+   "hero_synth",
+   "hero_thumper",
+   "hero_mirage",
+   "hero_slork",
+   "hero_cadence",
+   "hero_bomber",
+   "hero_shieldguy",
+   "hero_viper",
+   "hero_vandal",
+   "hero_magician",
+   "hero_trapper",
+   "hero_operative",
+   "hero_vampirebat",
+   "hero_drifter",
+   "hero_priest",
+   "hero_frank",
+   "hero_bookworm",
+   "hero_boho",
+   "hero_doorman",
+   "hero_skyrunner",
+   "hero_swan",
+   "hero_punkgoat",
+   "hero_druid",
+   "hero_graf",
+   "hero_fortuna",
+   "hero_necro",
+   "hero_fencer",
+   "hero_deadpack",
+   "hero_familiar",
+   "hero_werewolf",
+   "hero_unicorn",
+   "hero_opera",
+   "hero_testhero",
+   "hero_chessmaster",
+   "hero_artist",
+   "hero_nurse",
+   "hero_baba"
+  ]
+ },
+ {
+  "name": "Jumpstart",
+  "kind": "ability",
+  "heroes": [
+   "hero_frank"
+  ]
+ },
+ {
+  "name": "Killing Blow",
+  "kind": "ability",
+  "heroes": [
+   "hero_shiv"
+  ]
+ },
+ {
+  "name": "Kinetic Carbine",
+  "kind": "ability",
+  "heroes": [
+   "hero_chrono"
+  ]
+ },
+ {
+  "name": "Kinetic Dash",
+  "kind": "item"
+ },
+ {
+  "name": "Kinetic Pulse",
+  "kind": "ability",
+  "heroes": [
+   "hero_dynamo"
+  ]
+ },
+ {
+  "name": "Kingside Knight",
+  "kind": "ability",
+  "heroes": [
+   "hero_chessmaster"
+  ]
+ },
+ {
+  "name": "Knockdown",
+  "kind": "item"
+ },
+ {
+  "name": "Knocked off Zipline",
+  "kind": "ability",
+  "heroes": [
+   "hero_inferno",
+   "hero_gigawatt",
+   "hero_hornet",
+   "hero_ghost",
+   "hero_atlas",
+   "hero_wraith",
+   "hero_forge",
+   "hero_chrono",
+   "hero_dynamo",
+   "hero_kelvin",
+   "hero_haze",
+   "hero_astro",
+   "hero_bebop",
+   "hero_nano",
+   "hero_orion",
+   "hero_krill",
+   "hero_shiv",
+   "hero_tengu",
+   "hero_kali",
+   "hero_warden",
+   "hero_yamato",
+   "hero_lash",
+   "hero_viscous",
+   "hero_gunslinger",
+   "hero_yakuza",
+   "hero_wrecker",
+   "hero_rutger",
+   "hero_synth",
+   "hero_thumper",
+   "hero_mirage",
+   "hero_slork",
+   "hero_cadence",
+   "hero_bomber",
+   "hero_shieldguy",
+   "hero_viper",
+   "hero_vandal",
+   "hero_magician",
+   "hero_trapper",
+   "hero_operative",
+   "hero_vampirebat",
+   "hero_drifter",
+   "hero_priest",
+   "hero_frank",
+   "hero_bookworm",
+   "hero_boho",
+   "hero_doorman",
+   "hero_skyrunner",
+   "hero_swan",
+   "hero_punkgoat",
+   "hero_druid",
+   "hero_graf",
+   "hero_fortuna",
+   "hero_necro",
+   "hero_fencer",
+   "hero_familiar",
+   "hero_werewolf",
+   "hero_unicorn",
+   "hero_opera",
+   "hero_testhero",
+   "hero_ratking",
+   "hero_chessmaster",
+   "hero_artist",
+   "hero_nurse",
+   "hero_baba"
+  ]
+ },
+ {
+  "name": "Kudzu Connection",
+  "kind": "ability",
+  "heroes": [
+   "hero_tengu"
+  ]
+ },
+ {
+  "name": "Laser",
+  "kind": "ability"
+ },
+ {
+  "name": "Last Stand",
+  "kind": "ability",
+  "heroes": [
+   "hero_warden"
+  ]
+ },
+ {
+  "name": "Leaping Slash",
+  "kind": "ability",
+  "heroes": [
+   "hero_nano"
+  ]
+ },
+ {
+  "name": "Leech",
+  "kind": "item"
+ },
+ {
+  "name": "Leech Therapy",
+  "kind": "ability",
+  "heroes": [
+   "hero_nurse"
+  ]
+ },
+ {
+  "name": "Lethal Venom",
+  "kind": "ability",
+  "heroes": [
+   "hero_viper"
+  ]
+ },
+ {
+  "name": "Life Drain",
+  "kind": "ability",
+  "heroes": [
+   "hero_ghost"
+  ]
+ },
+ {
+  "name": "Lifestrike",
+  "kind": "item"
+ },
+ {
+  "name": "Lifethread",
+  "kind": "ability",
+  "heroes": [
+   "hero_skyrunner"
+  ]
+ },
+ {
+  "name": "Light Eater",
+  "kind": "ability",
+  "heroes": [
+   "hero_unicorn"
+  ]
+ },
+ {
+  "name": "Lightning Ball",
+  "kind": "ability",
+  "heroes": [
+   "hero_gigawatt"
+  ]
+ },
+ {
+  "name": "Lightning Scroll",
+  "kind": "item"
+ },
+ {
+  "name": "Lil Helpers",
+  "kind": "ability",
+  "heroes": [
+   "hero_familiar"
+  ]
+ },
+ {
+  "name": "Living Ink",
+  "kind": "ability",
+  "heroes": [
+   "hero_artist"
+  ]
+ },
+ {
+  "name": "Long Range",
+  "kind": "item"
+ },
+ {
+  "name": "Love Bites",
+  "kind": "ability",
+  "heroes": [
+   "hero_vampirebat"
+  ]
+ },
+ {
+  "name": "Lucky Shot",
+  "kind": "item"
+ },
+ {
+  "name": "Luggage Cart",
+  "kind": "ability",
+  "heroes": [
+   "hero_doorman"
+  ]
+ },
+ {
+  "name": "Lurking Terrors",
+  "kind": "ability",
+  "heroes": [
+   "hero_nurse"
+  ]
+ },
+ {
+  "name": "Lycan Claws",
+  "kind": "weapon"
+ },
+ {
+  "name": "Lycan Curse",
+  "kind": "ability",
+  "heroes": [
+   "hero_werewolf"
+  ]
+ },
+ {
+  "name": "Magic Carpet",
+  "kind": "item"
+ },
+ {
+  "name": "Magnetic Flux",
+  "kind": "ability"
+ },
+ {
+  "name": "Majestic Leap",
+  "kind": "item"
+ },
+ {
+  "name": "Majestic Leap - Disabled",
+  "kind": "item"
+ },
+ {
+  "name": "Malice",
+  "kind": "ability",
+  "heroes": [
+   "hero_ghost"
+  ]
+ },
+ {
+  "name": "Mantle",
+  "kind": "ability",
+  "heroes": [
+   "hero_inferno",
+   "hero_gigawatt",
+   "hero_hornet",
+   "hero_ghost",
+   "hero_atlas",
+   "hero_wraith",
+   "hero_forge",
+   "hero_chrono",
+   "hero_dynamo",
+   "hero_kelvin",
+   "hero_haze",
+   "hero_astro",
+   "hero_bebop",
+   "hero_nano",
+   "hero_orion",
+   "hero_krill",
+   "hero_shiv",
+   "hero_tengu",
+   "hero_kali",
+   "hero_warden",
+   "hero_yamato",
+   "hero_lash",
+   "hero_viscous",
+   "hero_gunslinger",
+   "hero_yakuza",
+   "hero_wrecker",
+   "hero_rutger",
+   "hero_synth",
+   "hero_thumper",
+   "hero_mirage",
+   "hero_slork",
+   "hero_cadence",
+   "hero_bomber",
+   "hero_shieldguy",
+   "hero_viper",
+   "hero_vandal",
+   "hero_magician",
+   "hero_trapper",
+   "hero_operative",
+   "hero_vampirebat",
+   "hero_drifter",
+   "hero_priest",
+   "hero_frank",
+   "hero_bookworm",
+   "hero_boho",
+   "hero_doorman",
+   "hero_skyrunner",
+   "hero_swan",
+   "hero_punkgoat",
+   "hero_druid",
+   "hero_graf",
+   "hero_fortuna",
+   "hero_necro",
+   "hero_fencer",
+   "hero_deadpack",
+   "hero_familiar",
+   "hero_werewolf",
+   "hero_unicorn",
+   "hero_opera",
+   "hero_testhero",
+   "hero_ratking",
+   "hero_chessmaster",
+   "hero_artist",
+   "hero_nurse",
+   "hero_baba"
+  ]
+ },
+ {
+  "name": "Mauling Leap",
+  "kind": "ability"
+ },
+ {
+  "name": "Medicinal Specter",
+  "kind": "ability",
+  "heroes": [
+   "hero_forge"
+  ]
+ },
+ {
+  "name": "Melee",
+  "kind": "ability",
+  "heroes": [
+   "hero_rutger",
+   "hero_synth",
+   "hero_slork"
+  ]
+ },
+ {
+  "name": "Melee Charge",
+  "kind": "item"
+ },
+ {
+  "name": "Melee Lifesteal",
+  "kind": "item"
+ },
+ {
+  "name": "Memento Mori",
+  "kind": "weapon",
+  "heroes": [
+   "hero_frank"
+  ]
+ },
+ {
+  "name": "Mercurial Magnum",
+  "kind": "item"
+ },
+ {
+  "name": "Metal Skin",
+  "kind": "item"
+ },
+ {
+  "name": "Mid Boss",
+  "kind": "world"
+ },
+ {
+  "name": "Mini Turret",
+  "kind": "ability",
+  "heroes": [
+   "hero_forge"
+  ]
+ },
+ {
+  "name": "Misdirection",
+  "kind": "ability"
+ },
+ {
+  "name": "Monster Rounds",
+  "kind": "item"
+ },
+ {
+  "name": "Move King",
+  "kind": "weapon"
+ },
+ {
+  "name": "Move Piece",
+  "kind": "weapon"
+ },
+ {
+  "name": "Mystic Burst",
+  "kind": "item"
+ },
+ {
+  "name": "Mystic Conduit",
+  "kind": "item"
+ },
+ {
+  "name": "Mystic Expansion",
+  "kind": "item"
+ },
+ {
+  "name": "Mystic Regeneration",
+  "kind": "item"
+ },
+ {
+  "name": "Mystic Reverb",
+  "kind": "item"
+ },
+ {
+  "name": "Mystic Shot",
+  "kind": "item"
+ },
+ {
+  "name": "Mystic Slow",
+  "kind": "item"
+ },
+ {
+  "name": "Mystic Vulnerability",
+  "kind": "item"
+ },
+ {
+  "name": "Mystical Piano",
+  "kind": "item"
+ },
+ {
+  "name": "Napalm",
+  "kind": "ability",
+  "heroes": [
+   "hero_inferno"
+  ]
+ },
+ {
+  "name": "Naptime",
+  "kind": "ability",
+  "heroes": [
+   "hero_familiar"
+  ]
+ },
+ {
+  "name": "Nekomata Ward",
+  "kind": "ability"
+ },
+ {
+  "name": "Neutral",
+  "kind": "world"
+ },
+ {
+  "name": "New Money",
+  "kind": "weapon",
+  "heroes": [
+   "hero_vampirebat"
+  ]
+ },
+ {
+  "name": "Nox Nostra",
+  "kind": "ability",
+  "heroes": [
+   "hero_vampirebat"
+  ]
+ },
+ {
+  "name": "Nullification Burst",
+  "kind": "item"
+ },
+ {
+  "name": "Omnicharge Signet",
+  "kind": "item"
+ },
+ {
+  "name": "On The Hunt",
+  "kind": "ability"
+ },
+ {
+  "name": "Opening Rounds",
+  "kind": "item"
+ },
+ {
+  "name": "Opera Gun",
+  "kind": "weapon",
+  "heroes": [
+   "hero_opera"
+  ]
+ },
+ {
+  "name": "Overload",
+  "kind": "ability",
+  "heroes": [
+   "hero_wrecker"
+  ]
+ },
+ {
+  "name": "Pain Battery",
+  "kind": "ability",
+  "heroes": [
+   "hero_frank"
+  ]
+ },
+ {
+  "name": "Paradoxical Swap",
+  "kind": "ability",
+  "heroes": [
+   "hero_chrono"
+  ]
+ },
+ {
+  "name": "Parry",
+  "kind": "ability",
+  "heroes": [
+   "hero_inferno",
+   "hero_gigawatt",
+   "hero_hornet",
+   "hero_ghost",
+   "hero_atlas",
+   "hero_wraith",
+   "hero_forge",
+   "hero_chrono",
+   "hero_dynamo",
+   "hero_kelvin",
+   "hero_haze",
+   "hero_astro",
+   "hero_bebop",
+   "hero_nano",
+   "hero_orion",
+   "hero_krill",
+   "hero_shiv",
+   "hero_tengu",
+   "hero_kali",
+   "hero_warden",
+   "hero_yamato",
+   "hero_lash",
+   "hero_viscous",
+   "hero_gunslinger",
+   "hero_yakuza",
+   "hero_wrecker",
+   "hero_rutger",
+   "hero_synth",
+   "hero_thumper",
+   "hero_mirage",
+   "hero_slork",
+   "hero_cadence",
+   "hero_bomber",
+   "hero_shieldguy",
+   "hero_viper",
+   "hero_vandal",
+   "hero_magician",
+   "hero_trapper",
+   "hero_operative",
+   "hero_vampirebat",
+   "hero_drifter",
+   "hero_priest",
+   "hero_frank",
+   "hero_bookworm",
+   "hero_boho",
+   "hero_doorman",
+   "hero_skyrunner",
+   "hero_swan",
+   "hero_punkgoat",
+   "hero_druid",
+   "hero_graf",
+   "hero_fortuna",
+   "hero_necro",
+   "hero_fencer",
+   "hero_deadpack",
+   "hero_familiar",
+   "hero_werewolf",
+   "hero_unicorn",
+   "hero_opera",
+   "hero_testhero",
+   "hero_ratking",
+   "hero_chessmaster",
+   "hero_artist",
+   "hero_nurse",
+   "hero_baba"
+  ]
+ },
+ {
+  "name": "Patron",
+  "kind": "ability"
+ },
+ {
+  "name": "Patron Laser",
+  "kind": "ability"
+ },
+ {
+  "name": "Patron's Healing",
+  "kind": "item"
+ },
+ {
+  "name": "Pest Barrier",
+  "kind": "ability",
+  "heroes": [
+   "hero_trapper"
+  ]
+ },
+ {
+  "name": "Petrify",
+  "kind": "ability"
+ },
+ {
+  "name": "Petrifying Bola",
+  "kind": "ability",
+  "heroes": [
+   "hero_viper"
+  ]
+ },
+ {
+  "name": "Phantom Strike",
+  "kind": "item"
+ },
+ {
+  "name": "Pillow Toss",
+  "kind": "ability",
+  "heroes": [
+   "hero_familiar"
+  ]
+ },
+ {
+  "name": "Plated Armor",
+  "kind": "item"
+ },
+ {
+  "name": "Plot Armor",
+  "kind": "ability",
+  "heroes": [
+   "hero_bookworm"
+  ]
+ },
+ {
+  "name": "Point Blank",
+  "kind": "item"
+ },
+ {
+  "name": "Potent Vapors",
+  "kind": "ability"
+ },
+ {
+  "name": "Pounce",
+  "kind": "ability"
+ },
+ {
+  "name": "Powder Keg",
+  "kind": "ability",
+  "heroes": [
+   "hero_astro"
+  ]
+ },
+ {
+  "name": "Power Slash",
+  "kind": "ability",
+  "heroes": [
+   "hero_yamato"
+  ]
+ },
+ {
+  "name": "Power Surge",
+  "kind": "ability",
+  "heroes": [
+   "hero_gigawatt"
+  ]
+ },
+ {
+  "name": "Pride of Ixia",
+  "kind": "weapon",
+  "heroes": [
+   "hero_fencer"
+  ]
+ },
+ {
+  "name": "Prism Blast",
+  "kind": "item"
+ },
+ {
+  "name": "Project Mind",
+  "kind": "ability",
+  "heroes": [
+   "hero_wraith"
+  ]
+ },
+ {
+  "name": "Promises Kept",
+  "kind": "weapon",
+  "heroes": [
+   "hero_mirage"
+  ]
+ },
+ {
+  "name": "Protector's Hand",
+  "kind": "weapon",
+  "heroes": [
+   "hero_tengu"
+  ]
+ },
+ {
+  "name": "Puddle Punch",
+  "kind": "ability",
+  "heroes": [
+   "hero_viscous"
+  ]
+ },
+ {
+  "name": "Pulse Grenade",
+  "kind": "ability",
+  "heroes": [
+   "hero_chrono",
+   "hero_gunslinger"
+  ]
+ },
+ {
+  "name": "Quantum Entanglement",
+  "kind": "ability",
+  "heroes": [
+   "hero_dynamo"
+  ]
+ },
+ {
+  "name": "Queen of Shadows",
+  "kind": "ability"
+ },
+ {
+  "name": "Quicksilver Reload",
+  "kind": "item"
+ },
+ {
+  "name": "Rabbit Hex",
+  "kind": "ability"
+ },
+ {
+  "name": "Radiant Daggers",
+  "kind": "ability",
+  "heroes": [
+   "hero_unicorn"
+  ]
+ },
+ {
+  "name": "Radiant Regeneration",
+  "kind": "item"
+ },
+ {
+  "name": "Rain of Arrows",
+  "kind": "ability",
+  "heroes": [
+   "hero_orion"
+  ]
+ },
+ {
+  "name": "Rake",
+  "kind": "ability",
+  "heroes": [
+   "hero_vampirebat"
+  ]
+ },
+ {
+  "name": "Rallying Charge",
+  "kind": "ability",
+  "heroes": [
+   "hero_bookworm"
+  ]
+ },
+ {
+  "name": "Rapid Recharge",
+  "kind": "item"
+ },
+ {
+  "name": "Rapid Rounds",
+  "kind": "item"
+ },
+ {
+  "name": "Rat Swarm",
+  "kind": "ability",
+  "heroes": [
+   "hero_ratking"
+  ]
+ },
+ {
+  "name": "Reactive Barrier",
+  "kind": "item"
+ },
+ {
+  "name": "Rebirth",
+  "kind": "item"
+ },
+ {
+  "name": "Rebuttal",
+  "kind": "item"
+ },
+ {
+  "name": "Recharging Rush",
+  "kind": "item"
+ },
+ {
+  "name": "Refresher",
+  "kind": "item"
+ },
+ {
+  "name": "Rejuvenating Aurora",
+  "kind": "ability",
+  "heroes": [
+   "hero_dynamo"
+  ]
+ },
+ {
+  "name": "Rend",
+  "kind": "ability",
+  "heroes": [
+   "hero_drifter"
+  ]
+ },
+ {
+  "name": "Rescue Beam",
+  "kind": "item"
+ },
+ {
+  "name": "Restorative Locket",
+  "kind": "item"
+ },
+ {
+  "name": "Restorative Shot",
+  "kind": "item"
+ },
+ {
+  "name": "Return Fire",
+  "kind": "item"
+ },
+ {
+  "name": "Return to Shadows",
+  "kind": "ability",
+  "heroes": [
+   "hero_nano"
+  ]
+ },
+ {
+  "name": "Revelation",
+  "kind": "ability",
+  "heroes": [
+   "hero_operative"
+  ]
+ },
+ {
+  "name": "Ricochet",
+  "kind": "item"
+ },
+ {
+  "name": "Riposte",
+  "kind": "ability",
+  "heroes": [
+   "hero_fencer"
+  ]
+ },
+ {
+  "name": "Riptide",
+  "kind": "weapon",
+  "heroes": [
+   "hero_slork"
+  ]
+ },
+ {
+  "name": "Rising Ram",
+  "kind": "ability",
+  "heroes": [
+   "hero_punkgoat"
+  ]
+ },
+ {
+  "name": "Rocket Barrage",
+  "kind": "ability"
+ },
+ {
+  "name": "Rook Battery",
+  "kind": "ability",
+  "heroes": [
+   "hero_chessmaster"
+  ]
+ },
+ {
+  "name": "Royal Pestments",
+  "kind": "ability",
+  "heroes": [
+   "hero_ratking"
+  ]
+ },
+ {
+  "name": "Rule, Ratannia!",
+  "kind": "ability",
+  "heroes": [
+   "hero_ratking"
+  ]
+ },
+ {
+  "name": "Runed Gauntlets",
+  "kind": "item"
+ },
+ {
+  "name": "Rusted Barrel",
+  "kind": "item"
+ },
+ {
+  "name": "Sand Blast",
+  "kind": "ability",
+  "heroes": [
+   "hero_krill"
+  ]
+ },
+ {
+  "name": "Sanguine Retreat",
+  "kind": "ability",
+  "heroes": [
+   "hero_vampirebat"
+  ]
+ },
+ {
+  "name": "Scorn",
+  "kind": "ability",
+  "heroes": [
+   "hero_krill"
+  ]
+ },
+ {
+  "name": "Scourge",
+  "kind": "item"
+ },
+ {
+  "name": "Scrap Grenade",
+  "kind": "ability",
+  "heroes": [
+   "hero_ratking"
+  ]
+ },
+ {
+  "name": "Screwjab Dagger",
+  "kind": "ability",
+  "heroes": [
+   "hero_viper"
+  ]
+ },
+ {
+  "name": "Seismic Impact",
+  "kind": "ability",
+  "heroes": [
+   "hero_atlas"
+  ]
+ },
+ {
+  "name": "Sekhmet's Spirit",
+  "kind": "ability"
+ },
+ {
+  "name": "Seraphim Wings",
+  "kind": "item"
+ },
+ {
+  "name": "Serrated Knives",
+  "kind": "ability",
+  "heroes": [
+   "hero_shiv"
+  ]
+ },
+ {
+  "name": "Service With A Smile",
+  "kind": "weapon",
+  "heroes": [
+   "hero_doorman"
+  ]
+ },
+ {
+  "name": "Services Rendered",
+  "kind": "weapon",
+  "heroes": [
+   "hero_forge"
+  ]
+ },
+ {
+  "name": "Setup Bishop",
+  "kind": "ability",
+  "heroes": [
+   "hero_chessmaster"
+  ]
+ },
+ {
+  "name": "Shadow Step",
+  "kind": "item"
+ },
+ {
+  "name": "Shadow Strike",
+  "kind": "item"
+ },
+ {
+  "name": "Shadow Transformation",
+  "kind": "ability",
+  "heroes": [
+   "hero_yamato"
+  ]
+ },
+ {
+  "name": "Shadow Weave",
+  "kind": "item"
+ },
+ {
+  "name": "Sharpshooter",
+  "kind": "item"
+ },
+ {
+  "name": "Shining Wonder",
+  "kind": "ability",
+  "heroes": [
+   "hero_unicorn"
+  ]
+ },
+ {
+  "name": "Shocking Reanimation",
+  "kind": "ability",
+  "heroes": [
+   "hero_frank"
+  ]
+ },
+ {
+  "name": "Shoulder Charge",
+  "kind": "ability",
+  "heroes": [
+   "hero_atlas"
+  ]
+ },
+ {
+  "name": "Shrine",
+  "kind": "world"
+ },
+ {
+  "name": "Shrink Ray",
+  "kind": "item"
+ },
+ {
+  "name": "Silence Wave",
+  "kind": "item"
+ },
+ {
+  "name": "Silencer",
+  "kind": "item"
+ },
+ {
+  "name": "Silktrap",
+  "kind": "ability",
+  "heroes": [
+   "hero_trapper"
+  ]
+ },
+ {
+  "name": "Singularity",
+  "kind": "ability",
+  "heroes": [
+   "hero_dynamo"
+  ]
+ },
+ {
+  "name": "Sinner's Sacrifice",
+  "kind": "world"
+ },
+ {
+  "name": "Siphon Bullets",
+  "kind": "item"
+ },
+ {
+  "name": "Siphon Life",
+  "kind": "ability",
+  "heroes": [
+   "hero_atlas"
+  ]
+ },
+ {
+  "name": "Sister's Lament",
+  "kind": "weapon",
+  "heroes": [
+   "hero_yamato"
+  ]
+ },
+ {
+  "name": "Slam Fire",
+  "kind": "ability",
+  "heroes": [
+   "hero_werewolf"
+  ]
+ },
+ {
+  "name": "Sleep Dagger",
+  "kind": "ability",
+  "heroes": [
+   "hero_haze"
+  ]
+ },
+ {
+  "name": "Sleight of Hand",
+  "kind": "ability"
+ },
+ {
+  "name": "Slice and Dice",
+  "kind": "ability",
+  "heroes": [
+   "hero_shiv"
+  ]
+ },
+ {
+  "name": "Slide",
+  "kind": "ability",
+  "heroes": [
+   "hero_inferno",
+   "hero_gigawatt",
+   "hero_hornet",
+   "hero_ghost",
+   "hero_atlas",
+   "hero_wraith",
+   "hero_forge",
+   "hero_chrono",
+   "hero_dynamo",
+   "hero_kelvin",
+   "hero_haze",
+   "hero_astro",
+   "hero_bebop",
+   "hero_nano",
+   "hero_orion",
+   "hero_krill",
+   "hero_shiv",
+   "hero_tengu",
+   "hero_kali",
+   "hero_warden",
+   "hero_yamato",
+   "hero_lash",
+   "hero_viscous",
+   "hero_gunslinger",
+   "hero_yakuza",
+   "hero_wrecker",
+   "hero_rutger",
+   "hero_synth",
+   "hero_thumper",
+   "hero_mirage",
+   "hero_slork",
+   "hero_cadence",
+   "hero_bomber",
+   "hero_shieldguy",
+   "hero_viper",
+   "hero_vandal",
+   "hero_magician",
+   "hero_trapper",
+   "hero_operative",
+   "hero_vampirebat",
+   "hero_drifter",
+   "hero_priest",
+   "hero_frank",
+   "hero_bookworm",
+   "hero_boho",
+   "hero_doorman",
+   "hero_skyrunner",
+   "hero_swan",
+   "hero_druid",
+   "hero_graf",
+   "hero_fortuna",
+   "hero_necro",
+   "hero_fencer",
+   "hero_deadpack",
+   "hero_familiar",
+   "hero_werewolf",
+   "hero_unicorn",
+   "hero_opera",
+   "hero_testhero",
+   "hero_ratking",
+   "hero_chessmaster",
+   "hero_artist",
+   "hero_nurse",
+   "hero_baba"
+  ]
+ },
+ {
+  "name": "Slither",
+  "kind": "ability",
+  "heroes": [
+   "hero_viper"
+  ]
+ },
+ {
+  "name": "Slowing Bullets",
+  "kind": "item"
+ },
+ {
+  "name": "Slowing Hex",
+  "kind": "item"
+ },
+ {
+  "name": "Smoke Bomb",
+  "kind": "ability",
+  "heroes": [
+   "hero_haze"
+  ]
+ },
+ {
+  "name": "Soul Exchange",
+  "kind": "ability",
+  "heroes": [
+   "hero_ghost"
+  ]
+ },
+ {
+  "name": "Soul Explosion",
+  "kind": "item"
+ },
+ {
+  "name": "Soul Rebirth",
+  "kind": "item"
+ },
+ {
+  "name": "Soul Urn",
+  "kind": "ability"
+ },
+ {
+  "name": "Sovereign's Decree",
+  "kind": "weapon",
+  "heroes": [
+   "hero_ratking"
+  ]
+ },
+ {
+  "name": "Spectral Assistant",
+  "kind": "ability",
+  "heroes": [
+   "hero_magician"
+  ]
+ },
+ {
+  "name": "Spectral Silk",
+  "kind": "ability"
+ },
+ {
+  "name": "Spectral Wall",
+  "kind": "ability",
+  "heroes": [
+   "hero_forge"
+  ]
+ },
+ {
+  "name": "Spellbreaker",
+  "kind": "item"
+ },
+ {
+  "name": "Spellslinger",
+  "kind": "item"
+ },
+ {
+  "name": "Spirit Armor",
+  "kind": "item"
+ },
+ {
+  "name": "Spirit Burn",
+  "kind": "item"
+ },
+ {
+  "name": "Spirit Lasso",
+  "kind": "ability",
+  "heroes": [
+   "hero_astro"
+  ]
+ },
+ {
+  "name": "Spirit Lifesteal",
+  "kind": "item"
+ },
+ {
+  "name": "Spirit Rend",
+  "kind": "item"
+ },
+ {
+  "name": "Spirit Resilience",
+  "kind": "item"
+ },
+ {
+  "name": "Spirit Sap",
+  "kind": "item"
+ },
+ {
+  "name": "Spirit Shielding",
+  "kind": "item"
+ },
+ {
+  "name": "Spirit Shredder",
+  "kind": "item"
+ },
+ {
+  "name": "Spirit Snare",
+  "kind": "ability",
+  "heroes": [
+   "hero_orion"
+  ]
+ },
+ {
+  "name": "Spirit Snatch",
+  "kind": "item"
+ },
+ {
+  "name": "Spirit Strike",
+  "kind": "item"
+ },
+ {
+  "name": "Spiritual Overflow",
+  "kind": "item"
+ },
+ {
+  "name": "Splatter",
+  "kind": "ability",
+  "heroes": [
+   "hero_viscous"
+  ]
+ },
+ {
+  "name": "Split Shot",
+  "kind": "item"
+ },
+ {
+  "name": "Sprint Boots",
+  "kind": "item"
+ },
+ {
+  "name": "Squeezing In...",
+  "kind": "ability"
+ },
+ {
+  "name": "Stake",
+  "kind": "ability",
+  "heroes": [
+   "hero_hornet"
+  ]
+ },
+ {
+  "name": "Stalker",
+  "kind": "item"
+ },
+ {
+  "name": "Stalker's Mark",
+  "kind": "ability",
+  "heroes": [
+   "hero_drifter"
+  ]
+ },
+ {
+  "name": "Stamina Mastery",
+  "kind": "item"
+ },
+ {
+  "name": "Static Charge",
+  "kind": "ability",
+  "heroes": [
+   "hero_gigawatt"
+  ]
+ },
+ {
+  "name": "Sticky Bomb",
+  "kind": "ability",
+  "heroes": [
+   "hero_bebop"
+  ]
+ },
+ {
+  "name": "Still Life",
+  "kind": "ability",
+  "heroes": [
+   "hero_artist"
+  ]
+ },
+ {
+  "name": "Stomp",
+  "kind": "ability"
+ },
+ {
+  "name": "Stone Form",
+  "kind": "ability",
+  "heroes": [
+   "hero_tengu"
+  ]
+ },
+ {
+  "name": "Storm Cloud",
+  "kind": "ability",
+  "heroes": [
+   "hero_gigawatt"
+  ]
+ },
+ {
+  "name": "Strix Salvo",
+  "kind": "ability",
+  "heroes": [
+   "hero_deadpack"
+  ]
+ },
+ {
+  "name": "Superior Cooldown",
+  "kind": "item"
+ },
+ {
+  "name": "Superior Duration",
+  "kind": "item"
+ },
+ {
+  "name": "Suppressor",
+  "kind": "item"
+ },
+ {
+  "name": "Surge of Power",
+  "kind": "item"
+ },
+ {
+  "name": "Sweetest Lie",
+  "kind": "weapon",
+  "heroes": [
+   "hero_nano"
+  ]
+ },
+ {
+  "name": "Swift Striker",
+  "kind": "item"
+ },
+ {
+  "name": "T1 Guardian",
+  "kind": "world"
+ },
+ {
+  "name": "T2 Walker",
+  "kind": "world"
+ },
+ {
+  "name": "Tag Along",
+  "kind": "ability",
+  "heroes": [
+   "hero_familiar"
+  ]
+ },
+ {
+  "name": "Tail Whack",
+  "kind": "ability"
+ },
+ {
+  "name": "Tale of The Tape",
+  "kind": "weapon",
+  "heroes": [
+   "hero_lash"
+  ]
+ },
+ {
+  "name": "Tankbuster",
+  "kind": "item"
+ },
+ {
+  "name": "Teargas Grenade",
+  "kind": "ability"
+ },
+ {
+  "name": "Telekinesis",
+  "kind": "ability",
+  "heroes": [
+   "hero_wraith"
+  ]
+ },
+ {
+  "name": "Temple Guardian",
+  "kind": "world"
+ },
+ {
+  "name": "Tesla Bullets",
+  "kind": "item"
+ },
+ {
+  "name": "The Black Sheep",
+  "kind": "weapon",
+  "heroes": [
+   "hero_synth"
+  ]
+ },
+ {
+  "name": "The Butcher's Hand",
+  "kind": "weapon",
+  "heroes": [
+   "hero_wrecker"
+  ]
+ },
+ {
+  "name": "The Cube",
+  "kind": "ability",
+  "heroes": [
+   "hero_viscous"
+  ]
+ },
+ {
+  "name": "The Great Homunculus!",
+  "kind": "ability"
+ },
+ {
+  "name": "The Mourning Comes",
+  "kind": "weapon",
+  "heroes": [
+   "hero_orion"
+  ]
+ },
+ {
+  "name": "The Prestige",
+  "kind": "weapon",
+  "heroes": [
+   "hero_magician"
+  ]
+ },
+ {
+  "name": "The Rake",
+  "kind": "weapon",
+  "heroes": [
+   "hero_wraith"
+  ]
+ },
+ {
+  "name": "The Rattler",
+  "kind": "weapon",
+  "heroes": [
+   "hero_viper"
+  ]
+ },
+ {
+  "name": "The Teacher",
+  "kind": "weapon",
+  "heroes": [
+   "hero_necro"
+  ]
+ },
+ {
+  "name": "The Vonnegun",
+  "kind": "weapon",
+  "heroes": [
+   "hero_dynamo"
+  ]
+ },
+ {
+  "name": "Threadsap",
+  "kind": "ability",
+  "heroes": [
+   "hero_baba"
+  ]
+ },
+ {
+  "name": "Time Wall",
+  "kind": "ability",
+  "heroes": [
+   "hero_chrono"
+  ]
+ },
+ {
+  "name": "Timeless Emblem",
+  "kind": "item"
+ },
+ {
+  "name": "Titanic Magazine",
+  "kind": "item"
+ },
+ {
+  "name": "Torment Pulse",
+  "kind": "item"
+ },
+ {
+  "name": "Toughness",
+  "kind": "item"
+ },
+ {
+  "name": "Toxic Bullets",
+  "kind": "item"
+ },
+ {
+  "name": "Trade Secret",
+  "kind": "weapon",
+  "heroes": [
+   "hero_chrono"
+  ]
+ },
+ {
+  "name": "Transcendent Cooldown",
+  "kind": "item"
+ },
+ {
+  "name": "Traveler",
+  "kind": "ability",
+  "heroes": [
+   "hero_mirage"
+  ]
+ },
+ {
+  "name": "Trooper",
+  "kind": "world"
+ },
+ {
+  "name": "Trophy Collector",
+  "kind": "item"
+ },
+ {
+  "name": "Umbrella Gun",
+  "kind": "weapon",
+  "heroes": [
+   "hero_operative"
+  ]
+ },
+ {
+  "name": "Umbrella Maneuver",
+  "kind": "ability",
+  "heroes": [
+   "hero_operative"
+  ]
+ },
+ {
+  "name": "Unstable Concoction",
+  "kind": "item"
+ },
+ {
+  "name": "Unstoppable",
+  "kind": "item"
+ },
+ {
+  "name": "Vampiric Burst",
+  "kind": "item"
+ },
+ {
+  "name": "Veil Walker",
+  "kind": "item"
+ },
+ {
+  "name": "Vexing Bolt",
+  "kind": "ability",
+  "heroes": [
+   "hero_magician"
+  ]
+ },
+ {
+  "name": "Vortex Web",
+  "kind": "item"
+ },
+ {
+  "name": "Walker",
+  "kind": "world"
+ },
+ {
+  "name": "Wallflower's Revenge",
+  "kind": "weapon",
+  "heroes": [
+   "hero_hornet"
+  ]
+ },
+ {
+  "name": "Warp Stone",
+  "kind": "item"
+ },
+ {
+  "name": "Weakening Headshot",
+  "kind": "item"
+ },
+ {
+  "name": "Weapon Shielding",
+  "kind": "item"
+ },
+ {
+  "name": "Weighted Shots",
+  "kind": "item"
+ },
+ {
+  "name": "Willpower",
+  "kind": "ability",
+  "heroes": [
+   "hero_warden"
+  ]
+ },
+ {
+  "name": "Witchmail",
+  "kind": "item"
+ },
+ {
+  "name": "Wither & Die",
+  "kind": "ability"
+ },
+ {
+  "name": "Wrecking Ball",
+  "kind": "ability"
+ },
+ {
+  "name": "Wretched Vapors",
+  "kind": "ability",
+  "heroes": [
+   "hero_nurse"
+  ]
+ },
+ {
+  "name": "Yellow Canary",
+  "kind": "weapon",
+  "heroes": [
+   "hero_krill"
+  ]
+ }
+]

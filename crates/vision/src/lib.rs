@@ -11,4 +11,7 @@ pub mod team;
 pub mod quick;
 pub mod localize;
 pub mod auto;
+pub mod hudtext;
+pub mod death;
+pub mod status;
 pub use coach_perception::matching::{ColorLibrary, Library, Region, Template, ncc};

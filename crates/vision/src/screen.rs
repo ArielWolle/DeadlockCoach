@@ -19,6 +19,10 @@ pub enum Screen {
     Menu,
     /// Pre-game "GAME STARTING" countdown.
     Countdown,
+    /// Match over: the large "Defeat" / "Victory" banner. No coaching.
+    PostGame,
+    /// Black transition / loading frame. No coaching.
+    Loading,
     /// Anything not recognised yet. Say nothing.
     Unknown,
 }
@@ -88,6 +92,37 @@ pub fn interpret_probe(lines: &[String], p: &Probe, hero_names: &[(String, Strin
     }
     if p.countdown.is_some_and(|i| has(line(i), "STARTING") || has(line(i), "GAME")) { return (Screen::Countdown, None); }
     (Screen::Unknown, None)
+}
+
+/// The large end-of-match banner ("Defeat" / "Victory") centre-left of the screen.
+pub fn post_game_region() -> Region { px(530.0, 405.0, 540.0, 160.0) }
+/// Crop of the end-of-match banner, downscaled so the line costs little recognition time.
+pub fn post_game_crop(img: &DynamicImage) -> DynamicImage {
+    let c = hud::crop(img, post_game_region());
+    c.resize(c.width() * 48 / c.height().max(1), 48, image::imageops::FilterType::Triangle)
+}
+/// Cheap gate for the banner: its letters are large near-white strokes filling a good part of
+/// the region (gameplay rarely has 8%+ near-white there; when it does the read rejects it).
+pub fn post_game_gate(img: &DynamicImage) -> bool {
+    if img.width() != 1600 || img.height() != 900 { return false; }
+    let c = hud::crop(img, post_game_region()).thumbnail(130, 36).to_rgb8();
+    let n = c.pixels().count().max(1) as f32;
+    let white = c.pixels().filter(|p| { let (_, s, v) = crate::minimap::hsv(p[0], p[1], p[2]); v > 0.85 && s < 0.25 }).count() as f32 / n;
+    (0.08..=0.6).contains(&white)
+}
+/// "Defeat" / "Victory" (allowing one OCR edit).
+pub fn says_post_game(s: &str) -> bool {
+    let t: String = s.chars().filter(|c| c.is_ascii_alphabetic()).collect::<String>().to_ascii_uppercase();
+    ["DEFEAT", "VICTORY"].iter().any(|w| t == *w || (t.len() + 1 >= w.len() && t.len() <= w.len() + 1 && crate::death::levenshtein(&t, w) <= 1))
+}
+/// Nearly black frame (map loading / transitions): mean luma below ~4% on a coarse grid, and no
+/// bright pixel anywhere on it except tiny cursors and loading icons.
+pub fn looks_black(img: &DynamicImage) -> bool {
+    let small = img.thumbnail_exact(64, 36).to_luma8();
+    let n = small.pixels().count().max(1) as f32;
+    let mean = small.pixels().map(|p| p[0] as f32).sum::<f32>() / n;
+    let bright = small.pixels().filter(|p| p[0] > 60).count();
+    mean < 10.0 && bright <= 6
 }
 
 /// Whether the respawn banner line reads "RESPAWN" (independent of the clock read).
