@@ -11,6 +11,11 @@ export interface MinimapState {
   you?:Point|null; your_lane?:'Green'|'Blue'|'Yellow'|null; your_progress?:number|null;
   /** Hero rings tracked across frames; unseen_ms > 0 means last-seen (missing), not dead. */
   heroes?: HeroTrack[];
+  /** true = Yellow drawn on the left (latched per match). */
+  lanes_mirrored?: boolean | null;
+  /** Zone label under the minimap, e.g. "YORK : FACTORY". */
+  zone?: string | null; zone_lane?: 'Green' | 'Blue' | 'Yellow' | null;
+  zone_area?: 'Lane' | 'Jungle' | 'Mid' | 'OwnBase' | 'EnemyBase' | 'Base' | null;
 }
 export interface HeroTrack { id: number; ally: boolean; pos: Point; unseen_ms: number; hits: number; velocity?: Point | null; lane?: 'Green' | 'Blue' | 'Yellow' | null }
 export interface Snapshot {

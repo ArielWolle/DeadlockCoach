@@ -9,6 +9,10 @@ const TOP_K: usize = 5;
 
 fn score_of(v: &[f32]) -> f32 { v.iter().sum::<f32>() / v.len().max(1) as f32 }
 
+/// Hero class name of a portrait template: extra variants are stored as `hero_x@variant.png`
+/// (e.g. a real top-bar capture next to the card art) and count as the same hero.
+pub fn hero_key(template: &str) -> &str { template.split('@').next().unwrap_or(template) }
+
 pub struct Scanner {
     ocr: Reader,
     items: Arc<ColorLibrary>,
@@ -68,10 +72,16 @@ pub struct Scanner {
     /// Your hero as last named on a live gameplay frame (own top-bar slot or minimap marker).
     own_hero: Option<String>,
     totals_flip: bool,
-    /// Last identity per item slot and how many scans in a row it repeated.
-    item_votes: [Option<(String, u8)>; 12],
     /// Per ally slot: summed |slot health - your health| and joint reads (see own_slot).
     own_slot: [(f32, u32); 6],
+    /// Per slot: identity votes this match (portrait samples, scoreboard names).
+    hero_votes: Vec<HashMap<String, f32>>,
+    /// Your latched slot and how many checks in a row another slot has won.
+    own_latched: Option<(usize, u32)>,
+    /// Per ally slot: frames on which only that slot showed the own-portrait backdrop.
+    own_backdrop: [u32; 6],
+    /// Per item slot: latched item (see latch_item).
+    item_latch: [ItemLatch; 12],
 }
 
 /// Scoreboard columns whose hero-name line is probed on death screens (Tab over the death screen).
@@ -83,6 +93,96 @@ pub fn own_slot(err: &[(f32, u32); 6]) -> Option<usize> {
     m.sort_by(|a, b| a.1.total_cmp(&b.1));
     let (best, second) = (m.first()?, m.get(1)?);
     (best.1 < 0.08 && second.1 >= 2.0 * best.1 + 0.05).then_some(best.0)
+}
+
+/// The ally top-bar slot drawn with your own square backdrop: your portrait sits on a bright,
+/// saturated team-coloured square, the others on round frames with the game world in the
+/// corners. Measured (corner patches V >= 0.5, S >= 0.45, matching hue): rec5 slot 0, rec3
+/// slot 1, rec4 slot 4, rec2 slot 5 (so your slot is not fixed). A single frame can light a
+/// second corner pair (bright scenery), so the result is a per-frame vote, None unless unique.
+pub fn own_backdrop_slot(img: &image::DynamicImage) -> Option<usize> {
+    use image::GenericImageView;
+    let (kx, ky) = (img.width() as f32 / 1600.0, img.height() as f32 / 900.0);
+    let patch = |x0: f32| -> Option<(f32, f32, f32)> {
+        let (mut hs, mut s, mut v, mut n) = (vec![], 0f32, 0f32, 0f32);
+        for dy in 0..5 { for dx in 0..5 {
+            let (x, y) = (((x0 + dx as f32) * kx) as u32, ((9.0 + dy as f32) * ky) as u32);
+            if x >= img.width() || y >= img.height() { return None; }
+            let p = img.get_pixel(x, y);
+            let (h, ss, vv) = crate::minimap::hsv(p[0], p[1], p[2]);
+            hs.push(h); s += ss; v += vv; n += 1.0;
+        }}
+        hs.sort_by(|a, b| a.total_cmp(b));
+        Some((hs[hs.len() / 2], s / n, v / n))
+    };
+    let lit: Vec<usize> = hud::ALLY_CENTERS.iter().enumerate().filter(|(_, cx)| {
+        let (Some(a), Some(b)) = (patch(**cx - 25.0), patch(**cx + 20.0)) else { return false };
+        let dh = (a.0 - b.0).abs().min(360.0 - (a.0 - b.0).abs());
+        a.2.min(b.2) >= 0.5 && a.1.min(b.1) >= 0.45 && dh <= 15.0
+    }).map(|(i, _)| i).collect();
+    match lit.as_slice() { [i] => Some(*i), _ => None }
+}
+
+/// Your slot from the backdrop votes: a clear leader (>= 6 votes, 3x the runner-up).
+pub fn own_from_votes(votes: &[u32; 6]) -> Option<usize> {
+    let mut v: Vec<(usize, u32)> = votes.iter().copied().enumerate().collect();
+    v.sort_by(|a, b| b.1.cmp(&a.1));
+    (v[0].1 >= 6 && v[0].1 >= 3 * v[1].1).then_some(v[0].0)
+}
+
+/// Per-sample decay of the hero identity votes.
+pub const HERO_VOTE_DECAY: f32 = 0.98;
+
+/// Per-slot hero identities from the match's votes: each slot's most-voted hero (at least two
+/// votes; otherwise this frame's assignment), unique across slots (stronger votes first).
+pub fn latched_heroes(votes: &[HashMap<String, f32>], fresh: &[Option<String>]) -> Vec<Option<String>> {
+    let mut ranked: Vec<(f32, usize, &String)> = votes.iter().enumerate()
+        .flat_map(|(i, v)| v.iter().filter(|(_, n)| **n >= 2.0).map(move |(h, n)| (*n, i, h))).collect();
+    // Ties: this frame's assignment first, then by name for determinism.
+    ranked.sort_by(|a, b| b.0.total_cmp(&a.0).then_with(|| (fresh.get(b.1).and_then(|f| f.as_ref()) == Some(b.2)).cmp(&(fresh.get(a.1).and_then(|f| f.as_ref()) == Some(a.2)))).then_with(|| a.2.cmp(b.2)));
+    let mut out: Vec<Option<String>> = vec![None; fresh.len()];
+    let mut used = std::collections::HashSet::new();
+    for (_, slot, hero) in ranked {
+        if slot < out.len() && out[slot].is_none() && !used.contains(hero) { out[slot] = Some(hero.clone()); used.insert(hero.clone()); }
+    }
+    for (slot, f) in fresh.iter().enumerate() {
+        if out[slot].is_none() { if let Some(h) = f { if !used.contains(h) { out[slot] = Some(h.clone()); used.insert(h.clone()); } } }
+    }
+    out
+}
+
+/// One item-slot scan: empty (flat), a confident shop-art match, or a lit icon with no
+/// confident match (a cooldown dims the icon and sweeps a shadow over it).
+#[derive(Debug, Clone, PartialEq)]
+pub enum ItemRead { Empty, Item(String), Unclear }
+
+/// Latched item of one inventory slot.
+#[derive(Debug, Clone, Default)]
+pub struct ItemLatch { pub item: Option<String>, pending: Option<(String, u8)>, empty: u8 }
+
+/// Scans of a confident different item that replace a latched one (a purchase into a sold
+/// slot); single misreads swapped items in a recorded match (Rapid Rounds / Mercurial Magnum).
+pub const ITEM_REPLACE_READS: u8 = 3;
+/// Empty scans in a row that clear a latched item (cooldown icons dimmed for 1-3 scans).
+pub const ITEM_EMPTY_READS: u8 = 4;
+
+/// An item is listed after two matching scans, stays through unclear and briefly flat scans
+/// (active items on cooldown dropped out for 1-3 frames), and is replaced only by
+/// `ITEM_REPLACE_READS` confident reads of another item.
+pub fn latch_item(l: &mut ItemLatch, read: ItemRead) {
+    match read {
+        ItemRead::Empty => {
+            l.empty = l.empty.saturating_add(1); l.pending = None;
+            if l.empty >= ITEM_EMPTY_READS || l.item.is_none() { l.item = None; }
+        }
+        ItemRead::Unclear => { l.empty = 0; }
+        ItemRead::Item(n) => {
+            l.empty = 0;
+            if l.item.as_ref() == Some(&n) { l.pending = None; return; }
+            let k = match l.pending.take() { Some((p, k)) if p == n => k.saturating_add(1), _ => 1 };
+            if k >= if l.item.is_some() { ITEM_REPLACE_READS } else { 2 } { l.item = Some(n); } else { l.pending = Some((n, k)); }
+        }
+    }
 }
 
 /// Shop costs by class name (data/items.json). Items absent here (retired shop art) are rejected.
@@ -235,8 +335,11 @@ impl Scanner {
             was_board: false,
             own_hero: None,
             totals_flip: false,
-            item_votes: Default::default(),
             own_slot: Default::default(),
+            hero_votes: vec![HashMap::new(); 12],
+            own_latched: None,
+            own_backdrop: [0; 6],
+            item_latch: Default::default(),
         }
     }
 
@@ -262,9 +365,12 @@ impl Scanner {
         self.map_tracker = crate::minimap::Tracker::default();
         self.vitals = crate::vitals::Tracker::default();
         self.team_status.clear();
-        self.item_votes = Default::default();
         self.own_slot = Default::default();
         self.own_hero = None;
+        self.hero_votes = vec![HashMap::new(); 12];
+        self.own_latched = None;
+        self.own_backdrop = [0; 6];
+        self.item_latch = Default::default();
         self.cadence.reset();
         self.name_rects = vec![None; 12];
         self.clock_value.reset();
@@ -274,6 +380,9 @@ impl Scanner {
         self.ocr.read(&hud::crop(img, r)).ok()
     }
     pub fn regions(&self)->Vec<coach_perception::RegionObservation>{self.regions.clone()}
+
+    /// Per-slot identity votes of this match (diagnostics).
+    pub fn hero_votes(&self) -> &[HashMap<String, f32>] { &self.hero_votes }
 
     /// Greedy global assignment of heroes to the 12 slots by mean score.
     pub fn hero_scores(&self) -> Vec<Option<(String, f32)>> {
@@ -405,7 +514,8 @@ impl Scanner {
             fallback = crate::minimap::crop_from_frame(img); &fallback
         }};
         let mut laps = coach_perception::track::Laps::default();
-        let mut map = self.map_analyzer.analyze(map_crop);
+        // The lane layout is latched per match by the tracker (per-frame colours flipped it).
+        let mut map = self.map_analyzer.run_layout(map_crop, &mut vec![], self.map_tracker.layout());
         laps.lap("minimap");
         let mut batch = LineBatch::default();
         // Top-bar readers use a copy with the bar moved back to its calibrated rows when it is
@@ -439,7 +549,14 @@ impl Scanner {
         if !no_map { self.totals_flip = !self.totals_flip; }
         let total_line = batch.add(hud::crop(top, if self.totals_flip { hud::ALLY_TOTAL } else { hud::ENEMY_TOTAL }));
         let vitals = self.vitals.tracked_crops(img).map(|c| batch.add_all(c));
-        let urn_line = map.urn_pos.is_some().then(|| batch.add(hud::crop(img, crate::Region { x: 710.0 / 1600.0, y: 585.0 / 900.0, w: 190.0 / 1600.0, h: 32.0 / 900.0 })));
+        // Zone label under the minimap ("YORK : FACTORY"), read as 1-2 lines every 1.5 s from a
+        // rotated strip at a fixed place relative to the map (the canonical context's map box).
+        let zone_lines = self.cadence.due("zone_label", now_ms, 1500).then(|| {
+            let (fw, fh) = (img.width() as f32, img.height() as f32);
+            let strip = crate::zone::label_strip(img, (crate::minimap::FRAC_X * fw, crate::minimap::FRAC_Y * fh, crate::minimap::FRAC_W * fw, crate::minimap::FRAC_H * fh));
+            batch.add_all(crate::zone::label_parts(&strip))
+        });
+        let urn_line = (map.urn_pos.is_some() || !map.urn_marks.is_empty()).then(|| batch.add(hud::crop(img, crate::Region { x: 710.0 / 1600.0, y: 585.0 / 900.0, w: 190.0 / 1600.0, h: 32.0 / 900.0 })));
         // Team banners and earned-souls labels rotate: 3 + 6 of 12 per frame (the 18x14 label
         // crops are cheap; rec5 read 0.5% of slot-frames with 2 per frame and a wide crop).
         let status_slots = self.status_rr.take(12, 3);
@@ -572,7 +689,8 @@ impl Scanner {
             }
         }
         // A cyan portrait must never create an urn before its first spawn.
-        if raw_clock.unwrap_or(0) < 600 { map.urn = None; map.urn_pos = None; }
+        if raw_clock.unwrap_or(0) < 600 { map.urn = None; map.urn_pos = None; map.urn_marks.clear(); }
+        if let Some(l) = zone_lines.clone().and_then(|r| lines.get(r)) { map.zone = crate::zone::zone_from_lines(l); }
         if !no_map { snap.minimap = Some(self.map_tracker.observe(map, now_ms)); }
 
         if scr == Screen::Dead {
@@ -642,19 +760,17 @@ impl Scanner {
             let clock = snap.game_clock_secs.or(raw_clock);
             for row in 0..2 {
                 for col in 0..6 {
-                    let vote = &mut self.item_votes[row * 6 + col];
                     let c = hud::crop(&img, hud::item_slot(col, row));
-                    if hud::contrast(&c) < 18.0 { *vote = None; continue; } // empty slot
-                    let m = self.items.identify(&c)
-                        .filter(|(name, score, margin)| *score >= 0.5 && *margin >= 0.1 && !name.contains("non_player") && plausible_item(name, clock))
-                        .map(|(name, _, _)| name);
-                    *vote = match (m, vote.take()) {
-                        (Some(n), Some((p, k))) if n == p => Some((n, k.saturating_add(1))),
-                        (Some(n), _) => Some((n, 1)),
-                        // Unmatched this scan (blur, effects): a confirmed item stays.
-                        (None, prev) => prev.filter(|(_, k)| *k >= 2),
+                    let seen = if hud::contrast(&c) < 18.0 { ItemRead::Empty } else {
+                        match self.items.identify(&c)
+                            .filter(|(name, score, margin)| *score >= 0.5 && *margin >= 0.1 && !name.contains("non_player") && plausible_item(name, clock)) {
+                            Some((name, _, _)) => ItemRead::Item(name),
+                            None => ItemRead::Unclear,
+                        }
                     };
-                    if let Some((n, k)) = vote { if *k >= 2 && !snap.items.contains(n) { snap.items.push(n.clone()); } }
+                    let latch = &mut self.item_latch[row * 6 + col];
+                    latch_item(latch, seen);
+                    if let Some(n) = &latch.item { if !snap.items.contains(n) { snap.items.push(n.clone()); } }
                 }
             }
         }
@@ -681,13 +797,32 @@ impl Scanner {
 
         // Heroes: accumulate card scores across frames, assign uniquely to the 12 slots.
         // Identities change rarely, so portraits are sampled every 2 s (scores keep top-K).
-        if raw_clock.is_some() && self.cadence.due("portraits", now_ms, 2000) {
+        let sampled = raw_clock.is_some() && self.cadence.due("portraits", now_ms, 2000);
+        if sampled {
             self.frames += 1;
             for (i, cx) in hud::ALLY_CENTERS.iter().chain(hud::ENEMY_CENTERS.iter()).enumerate() {
                 let c = hud::crop(top, hud::portrait(*cx));
-                let crit: HashMap<String, f32> = self.heroes_crit.scores(&c).into_iter().collect();
-                for (n, s) in self.heroes.scores(&c) {
-                    let s = s.max(crit.get(&n).copied().unwrap_or(f32::MIN));
+                // Best variant per hero: card art, critical tint, and real top-bar captures
+                // (`hero_x@...`, e.g. Haze's near-black silhouette, which the card art misses).
+                let mut best: HashMap<String, f32> = HashMap::new();
+                for (n, s) in self.heroes.scores(&c).into_iter().chain(self.heroes_crit.scores(&c)) {
+                    let e = best.entry(hero_key(&n).to_string()).or_insert(f32::MIN);
+                    *e = e.max(s);
+                }
+                // Identity vote: this sample's confident winner. The top-K means below keep each
+                // hero's best-ever scores, so one spurious high read in another slot could take a
+                // hero away for good (rec2 ally slot 2 read Bookworm for 2 minutes while every
+                // sample's winner was Bebop). Dead / greyed samples rarely clear the margin.
+                // A dead (greyed) portrait neither votes nor ages the votes: over a long late-game
+                // death its winner is noise (rec2 slot 2 flipped to Bookworm during a respawn).
+                let dead = dead_slots.contains(&i) || bar_status.get(i).is_some_and(|s| s.dead == Some(true));
+                let mut ranked: Vec<(&String, f32)> = best.iter().map(|(n, s)| (n, *s)).collect();
+                ranked.sort_by(|a, b| b.1.total_cmp(&a.1));
+                if !dead { for v in self.hero_votes[i].values_mut() { *v *= HERO_VOTE_DECAY; } }
+                if let (false, [(n, s1), (_, s2), ..]) = (dead, ranked.as_slice()) {
+                    if *s1 >= 0.5 && s1 - s2 >= 0.03 { *self.hero_votes[i].entry((*n).clone()).or_default() += 1.0; }
+                }
+                for (n, s) in best {
                     let v = self.sums[i].entry(n).or_default();
                     v.push(s);
                     v.sort_by(|a, b| b.partial_cmp(a).unwrap());
@@ -695,7 +830,12 @@ impl Scanner {
                 }
             }
         }
-        let mut assign = self.assign_heroes();
+        // Identities do not change within a match: the per-slot majority of the sample votes is
+        // reported (rec5 slot 3 flipped Vyper / Infernus), unique across slots; the top-K
+        // assignment only fills slots without enough votes. Votes decay (x0.95 per 2 s sample,
+        // half-life ~30 s) so a few early misreads stop holding a slot.
+        let fresh = self.assign_heroes();
+        let mut assign = latched_heroes(&self.hero_votes, &fresh);
         laps.lap("portraits");
 
         // Scoreboard: names are far more reliable than portraits, so they win.
@@ -714,7 +854,11 @@ impl Scanner {
                     if r.assists.zip(p.assists).is_some_and(|(a, b)| a < b) { r.assists = None; }
                 }
             }
-            for (i, r) in rows.iter().enumerate() { if r.hero.is_some() { assign[i] = r.hero.clone(); } }
+            for (i, r) in rows.iter().enumerate() { if let Some(h) = &r.hero {
+                assign[i] = Some(h.clone());
+                // A name read outweighs several portrait samples in the identity vote.
+                if let Some(v) = self.hero_votes.get_mut(i) { *v.entry(h.clone()).or_default() += 3.0; }
+            } }
             self.board_history.push(rows.clone());
             if self.board_history.len() > 5 { self.board_history.remove(0); }
             self.last_board = self.voted_board();
@@ -754,8 +898,20 @@ impl Scanner {
                     if let Some(r) = s.health_ratio { let e = &mut self.own_slot[s.slot]; e.0 += (r - own).abs(); e.1 += 1; }
                 }
             }
-            if let Some(slot) = own_slot(&self.own_slot) {
-                snap.hero = assign[slot].clone();
+            // Once a slot clearly won it stays yours for the match (rec5 lost the hero for 35
+            // frames after a respawn while the accumulated gaps were briefly ambiguous); another
+            // slot takes over only after winning 10 checks in a row.
+            if let Some(i) = own_backdrop_slot(img) { self.own_backdrop[i] += 1; }
+            // The health-bar correlation needs damage to separate full-HP slots (rec5: no answer for
+            // the first 48 frames); the backdrop vote answers within seconds. Bars win when both exist.
+            if let Some(slot) = own_slot(&self.own_slot).or_else(|| own_from_votes(&self.own_backdrop)) {
+                self.own_latched = match self.own_latched {
+                    Some((s, _)) if s == slot => Some((s, 0)),
+                    Some((s, n)) if n + 1 < 10 => Some((s, n + 1)),
+                    _ => Some((slot, 0)),
+                };
+            }
+            if let Some((slot, _)) = self.own_latched {
                 if snap.own_networth.is_none() { snap.own_networth = snap.hero_status.iter().find(|s| s.ally && s.slot == slot).and_then(|s| s.networth); }
             }
             if scr == Screen::Gameplay { if let Some(h) = &snap.hero { self.own_hero = Some(h.clone()); } }
@@ -766,6 +922,8 @@ impl Scanner {
                 }
             }
         }
+        // Your hero does not change while dead or on the scoreboard either.
+        if let Some((slot, _)) = self.own_latched { snap.hero = assign[slot].clone(); }
         // Enemy items seen on the most recent scoreboard.
         for r in self.last_board.iter().filter(|r| !r.ally) {
             for it in &r.items { if !snap.enemy_items.contains(it) { snap.enemy_items.push(it.clone()); } }

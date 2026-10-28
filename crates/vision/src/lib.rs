@@ -1,6 +1,7 @@
 //! Deadlock-specific HUD interpretation built on the reusable perception primitives.
 pub mod hud;
 pub mod minimap;
+pub mod zone;
 pub mod ocr;
 pub mod parse;
 pub mod scan;
