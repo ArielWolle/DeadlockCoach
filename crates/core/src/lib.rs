@@ -167,6 +167,38 @@ pub struct MinimapState {
     /// killed), and since it reappeared (respawned). None = no such event.
     pub midboss_down_ms: Option<u64>,
     pub midboss_back_ms: Option<u64>,
+    /// Zone label printed under the minimap ("YORK : FACTORY"), normalised. Held briefly
+    /// between reads; None when not read recently.
+    #[serde(default)]
+    pub zone: Option<String>,
+    /// Lane named by the zone label (York = Yellow, Broadway = Blue, Greenwich = Green).
+    #[serde(default)]
+    pub zone_lane: Option<Lane>,
+    /// Coarse area of the zone label (base / mid / lane / jungle).
+    #[serde(default)]
+    pub zone_area: Option<ZoneArea>,
+    /// This frame's own lane-colour evidence for the layout (`lanes_mirrored` is the per-match
+    /// latched value). Internal to the vision tracker.
+    #[serde(skip)]
+    pub lanes_mirrored_frame: Option<bool>,
+    /// Urn-shaped icons too small or occluded for `urn_pos` (a carried vase drawn with your
+    /// view cone). Internal to the vision tracker.
+    #[serde(skip)]
+    pub urn_marks: Vec<Pt>,
+}
+
+/// Coarse area from the minimap zone label (plus your marker for lane vs jungle).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ZoneArea {
+    /// A lane's zone (and near its line when your marker is seen).
+    Lane,
+    /// A lane's zone with your marker seen away from every lane line.
+    Jungle,
+    Mid,
+    OwnBase,
+    EnemyBase,
+    /// A base whose owner is not known (lane layout not established).
+    Base,
 }
 
 /// One hero portrait followed across minimap observations.

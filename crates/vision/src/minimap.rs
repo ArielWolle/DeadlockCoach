@@ -268,7 +268,86 @@ pub fn rings_scaled(mask: &[bool], w: u32, h: u32, s0: f32, min_coverage: f32, s
 
 /// The playable map is roughly an ellipse inside the square crop; outside it the game world
 /// shows through and can contain unrelated circles.
-fn on_map(p: (f32, f32)) -> bool { ((p.0 - 167.0) / 150.0).powi(2) + ((p.1 - 172.0) / 165.0).powi(2) < 1.0 }
+/// The map panel is a disc (x 15-319, y 37-333) plus the bump (y 15-60) that holds the enemy base icon;
+/// the corners above the side lanes are game world (rec5 read scenery at (100,29), (232,35)
+/// and (290,87) as enemies on many frames under the looser 150x165 ellipse).
+pub fn on_map(p: (f32, f32)) -> bool {
+    ((p.0 - 167.0) / 152.0).powi(2) + ((p.1 - 185.0) / 148.0).powi(2) < 1.0 || ((150.0..=212.0).contains(&p.0) && (15.0..=60.0).contains(&p.1))
+}
+
+/// Elliptic radius of a canonical point on the map disc (0 = centre, 1 = `on_map` edge).
+fn rim_value(p: (f32, f32)) -> f32 { ((p.0 - 167.0) / 152.0).powi(2) + ((p.1 - 185.0) / 148.0).powi(2) }
+
+/// A ring near the rim must be surrounded by the dark map panel, not by lit game world.
+fn on_dark_panel(img: &RgbImage, p: (f32, f32), s: f32) -> bool {
+    let (mut n, mut dark) = (0u32, 0u32);
+    let (r0, r1) = ((13.0 * s) as i32, (17.0 * s) as i32);
+    for dy in -r1..=r1 { for dx in -r1..=r1 {
+        let d2 = dx * dx + dy * dy;
+        if d2 < r0 * r0 || d2 > r1 * r1 { continue; }
+        let (x, y) = ((p.0 * s) as i32 + dx, (p.1 * s) as i32 + dy);
+        if x < 0 || y < 0 || x as u32 >= img.width() || y as u32 >= img.height() { continue; }
+        let q = img.get_pixel(x as u32, y as u32);
+        n += 1;
+        if q.0.iter().copied().max().unwrap() < 90 { dark += 1; }
+    }}
+    n > 0 && dark as f32 >= 0.35 * n as f32
+}
+
+/// Erase team-ping circles from an enemy-colour mask: large thin rings (canonical diameter
+/// 36-120 px, a portrait ring is ~22) whose pixels lie on one circle around most of the way.
+pub fn erase_ping_circles(mask: &mut [bool], w: u32, h: u32, s: f32) {
+    for b in components(mask, w, h) {
+        let (bw, bh) = (b.w() as f32 / s, b.h() as f32 / s);
+        // No aspect limit: a ping merges with lane lines and portraits it touches (rec5 frame 547: 77x44).
+        if !(34.0..=120.0).contains(&bw) || !(34.0..=120.0).contains(&bh) || b.fill() > 0.65 { continue; }
+        // The ping's edge is one continuous circle; a cluster of portraits only touches any
+        // circle here and there. Search centre and radius (a portrait can be merged into the
+        // component, so the bounding box is not centred on the ping).
+        let at = |x: f32, y: f32| { let (x, y) = (x.round() as i32, y.round() as i32);
+            x >= 0 && y >= 0 && (x as u32) < w && (y as u32) < h && mask[(y as u32 * w + x as u32) as usize] };
+        let (bx, by) = ((b.min_x + b.max_x) as f32 / 2.0, (b.min_y + b.max_y) as f32 / 2.0);
+        let step = s.max(1.0);
+        let mut best = (0usize, bx, by, 0f32);
+        for oy in -6..=6 { for ox in -6..=6 {
+            let (cx, cy) = (bx + ox as f32 * step, by + oy as f32 * step);
+            let mut r = 16.0 * s;
+            while r <= 0.5 * (b.w().min(b.h()) as f32) + 2.0 * s {
+                let hits = (0..72).filter(|i| { let a = *i as f32 * std::f32::consts::TAU / 72.0;
+                    [-1.0f32, 0.0, 1.0].iter().any(|d| at(cx + (r + d * s) * a.cos(), cy + (r + d * s) * a.sin())) }).count();
+                if hits > best.0 { best = (hits, cx, cy, r); }
+                r += step;
+            }
+        }}
+        let (hits, cx, cy, r) = best;
+        if hits < 60 { continue; }
+        // A ping's band is thick (~4-8 px while it shrinks); touching portrait rings are ~2 px
+        // lines, so they cannot fill an annulus just inside the circle. Thin large pings
+        // (sparse components) pass on the circle alone.
+        let (mut ann, mut ann_n) = (0u32, 0u32);
+        for y in b.min_y..=b.max_y { for x in b.min_x..=b.max_x {
+            let (dx, dy) = (x as f32 - cx, y as f32 - cy);
+            let d = (dx * dx + dy * dy).sqrt();
+            if d >= r - 3.5 * s && d <= r - 0.5 * s { ann_n += 1; ann += mask[(y * w + x) as usize] as u32; }
+        }}
+        let thick = ann_n > 0 && ann as f32 >= 0.5 * ann_n as f32;
+        if !thick && (b.fill() > 0.45 || hits < 66) { continue; }
+        let band = 1.5 * s;
+        let (mut inner, mut inner_n) = (0u32, 0u32);
+        for y in b.min_y..=b.max_y { for x in b.min_x..=b.max_x {
+            let (dx, dy) = (x as f32 - cx, y as f32 - cy);
+            if (dx * dx + dy * dy).sqrt() < 0.6 * r { inner_n += 1; inner += mask[(y * w + x) as usize] as u32; }
+        }}
+        // A filled (danger) ping tints its whole disc: erase it all; a hollow one only its band,
+        // so portraits inside it stay.
+        let filled = inner_n > 0 && inner as f32 > 0.2 * inner_n as f32;
+        for y in b.min_y..=b.max_y { for x in b.min_x..=b.max_x {
+            let (dx, dy) = (x as f32 - cx, y as f32 - cy);
+            let d = (dx * dx + dy * dy).sqrt();
+            if (filled && d <= r + 2.0 * band) || (d - r).abs() <= 2.0 * band + 1.0 { mask[(y * w + x) as usize] = false; }
+        }}
+    }
+}
 
 /// Base icons are large team-coloured arcs that partially match a ring.
 const BASES: [(f32, f32); 2] = [(180.0, 33.0), (143.0, 312.0)];
@@ -288,6 +367,21 @@ fn interior_is_portrait(img: &RgbImage, p: (f32, f32), s: f32) -> bool {
         if v < 0.28 || (sat > 0.45 && (h < 26.0 || h > 340.0 || (38.0..62.0).contains(&h) || (85.0..218.0).contains(&h))) { furniture += 1.0; }
     }}
     n > 0.0 && furniture / n < 0.6
+}
+
+/// Fraction of the ring interior that is dark map (value < 0.28).
+fn interior_dark(img: &RgbImage, p: (f32, f32), s: f32) -> f32 {
+    let (mut n, mut dark) = (0f32, 0f32);
+    let r = (5.5 * s) as i32;
+    for dy in -r..=r { for dx in -r..=r {
+        if dx * dx + dy * dy > r * r { continue; }
+        let (x, y) = ((p.0 * s) as i32 + dx, (p.1 * s) as i32 + dy);
+        if x < 0 || y < 0 || x as u32 >= img.width() || y as u32 >= img.height() { continue; }
+        let q = img.get_pixel(x as u32, y as u32);
+        n += 1.0;
+        if hsv(q[0], q[1], q[2]).2 < 0.28 { dark += 1.0; }
+    }}
+    if n > 0.0 { dark / n } else { 0.0 }
 }
 
 const MIDBOSS_POS: (f32, f32) = (162.0, 175.0);
@@ -435,7 +529,29 @@ impl Analyzer {
 
     /// Analyze and also return debug markers: (x, y in canonical px, kind).
     /// Kinds: a/e = ally/enemy trooper, E = enemy ring, M = midboss, U = urn.
-    pub fn run(&self, img: &RgbImage, mk: &mut Vec<(f32, f32, char)>) -> MinimapState {
+    pub fn run(&self, img: &RgbImage, mk: &mut Vec<(f32, f32, char)>) -> MinimapState { self.run_layout(img, mk, None) }
+
+    /// Distance (canonical px) and progress of a point projected onto lane polyline `k`.
+    pub fn project_lane(&self, k: usize, p: (f32, f32)) -> (f32, f32) {
+        let l = &self.lanes[k];
+        let total = *self.cum[k].last().unwrap();
+        let mut best = (f32::INFINITY, 0.0);
+        for i in 0..l.len() - 1 {
+            let (a, b) = (l[i], l[i + 1]);
+            let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+            let len2 = dx * dx + dy * dy;
+            let t = if len2 == 0.0 { 0.0 } else { (((p.0 - a.0) * dx + (p.1 - a.1) * dy) / len2).clamp(0.0, 1.0) };
+            let d = dist(p, (a.0 + dx * t, a.1 + dy * t));
+            if d < best.0 { best = (d, (self.cum[k][i] + t * len2.sqrt()) / total); }
+        }
+        best
+    }
+
+    /// `run` with the lane layout already established for this match (`Tracker::layout`).
+    /// The per-frame colour evidence flipped Green/Yellow on 22 frames of a recorded match
+    /// (every side-lane field and your lane with it); a latched layout keeps them consistent.
+    /// This frame's own evidence is still reported in `lanes_mirrored_frame` for the vote.
+    pub fn run_layout(&self, img: &RgbImage, mk: &mut Vec<(f32, f32, char)>, layout: Option<bool>) -> MinimapState {
         let (w, h) = img.dimensions();
         let s = w as f32 / CW;
         let m = masks(img);
@@ -443,9 +559,19 @@ impl Analyzer {
         let mut sums = [[(0u32, 0f32); 2]; 3]; // lane -> [ally, enemy] -> (count, sum progress)
         // Heroes: mask each team colour, then look for portrait-sized circles (6 per team max;
         // the own hero is drawn in green, so at most 5 cream-white allied rings).
-        let (ally_mask, enemy_mask) = ring_masks(img);
+        let (ally_mask, mut enemy_mask) = ring_masks(img);
+        // Red ping circles (a team ping: a thick ring ~2.5x a portrait) put several "enemy rings"
+        // on their band (rec5 frame 122 read six enemies). Erase them before the ring search.
+        erase_ping_circles(&mut enemy_mask, w, h, s);
         let plausible = |p: &(f32, f32)| on_map(*p) && dist(BASES[0], *p) > 32.0 && dist(BASES[1], *p) > 22.0
-            && (!self.near_structure(*p, 6.0) || interior_is_portrait(img, *p, s));
+            && (!self.near_structure(*p, 6.0) || interior_is_portrait(img, *p, s))
+            // A ring just below a small base diamond is the diamond plus lane line and trooper
+            // dots (rec5: two "enemies" under the enemy base towers on 1/5 of frames); its
+            // interior is the dark map, a portrait's is lit.
+            && (!self.near_structure(*p, 12.0) || interior_dark(img, *p, s) < 0.6)
+            // Near the map rim the game world shows through: a ring there must sit on the dark
+            // map panel (rec5 frame 560 read lit scenery past the rim as an enemy).
+            && (rim_value(*p) < 0.72 || on_dark_panel(img, *p, s));
         let ring_pts: Vec<(f32, f32)> = hero_rings(&enemy_mask, w, h, s, 0.5).into_iter()
             .map(|r| (r.x, r.y)).filter(plausible).take(6).collect();
         let ally_pts: Vec<(f32, f32)> = hero_rings(&ally_mask, w, h, s, 0.5).into_iter()
@@ -453,18 +579,34 @@ impl Analyzer {
         // Side-lane colours swap between teams; detect the layout from the lane lines themselves.
         let (lg, ly, rg, ry) = self.side_lane_hues(img);
         let evidence = lg + ly + rg + ry;
-        let mirrored = evidence >= 100 && (ly + rg) as f32 > 1.5 * (lg + ry) as f32;
-        st.lanes_mirrored = (evidence >= 100).then_some(mirrored);
+        let frame_mirrored = evidence >= 100 && (ly + rg) as f32 > 1.5 * (lg + ry) as f32;
+        // Vote only with a clear colour majority either way.
+        st.lanes_mirrored_frame = (evidence >= 100).then(|| if frame_mirrored { Some(true) } else if (lg + ry) as f32 > 1.5 * (ly + rg) as f32 { Some(false) } else { None }).flatten();
+        let mirrored = layout.unwrap_or(frame_mirrored);
+        st.lanes_mirrored = if layout.is_some() { layout } else { (evidence >= 100).then_some(mirrored) };
         // Your marker: a green ring (hue ~136-142). Recorded captures measured saturation 0.49-0.58,
         // below the general green mask, so it gets its own mask; the ring test rejects lane lines.
         let own_mask: Vec<bool> = img.pixels().map(|p| { let (hh, ss, vv) = hsv(p[0], p[1], p[2]); (128.0..148.0).contains(&hh) && ss > 0.45 && vv > 0.45 }).collect();
         // Occlusion-tolerant circle search at the marker size (~0.58 of a portrait ring), minus the
         // mint shop icons that sit at fixed map positions in every match.
+        // Standing on a shop icon is common (rec5: 30+ frames lost at the mid-right shops): the
+        // marker there is kept when the green mass is the marker's (~75 px within 9 px of the
+        // centre, canonical) rather than the bare icon's (~18).
+        let green_mass = |p: (f32, f32)| {
+            let r = (9.0 * s) as i32; let (cx, cy) = ((p.0 * s) as i32, (p.1 * s) as i32);
+            let mut n = 0u32;
+            for dy in -r..=r { for dx in -r..=r {
+                let (x, y) = (cx + dx, cy + dy);
+                if x >= 0 && y >= 0 && (x as u32) < w && (y as u32) < h && own_mask[(y as u32 * w + x as u32) as usize] { n += 1; }
+            }}
+            n as f32 / (s * s)
+        };
         let own:Vec<_> = rings_scaled(&own_mask,w,h,s,0.6,0.58).into_iter().map(|r|(r.x,r.y))
-            .filter(|p| SHOP_ICONS.iter().all(|q| dist(*p, *q) > 8.0))
+            .filter(|p| SHOP_ICONS.iter().all(|q| dist(*p, *q) > 8.0) || green_mass(*p) >= 45.0)
             // Standing next to a tower is common; the ring test already rejects diamonds.
-            // On the map disc only: rec3 read green game world beside the minimap as you (x=0.01).
-            .filter(|p| p.1>75.0 && p.1<325.0 && p.0>22.0 && p.0<313.0).collect();
+            // On the map disc only: rec3 read green game world beside the minimap as you (x=0.01),
+            // rec5 frame 331 green scenery past the top-right rim (four rings, so no marker at all).
+            .filter(|p| p.1>75.0 && p.1<325.0 && p.0>22.0 && p.0<313.0 && on_map(*p)).collect();
         // A unique bright-green ring is only a candidate; the temporal tracker confirms it.
         if let [p] = own.as_slice() {
             st.you=Some(norm(p.0,p.1,CW as u32,CH as u32)); mk.push((p.0,p.1,'Y'));
@@ -484,16 +626,23 @@ impl Analyzer {
         let max_side = (7.5 * s) as u32;
         for (mask, team) in [(&m.white, 0usize), (&m.red, 1usize)] {
             for b in components(mask, w, h) {
-                if b.area < min_a || b.area > max_a || b.w() > max_side || b.h() > max_side { continue; }
+                if b.area < min_a { continue; }
+                // A wave walking in file merges into one blob (rec5 frame 250: ~5 dots read as a
+                // single 12x8 component of 70 px, and dropped as too large). Merged blobs count as
+                // area / single-dot area (12-15 px measured), up to a full wave.
+                let single = b.area <= max_a && b.w() <= max_side && b.h() <= max_side;
+                let merged = !single && b.area as f32 <= 110.0 * s * s && (b.w().max(b.h()) as f32) <= 16.0 * s && b.fill() <= 0.75;
+                if !single && !merged { continue; }
+                let n = if single { 1 } else { ((b.area as f32 / (13.0 * s * s)).round() as u32).clamp(2, 8) };
                 let p = (b.cx / s, b.cy / s);
-                if self.near_structure(p, 9.0) { continue; }
+                if self.near_structure(p, if single { 9.0 } else { 12.0 }) { continue; }
                 // Small portrait highlights and fragmented rings are not trooper dots.
                 // The ring edge is ~11 px out; troopers fighting right next to a hero must still count.
-                if ring_pts.iter().chain(ally_pts.iter()).any(|h| dist(*h, p) < 11.5) { continue; }
+                if ring_pts.iter().chain(ally_pts.iter()).any(|h| dist(*h, p) < if single { 11.5 } else { 16.0 }) { continue; }
                 if let Some((k, t, d)) = self.project(p) {
-                    if d <= 6.0 && (0.10..=0.93).contains(&t) {
-                        sums[k][team].0 += 1;
-                        sums[k][team].1 += t;
+                    if d <= if single { 6.0 } else { 4.0 } && (0.10..=0.93).contains(&t) {
+                        sums[k][team].0 += n;
+                        sums[k][team].1 += t * n as f32;
                         mk.push((p.0, p.1, if team == 0 { 'a' } else { 'e' }));
                     }
                 }
@@ -531,9 +680,15 @@ impl Analyzer {
         for b in components(&cyan_joined, w, h) {
             let p = (b.cx / s, b.cy / s);
             let (bw, bh) = (b.w() as f32 / s, b.h() as f32 / s);
-            if b.area as f32 / (s * s) < 40.0 || bw > 18.0 || bh > 24.0 || bh < 13.0 || bh < bw * 1.15 { continue; }
-            if self.near_structure(p, 12.0) { continue; }
-            if dist(p, (162.0, 201.0)) < 12.0 { continue; }
+            if self.near_structure(p, 12.0) || dist(p, (162.0, 201.0)) < 12.0 || !on_map(p) { continue; }
+            if b.area as f32 / (s * s) < 40.0 || bw > 18.0 || bh > 24.0 || bh < 13.0 || bh < bw * 1.15 {
+                // A carried vase is drawn smaller and partly covered by your view cone (rec5
+                // 1:00-1:25 of a carry: 7x7 to 8x11 px). Kept as a weak mark for the tracker only.
+                if b.area as f32 / (s * s) >= 25.0 && bh >= 7.0 && bw <= 14.0 && bh <= 18.0 && bh >= bw * 0.9 {
+                    st.urn_marks.push(norm(p.0, p.1, CW as u32, CH as u32));
+                }
+                continue;
+            }
             on_bridge[0] |= dist(p, BRIDGES[0]) < 14.0; on_bridge[1] |= dist(p, BRIDGES[1]) < 14.0;
             if urn.map(|u| b.area > u.2).unwrap_or(true) { urn = Some((p.0, p.1, b.area)); }
         }
@@ -564,7 +719,22 @@ pub struct Tracker {
     last_you: Option<(u64, Pt)>,
     /// Last confirmed lane, with where and when: held through short gaps nearby.
     last_lane: Option<(u64, Pt, coach_core::Lane, Option<f32>)>,
+    /// Lane-layout votes this match: (mirrored, normal) weights and when last voted.
+    layout_votes: (u32, u32, u64),
+    /// Accepted zone label: (read at, zone, your position then).
+    zone: Option<(u64, String, Option<Pt>)>,
+    /// Last unconfirmed zone read (an unknown name needs a second identical read).
+    zone_pending: Option<(u64, String)>,
+    /// Carrying the urn: your marker is replaced by the vase. Last carried position.
+    urn_you: Option<(u64, Pt)>,
 }
+
+/// Layout votes needed before the per-match layout overrides a frame's own colour evidence.
+pub const LAYOUT_MIN_VOTES: u32 = 5;
+/// A gap this long (or time going backwards) starts the layout vote over (a new match).
+pub const LAYOUT_RESET_MS: u64 = 300_000;
+/// An accepted zone label is held this long without a new read while you stay near.
+pub const ZONE_HOLD_MS: u64 = 12_000;
 
 /// The Midboss is alive from 0:00 and only leaves the map when killed (respawning 7 / 6 / 5 min
 /// later). A recorded match flipped the per-frame flag 77 times, so state changes are events:
@@ -583,6 +753,18 @@ struct HeroSighting { id: u32, ally: bool, pos: Pt, seen_ms: u64, hits: u32, vel
 pub const TRACK_FORGET_MS: u64 = 45_000;
 
 impl Tracker {
+    fn vote_layout(&mut self, mirrored: bool, weight: u32, now_ms: u64) {
+        if mirrored { self.layout_votes.0 += weight; } else { self.layout_votes.1 += weight; }
+        self.layout_votes.2 = now_ms;
+    }
+
+    /// The lane layout latched for this match (majority of the votes so far), once at least
+    /// `LAYOUT_MIN_VOTES` were cast. Feed it to `Analyzer::run_layout`.
+    pub fn layout(&self) -> Option<bool> {
+        let (m, n, _) = self.layout_votes;
+        (m + n >= LAYOUT_MIN_VOTES && m != n).then_some(m > n)
+    }
+
     /// Match this frame's portrait rings to existing tracks, per team. Greedy nearest-first
     /// assignment inside a gate that grows with elapsed time (heroes move; ziplines are fast).
     fn track_heroes(&mut self, raw: &MinimapState, now_ms: u64) -> Vec<coach_core::HeroTrack> {
@@ -656,6 +838,20 @@ impl Tracker {
             self.heroes.clear();
             self.midboss = MidbossState::default();
         }
+        // Lane layout: one per match. Majority of the frames' clear colour evidence (plus zone
+        // label evidence below); reset only by a long gap.
+        if now_ms < self.layout_votes.2 || now_ms - self.layout_votes.2 > LAYOUT_RESET_MS { self.layout_votes = (0, 0, now_ms); }
+        if let Some(m) = raw.lanes_mirrored_frame { self.vote_layout(m, 1, now_ms); }
+        if let Some(l) = self.layout() {
+            if raw.lanes_mirrored.is_some_and(|m| m != l) {
+                // Analyzed under the other layout (before the latch, or by a stateless analyzer):
+                // the side lanes' fields belong to each other; their fronts used the wrong hue.
+                std::mem::swap(&mut raw.green, &mut raw.yellow);
+                raw.green.push = None; raw.yellow.push = None;
+                raw.your_lane = raw.your_lane.map(|x| match x { coach_core::Lane::Green => coach_core::Lane::Yellow, coach_core::Lane::Yellow => coach_core::Lane::Green, b => b });
+            }
+            raw.lanes_mirrored = Some(l);
+        }
         raw.heroes = self.track_heroes(&raw, now_ms);
         self.history.retain(|(t, _)| now_ms.saturating_sub(*t) <= 30000);
         self.history.push_back((now_ms, raw.clone()));
@@ -666,12 +862,86 @@ impl Tracker {
         let own_confirmed = raw.you.is_some_and(|p| self.last_you.is_some_and(|(t, old)| now_ms >= t && now_ms - t <= 10_000 && (p.x-old.x).hypot(p.y-old.y)<0.30));
         if let Some(p) = raw.you { self.last_you = Some((now_ms, p)); }
         if !own_confirmed { raw.you=None; raw.your_lane=None; raw.your_progress=None; }
+        let an = Analyzer::new();
+        let layout = raw.lanes_mirrored.unwrap_or(false);
+        let lane_k = |l: coach_core::Lane| (0..3).find(|k| lane_of(*k, layout) == l).unwrap_or(1);
+        let canon = |p: Pt| (p.x * CW, p.y * CH);
+        // Carrying the urn replaces your marker with the vase (and your view cone): with your
+        // marker gone, a vase where you just were is you (rec5 lost you for 30 frames of a carry).
+        // A vase lying at a bridge spawn is only you when the HUD says you carry it.
+        let mut urn_is_you = false;
+        if raw.you.is_none() {
+            let hud_carry = raw.urn == Some(UrnState::CarriedByYou);
+            let at_spawn = |p: Pt| BRIDGES.iter().any(|b| dist(*b, canon(p)) < 12.0);
+            let anchor = self.urn_you.filter(|(t, _)| now_ms >= *t && now_ms - t <= 8000)
+                .or(self.last_you.filter(|(t, _)| now_ms >= *t && now_ms - t <= 6000));
+            let marks: Vec<Pt> = raw.urn_pos.into_iter().chain(raw.urn_marks.iter().copied()).filter(|p| hud_carry || !at_spawn(*p)).collect();
+            let pick = match anchor {
+                Some((t, a)) => {
+                    let gate = (0.06 + 0.04 * (now_ms - t) as f32 / 1000.0).min(0.25);
+                    marks.iter().copied().map(|p| ((p.x - a.x).hypot(p.y - a.y), p)).filter(|(d, _)| *d <= gate || hud_carry)
+                        .min_by(|a, b| a.0.total_cmp(&b.0)).map(|(_, p)| p)
+                }
+                None => if hud_carry && marks.len() == 1 { Some(marks[0]) } else { None },
+            };
+            if let Some(p) = pick {
+                raw.you = Some(p); raw.urn_pos = Some(p); raw.urn = Some(UrnState::CarriedByYou);
+                self.urn_you = Some((now_ms, p)); self.last_you = Some((now_ms, p)); urn_is_you = true;
+                if let Some((k, progress, d)) = an.project(canon(p)) { if d <= 24.0 { raw.your_lane = Some(lane_of(k, layout)); raw.your_progress = Some(progress); } }
+            }
+        } else { self.urn_you = None; }
         // Hold the lane through a short gap while you stay close to where it was last confirmed
         // (lane edges, portraits over the line); a respawn or a walk into the jungle ends it.
         match (raw.you, raw.your_lane) {
             (Some(p), Some(l)) => self.last_lane = Some((now_ms, p, l, raw.your_progress)),
             (Some(p), None) => if let Some((t, q, l, prog)) = self.last_lane {
                 if now_ms >= t && now_ms - t <= 8000 && (p.x-q.x).hypot(p.y-q.y) < 0.05 { raw.your_lane = Some(l); raw.your_progress = prog; }
+            },
+            _ => {}
+        }
+        // Zone label: a read of a known name is accepted at once, anything else needs a second
+        // identical read. Held while you stay near where it was read.
+        let read_now = raw.zone.take();
+        if let Some(z) = read_now.clone() {
+            let same = self.zone.as_ref().is_some_and(|(_, c, _)| *c == z);
+            let repeated = self.zone_pending.as_ref().is_some_and(|(t, p)| *p == z && now_ms >= *t && now_ms - t <= 8000);
+            if crate::zone::is_known(&z) || same || repeated {
+                let at = if same { self.zone.as_ref().and_then(|z| z.2).or(raw.you) } else { raw.you };
+                self.zone = Some((now_ms, z, at)); self.zone_pending = None;
+            } else { self.zone_pending = Some((now_ms, z)); }
+        }
+        if let Some((t, _, at)) = &self.zone {
+            // Without any recent position of yours the label is held only briefly.
+            let pos = raw.you.or(self.last_you.filter(|(lt, _)| now_ms >= *lt && now_ms - lt <= 6000).map(|(_, p)| p));
+            let moved = pos.zip(*at).is_some_and(|(p, q)| (p.x - q.x).hypot(p.y - q.y) > 0.08);
+            let hold = if pos.is_some() { ZONE_HOLD_MS } else { 4000 };
+            if now_ms < *t || now_ms - t > hold || moved { self.zone = None; }
+            else if at.is_none() { if let Some(z) = self.zone.as_mut() { z.2 = raw.you; } }
+        }
+        raw.zone = self.zone.as_ref().map(|z| z.1.clone());
+        raw.zone_lane = raw.zone.as_deref().and_then(crate::zone::lane_of_prefix);
+        if let (Some(z), Some(p)) = (read_now.as_deref().filter(|z| raw.zone.as_deref() == Some(*z)), raw.you) {
+            // Independent layout evidence: the label names the lane you stand on, whose side
+            // (left / right polyline) depends on the layout; a base label names whose base.
+            let pc = canon(p);
+            if let Some(l) = crate::zone::lane_of_prefix(z).filter(|l| *l != coach_core::Lane::Blue) {
+                if let Some((k, _, d)) = an.project(pc) { if k != 1 && d <= 24.0 { self.vote_layout((l == coach_core::Lane::Yellow) == (k == 0), 2, now_ms); } }
+            }
+            let hidden = z.starts_with("HIDDEN KING"); let arch = z.starts_with("ARCHMOTHER");
+            if (hidden || arch) && (p.y > 0.75 || p.y < 0.25) { self.vote_layout(hidden == (p.y > 0.75), 2, now_ms); }
+        }
+        raw.zone_area = raw.zone.as_deref().and_then(|z| crate::zone::area_of(z, self.layout().or(raw.lanes_mirrored)));
+        if raw.zone_area == Some(coach_core::ZoneArea::Lane) {
+            if let Some(p) = raw.you { if an.project(canon(p)).is_none_or(|(_, _, d)| d > 30.0) { raw.zone_area = Some(coach_core::ZoneArea::Jungle); } }
+        }
+        match (raw.zone_area, raw.zone_lane) {
+            // At a base you are not in a lane (the lanes converge there, so the line test says one).
+            (Some(coach_core::ZoneArea::OwnBase | coach_core::ZoneArea::EnemyBase | coach_core::ZoneArea::Base), _) => { raw.your_lane = None; raw.your_progress = None; }
+            (Some(area), Some(zl)) if area != coach_core::ZoneArea::Jungle => match raw.you {
+                // The label settles which lane you are on; progress from that lane's line.
+                Some(p) => { let (d, prog) = an.project_lane(lane_k(zl), canon(p)); if d <= 30.0 { raw.your_lane = Some(zl); raw.your_progress = Some(prog); } }
+                // Marker not found (covered, shop, effects): the label still names your lane.
+                None => { raw.your_lane = Some(zl); raw.your_progress = None; }
             },
             _ => {}
         }
@@ -710,7 +980,8 @@ impl Tracker {
         }
         // Require nearby urn positions on consecutive frames. Movement together with
         // a ring of the same team is evidence of carrying, rather than a single proximity.
-        if let Some(pos) = raw.urn_pos {
+        // (A vase established as you above is already tracked through your own positions.)
+        if let Some(pos) = raw.urn_pos.filter(|_| !urn_is_you) {
             let previous = self.history.iter().rev().nth(1).and_then(|(_, m)| m.urn_pos);
             let supported = previous.map(|p| dist((p.x * CW, p.y * CH), (pos.x * CW, pos.y * CH)) < 90.0).unwrap_or(false);
             if !supported { raw.urn = None; raw.urn_pos = None; }

@@ -51,6 +51,8 @@ impl AutoScanner {
         clock_box:Tracked::default(),currency_box:Tracked::default(),map_tracker:Default::default(),laps:Default::default(),had_context:false,verified_map:None}}
     pub fn reset(&mut self){self.legacy.reset();self.clock=Default::default();self.regions.clear();self.previous_map=None;self.clock_box.reset();self.currency_box.reset();self.map_tracker=Default::default();self.had_context=false;self.verified_map=None;}
     pub fn regions(&self)->Vec<RegionObservation>{self.regions.clone()}
+    /// The scene scanner (diagnostics, e.g. identity votes).
+    pub fn scanner(&self)->&Scanner{&self.legacy}
     pub fn scan(&mut self,frame:&DynamicImage,now:u64)->GameSnapshot{
         self.regions.clear();
         let mut laps=coach_perception::track::Laps::default();
@@ -60,7 +62,13 @@ impl AutoScanner {
         let map=tracked.or_else(||{
             let found=self.map.locate(frame);
             let same=|a:Bounds,b:Bounds|(a.w as f32/b.w.max(1) as f32-1.).abs()<=0.05&&(a.h as f32/b.h.max(1) as f32-1.).abs()<=0.05;
+            // A find within a few pixels of the verified box is the same minimap re-located with
+            // landmark jitter: keep the verified box. rec2 late game re-located 398x416 for the
+            // verified 403x421, which moved the derived scene context by 17 px; every top-bar crop
+            // slid and ally slot 2 read Bookworm instead of Bebop for the rest of the match.
+            let jitter=|a:Bounds,b:Bounds|{let t=(b.w as f32*0.03).max(3.);(a.x as f32-b.x as f32).abs()<=t&&(a.y as f32-b.y as f32).abs()<=t&&(a.w as f32-b.w as f32).abs()<=t&&(a.h as f32-b.h as f32).abs()<=t};
             match (found,verified) {
+                (Some(f),Some(v)) if jitter(f.bounds,v) => Some(coach_perception::localization::Located{bounds:v,score:f.score}),
                 // The minimap does not move within a match: a differently sized box is a false find
                 // while the verified one still matches (rec4 frame 500 found a 340-px box).
                 (Some(f),Some(v)) if !same(f.bounds,v) => self.map.hold(frame,v,MAP_HOLD_SCORE).or(Some(f)),
@@ -117,7 +125,7 @@ impl AutoScanner {
         // The independent minimap analysis is only needed when no game context forms (below);
         // inside a context the compatibility scanner analyzes the same crop once.
         macro_rules! independent { () => {{
-            if let Some(m)=map{let crop=frame.crop_imm(m.bounds.x,m.bounds.y,m.bounds.w,m.bounds.h).to_rgb8();independent.minimap=Some(self.map_tracker.observe(crate::minimap::Analyzer::new().analyze(&crop),now));
+            if let Some(m)=map{let crop=frame.crop_imm(m.bounds.x,m.bounds.y,m.bounds.w,m.bounds.h).to_rgb8();independent.minimap=Some(self.map_tracker.observe(crate::minimap::Analyzer::new().run_layout(&crop,&mut vec![],self.map_tracker.layout()),now));
                 if let Some(mm)=&independent.minimap{self.regions.extend(hero_regions(m.bounds,mm));}}
             laps.lap("independent minimap");self.laps=laps;self.had_context=false;
             return independent;
