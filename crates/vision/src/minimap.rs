@@ -870,8 +870,9 @@ impl Tracker {
         // marker gone, a vase where you just were is you (rec5 lost you for 30 frames of a carry).
         // A vase lying at a bridge spawn is only you when the HUD says you carry it.
         let mut urn_is_you = false;
+        // The HUD's "DELIVER THE URN" prompt (set by the scene scanner) is proof on its own.
+        let hud_carry = raw.urn == Some(UrnState::CarriedByYou);
         if raw.you.is_none() {
-            let hud_carry = raw.urn == Some(UrnState::CarriedByYou);
             let at_spawn = |p: Pt| BRIDGES.iter().any(|b| dist(*b, canon(p)) < 12.0);
             let anchor = self.urn_you.filter(|(t, _)| now_ms >= *t && now_ms - t <= 8000)
                 .or(self.last_you.filter(|(t, _)| now_ms >= *t && now_ms - t <= 6000));
@@ -984,7 +985,9 @@ impl Tracker {
         if let Some(pos) = raw.urn_pos.filter(|_| !urn_is_you) {
             let previous = self.history.iter().rev().nth(1).and_then(|(_, m)| m.urn_pos);
             let supported = previous.map(|p| dist((p.x * CW, p.y * CH), (pos.x * CW, pos.y * CH)) < 90.0).unwrap_or(false);
-            if !supported { raw.urn = None; raw.urn_pos = None; }
+            // An unsupported vase position is dropped, but not the HUD-proven carry (rec8 27:27
+            // and 27:41 lost "you carry the urn" while the prompt was on screen).
+            if !supported { raw.urn = hud_carry.then_some(UrnState::CarriedByYou); raw.urn_pos = None; }
             else if raw.urn != Some(UrnState::CarriedByYou) {
                 let prev = &self.history[self.history.len() - 2].1;
                 let moved = previous.map(|p| dist((p.x * CW, p.y * CH), (pos.x * CW, pos.y * CH)) > 4.0).unwrap_or(false);

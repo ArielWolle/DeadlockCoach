@@ -43,7 +43,7 @@ impl Monitor {
         let digits=(!value.is_empty()&&value.chars().all(|c|c.is_ascii_digit())).then(||value.parse::<u32>().ok()).flatten().filter(|hp|*hp<=max);
         let hp=match digits{
             // The health bar must agree; a truncated tracked box is re-acquired by the full scan.
-            Some(hp)=>{if bar.is_some_and(|b|(hp as f32/max as f32-b).abs()>crate::vitals::bar_tolerance(b)){return None;}hp}
+            Some(hp)=>{if bar.is_some_and(|b|!crate::vitals::bar_agrees(hp as f32/max as f32,b)){return None;}hp}
             // Unreadable digits (the low-health damage vignette): the bar alone is still a measurement.
             None=>(bar?*max as f32).round() as u32,
         };

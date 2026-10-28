@@ -34,9 +34,12 @@ export interface Snapshot {
   /** "N HAUNTED SOULS"; null = not read (not zero). */
   unsecured_souls?: number | null;
   death_damage?: DamageRow[]; death_killing_blow?: string | null; death_total_damage?: number | null;
-  /** e.g. "stunned", "silenced", "out_of_stamina", "knocked_off_zipline", or a debuff name. Empty = none read. */
+  /** e.g. "stunned", "silenced", "out_of_stamina", "knocked_off_zipline", "afflicted", "frozen", "slowed", "carrying_urn", or a debuff name. Empty = none read. */
   status_effects?: string[];
+  /** Top-centre boss health banner (a Patron under attack); own = your team's objective (null = layout unknown). */
+  objective_banner?: ObjectiveBanner | null;
 }
+export interface ObjectiveBanner { name: 'HIDDEN KING' | 'ARCHMOTHER' | string; own?: boolean | null; health_ratio?: number | null }
 export interface DamageRow { source: string; hits?: number | null; damage: number }
 export interface HeroStatus {ally:boolean;slot:number;hero?:string|null;critical?:boolean|null;health_ratio?:number|null;networth?:number|null;networth_observations:number;observations:number;position?:Point|null;position_observations:number;lane?:string|null;
   /** false = enemy not seen recently (no top-bar health bar); not dead. */
