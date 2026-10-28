@@ -328,7 +328,10 @@ function logCue(cue:Cue,s:Snapshot,fast:boolean,aiCue=false){
   if(settings.record)try{localStorage.setItem(CUE_LOG_KEY,JSON.stringify(cueLog));}catch{/* quota: export keeps the in-memory log */}
 }
 /** Cue keys (or key prefixes) only the full scan's engine produces (QuickCoach::configure). */
-const FULL_ONLY=['counter','death','review','lead','behind','unspent-dead','player'];
+// Active coach: debuffs / CC / death panels / top-bar timers / unsecured souls are only read by the
+// full scan. 'pos:enemies_down' is shared: the full scan's version names the lane to push.
+const FULL_ONLY=['counter','death','review','lead','behind','unspent-dead','player',
+  'active:debuff','active:cc','active:heal','active:unsecured','active:repeat','active:close','pos:enemies_down'];
 function deliver(analysis:Analysis,timestamp:number,fast=false){
   const now=Date.now(),age=Math.max(0,now-timestamp);const delivered:Cue[]=[];
   for(const original of analysis.cues){
@@ -342,6 +345,9 @@ function deliver(analysis:Analysis,timestamp:number,fast=false){
       spokenAt.set('$counter-category',now);spokenAt.set(item,now);
     }
     spokenAt.set(cue.key,now);if(spokenAt.size>200)spokenAt.delete(spokenAt.keys().next().value!);
+    // A debuff / CC call already says "get out" with the reason: hold the generic health back-off
+    // (often from the fast path a second later) for its cooldown, as the engine does.
+    if(cue.key.startsWith('active:debuff:')||cue.key==='active:cc')spokenAt.set('lane:back_off',now);
     cue.text=cue.text.replace(/hero_[a-z_]+/g,id=>heroNames[id]||id.replace('hero_','').replaceAll('_',' '));
     speaker.say(cue);delivered.push(cue);logCue(cue,analysis.snapshot,fast);
   }

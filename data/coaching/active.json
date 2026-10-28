@@ -1,0 +1,91 @@
+{
+  "schema_version": 1,
+  "threshold_note": "All thresholds are coach heuristics tuned on recorded matches (rec3, rec5), not game rules. Distances are minimap fractions (map width = 1). An unread value never counts as safe or as evidence. fight_far starts where the positioning coach's help/join calls end (help_max_distance 0.45), so the two never describe the same fight.",
+  "thresholds": {
+    "cc_drop": 0.1, "cc_low": 0.6,
+    "window_min_secs": 15, "healthy": 0.6, "near_radius": 0.12,
+    "base_y": 0.86, "spend_early": 1600, "spend_late": 3200, "spend_late_clock": 1200,
+    "heal_below": 0.5, "purchase_drop": 800, "purchase_window_secs": 25,
+    "unsecured_min": 500, "unsecured_low_hp": 0.5,
+    "killer_share": 0.25, "killer_margin": 1.2, "close_share": 0.35, "repeat_deaths": 2, "lesson_delay_secs": 12,
+    "fight_allies": 3, "fight_enemies": 2, "fight_radius": 0.15, "fight_far": 0.45, "fight_hold_secs": 8
+  },
+  "debuffs": [
+    { "status": "aura of suffering", "hero": "hero_frank", "card": "aura" },
+    { "status": "stalkers mark", "hero": "hero_drifter", "card": "stalkers_mark" }
+  ],
+  "killers_note": "Per-hero advice for a repeat killer. Items are class names from data/items.json; the first affordable one not owned is suggested, else the cheapest not owned. Victor's Aura and Drifter's Stalker's Mark / Rend are spirit damage over time that 'can be dispelled' (deadlock.wiki).",
+  "killers": [
+    { "hero": "hero_frank", "tip": "Keep out of his aura", "items": ["upgrade_reduce_debuff_duration", "upgrade_tech_purge", "upgrade_spirit_bubble"] },
+    { "hero": "hero_drifter", "tip": "Stay next to a teammate", "items": ["upgrade_reduce_debuff_duration", "upgrade_spirit_bubble"] }
+  ],
+  "roles_note": "Only heroes whose range is stated on their deadlock.wiki page are listed; unlisted heroes get no range advice.",
+  "roles": [
+    { "hero": "hero_orion", "role": "long_range", "source": { "path": "strategy/hero-threats.md", "section": "## 3. Grey Talon: a long-range hero", "basis": "WIKI", "excerpt": "harasses his enemies with arrows and spirit from long range" } }
+  ],
+  "close_sources_note": "Death-panel sources that only hit you up close (wiki: the aura has an 8m radius; Rend deals bonus melee damage in close range).",
+  "close_sources": ["Melee", "Aura of Suffering", "Rend"],
+  "generic_sources_note": "Death-panel rows that name no single hero; never attributed.",
+  "generic_sources": ["Melee", "Gun Damage", "Knocked off Zipline", "Heavy Melee", "Light Melee"],
+  "cards": [
+    { "id": "aura", "speech": "You're in {hero}'s Aura of Suffering: it hurts more the longer you stay. Back out of its range now.", "priority": "high", "cooldown_secs": 40,
+      "rationale": "The debuff badge proves you are inside the 8m aura; its damage ramps up while you stay.",
+      "sources": [
+        { "path": "strategy/hero-threats.md", "section": "## 1. Victor: Aura of Suffering", "basis": "WIKI", "excerpt": "The damage continues to increase the longer the ability is channeled, up to a maximum amount." },
+        { "path": "strategy/hero-threats.md", "section": "## 1. Victor: Aura of Suffering", "basis": "WIKI", "excerpt": "Get too close and risk getting caught in his Aura of Suffering" } ] },
+    { "id": "stalkers_mark", "speech": "{hero}'s Stalker's Mark is on you: he can appear behind you. Stand next to a teammate and keep your escape.", "priority": "high", "cooldown_secs": 30,
+      "rationale": "A marked, isolated hero is Drifter's ideal target: the mark lets him teleport behind you and Bloodscent amplifies damage on isolated heroes.",
+      "sources": [
+        { "path": "strategy/hero-threats.md", "section": "## 2. Drifter: Stalker's Mark, Rend, Bloodscent", "basis": "WIKI", "excerpt": "While the enemy is bleeding you can re-activate Stalker's Mark to instantly appear behind their back." },
+        { "path": "strategy/hero-threats.md", "section": "## 2. Drifter: Stalker's Mark, Rend, Bloodscent", "basis": "WIKI", "excerpt": "You deal amplified damage against isolated heroes" } ] },
+    { "id": "cc_stunned", "speech": "Stunned and losing health. The moment it ends, use your escape and break line of sight.", "priority": "high", "cooldown_secs": 30,
+      "rationale": "A stun while health falls means you are being focused; the escape held in reserve is what saves you.",
+      "sources": [
+        { "path": "strategy/teamfighting.md", "section": "## 6. Ultimate usage", "basis": "COMMUNITY", "excerpt": "hold defense for when focused" },
+        { "path": "strategy/teamfighting.md", "section": "## 5. Target priority", "basis": "WIKI", "excerpt": "Debuff Reducer/Dispel Magic/Divine Barrier vs DoT or CC" } ] },
+    { "id": "cc_silenced", "speech": "Silenced and losing health: no abilities for a moment. Back off behind cover until it wears off.", "priority": "high", "cooldown_secs": 30,
+      "rationale": "Without abilities you cannot trade back; leaving the fight until the silence ends avoids a one-sided exchange.",
+      "sources": [
+        { "path": "strategy/teamfighting.md", "section": "## 6. Ultimate usage", "basis": "COMMUNITY", "excerpt": "hold defense for when focused" },
+        { "path": "strategy/teamfighting.md", "section": "## 7. Spirit vs gun fights", "basis": "COMMUNITY", "excerpt": "Weapon heroes avoid walking into control for one extra shot" } ] },
+    { "id": "cc_zipline", "speech": "Knocked off the zipline under fire. Don't fight here: get behind cover and back to your team.", "priority": "high", "cooldown_secs": 30,
+      "rationale": "Being knocked off a zipline drops you where the enemy chose to fight, usually alone.",
+      "sources": [
+        { "path": "strategy/common-mistakes.md", "section": "## 16. Fighting split / piecemeal", "basis": "COMMUNITY", "excerpt": "Fall back and regroup. Don't fight split." } ] },
+    { "id": "window", "speech": "{count} enemies are dead for {secs} more seconds. Group up and push {lane} now.", "priority": "normal", "cooldown_secs": 45,
+      "rationale": "Greyed enemy portraits with long timers are a numbers advantage; on your own half with good health, the wave furthest toward their base converts it.",
+      "sources": [
+        { "path": "strategy/teamfighting.md", "section": "## 4. Engage / disengage", "basis": "COMMUNITY", "excerpt": "count survivors and take the highest-value safe action (objective, wave, reset) rather than chasing" },
+        { "path": "strategy/common-mistakes.md", "section": "## 10. Chasing kills instead of taking objectives", "basis": "COMMUNITY", "excerpt": "They are dead. Take the Walker now." } ] },
+    { "id": "base_spend", "speech": "You're in base holding {souls} souls. Spend them before you walk out.", "priority": "normal", "cooldown_secs": 120,
+      "rationale": "The base shop is the safe moment to buy; walking out unspent takes the fight without that power.",
+      "sources": [
+        { "path": "strategy/moba-fundamentals.md", "section": "### Itemization", "basis": "GENERAL", "excerpt": "Do not hoard souls through fights; buy during respawn or at the base." },
+        { "path": "strategy/economy-and-buy-order.md", "section": "## 4. When to buy", "basis": "COMMUNITY", "excerpt": "Spend steadily and stay alive; hoarding for one expensive item while dying is a trap (metabot)." } ] },
+    { "id": "heal_first", "speech": "You're heading out at {pct}% health. Heal before your next fight: standing in base restores health fast.", "priority": "normal", "cooldown_secs": 90,
+      "rationale": "Shopping does not heal; base regeneration does, quickly.",
+      "sources": [
+        { "path": "strategy/hero-threats.md", "section": "## 4. Recovering health", "basis": "WIKI", "excerpt": "Standing in base will quickly regenerate the player's health (adding +60 health per second and +6% of max health per second), allowing them to recover from fights." } ] },
+    { "id": "unsecured", "speech": "You carry {souls} unsecured souls {why}. Don't die with them: back off until they secure.", "priority": "normal", "cooldown_secs": 60,
+      "rationale": "Haunted souls are lost on death; they convert over time, so surviving the next seconds keeps them.",
+      "sources": [
+        { "path": "strategy/common-mistakes.md", "section": "## 5. Dying with haunted (unsecured) souls", "basis": "WIKI", "excerpt": "haunted souls are lost on death and drop in a Soul Bag only above 50 + 5/min." },
+        { "path": "strategy/economy-and-buy-order.md", "section": "## 3. Haunted vs secured souls", "basis": "WIKI", "excerpt": "Haunted souls convert to secured at 0.5%/s of the current haunted total plus a flat base" } ] },
+    { "id": "repeat_killer", "speech": "{killer}'s {ability} topped {count} of your deaths. {tip}{item}.", "priority": "normal", "cooldown_secs": 900,
+      "rationale": "The same enemy doing the most damage in several deaths is a pattern to answer with positioning and one defensive item.",
+      "sources": [
+        { "path": "strategy/common-mistakes.md", "section": "## 8. Not countering the enemy build", "basis": "COMMUNITY", "excerpt": "dying repeatedly to same damage type" },
+        { "path": "strategy/economy-and-buy-order.md", "section": "## 4. When to buy", "basis": "COMMUNITY", "excerpt": "defense if one pattern kills you" },
+        { "path": "strategy/teamfighting.md", "section": "## 7. Spirit vs gun fights", "basis": "WIKI", "excerpt": "DoT heroes -> debuff removers" } ] },
+    { "id": "close_deaths", "speech": "{count} of your deaths came up close. You're a long-range hero: fight from max range behind your front line.", "priority": "normal", "cooldown_secs": 900,
+      "rationale": "A long-range hero dying mostly to melee and close-range damage is fighting at the enemy's range.",
+      "sources": [
+        { "path": "strategy/hero-threats.md", "section": "## 3. Grey Talon: a long-range hero", "basis": "WIKI", "excerpt": "He uses traps and brief flight to maintain his distance" },
+        { "path": "strategy/teamfighting.md", "section": "## 3. Positioning", "basis": "COMMUNITY", "excerpt": "damage dealers behind with escape lanes; do not stand in front of your tank" } ] },
+    { "id": "fight_missed", "speech": "Your team is fighting {allies} against {enemies} at {area} without you. Rotate there now if your wave is safe.", "priority": "normal", "cooldown_secs": 60,
+      "rationale": "A team fight on the minimap far from you is fought a hero short.",
+      "sources": [
+        { "path": "strategy/lategame-and-closing.md", "section": "## 6. Throw prevention", "basis": "COMMUNITY", "excerpt": "A fight entered with team split or a teammate still walking from base is usually lost (metabot)." },
+        { "path": "strategy/common-mistakes.md", "section": "## 16. Fighting split / piecemeal", "basis": "COMMUNITY", "excerpt": "Fall back and regroup. Don't fight split." } ] }
+  ]
+}
