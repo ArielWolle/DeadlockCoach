@@ -102,6 +102,18 @@ pub struct HeroStatus {
     /// A different (bar visible, dead) state seen once; committed when the next frame agrees.
     #[serde(skip)]
     pub pending_state:Option<(Option<bool>,bool)>,
+    /// Consecutive respawn-timer reads that agree with a 1 s/s countdown (`respawn_secs`).
+    pub respawn_observations:u32,
+    /// Last countdown-confirmed respawn read (seconds, frame ms) and an unconfirmed candidate.
+    #[serde(skip)]
+    pub respawn_anchor:Option<(u32,u64)>,
+    #[serde(skip)]
+    pub respawn_candidate:Option<(u32,u64)>,
+    /// Game clock (s) when `networth` was last read, and a disagreeing value seen in a row.
+    #[serde(skip)]
+    pub networth_clock:Option<u32>,
+    #[serde(skip)]
+    pub networth_pending:Option<(u32,u8)>,
 }
 
 /// Positions are normalised minimap coordinates, (0,0) top-left, (1,1) bottom-right.

@@ -55,12 +55,19 @@ pub struct Scanner {
     /// Whether the previous frame showed the in-match HUD (skip pre-game probe lines).
     seen_hud: bool,
     was_dead: bool,
+    /// The previous frame showed the scoreboard (Tab), possibly over the death screen.
+    was_board: bool,
+    /// Your hero as last named on a live gameplay frame (own top-bar slot or minimap marker).
+    own_hero: Option<String>,
     totals_flip: bool,
     /// Last identity per item slot and how many scans in a row it repeated.
     item_votes: [Option<(String, u8)>; 12],
     /// Per ally slot: summed |slot health - your health| and joint reads (see own_slot).
     own_slot: [(f32, u32); 6],
 }
+
+/// Scoreboard columns whose hero-name line is probed on death screens (Tab over the death screen).
+const BOARD_PROBE: [usize; 4] = [1, 4, 8, 10];
 
 /// Your top-bar slot, once one slot's bar has clearly followed your own HP.
 pub fn own_slot(err: &[(f32, u32); 6]) -> Option<usize> {
@@ -96,15 +103,29 @@ pub fn plausible_item(name: &str, clock: Option<u32>) -> bool {
 /// Team net worth only grows (minor losses on death). A first value needs two consistent reads,
 /// a rise outside the band three; a drop of more than 10% needs ten consistent reads: a recorded match read
 /// ~100k as 1000 for 12 frames, which produced a false "you are behind" call.
-fn plausible(prev: &mut Option<u32>, pending: &mut Option<(u32, u32)>, v: Option<u32>) -> Option<u32> {
+/// `since_secs` is the time since `prev` was confirmed: the allowed rise grows with it, so a read
+/// after missed frames is not mistaken for a leap.
+pub fn plausible(prev: &mut Option<u32>, pending: &mut Option<(u32, u32)>, v: Option<u32>, since_secs: u64) -> Option<u32> {
     let v = v?;
-    // A team earns a few hundred souls a second: +8% (+2,500) between reads is already generous.
-    // rec5 accepted 121k -> 173k in one read (+43%) and called a lead while 20k behind.
-    let in_band = match *prev { Some(p) => v + p / 10 >= p && v <= p + p / 12 + 2500, None => false };
+    // A team earns ~70-120 souls a second (rec5); 250/s plus 2,500 is generous. rec5 accepted
+    // 121k -> 173k in one read (+43%) and called a lead while 20k behind.
+    let in_band = match *prev { Some(p) => v + p / 10 >= p && v as u64 <= p as u64 + 2500 + 250 * since_secs, None => false };
     let count = pending.filter(|(q, _)| v.abs_diff(*q) <= q / 10 + 1000).map(|(_, n)| n + 1).unwrap_or(1);
     let drop = prev.is_some_and(|p| v + p / 10 < p);
     let confirmed = count >= if drop { 10 } else if prev.is_none() { 2 } else { 3 };
     if in_band || confirmed { *prev = Some(v); *pending = None; Some(v) } else { *pending = Some((v, count)); None }
+}
+
+/// Range a team total must fall in given the confirmed per-hero labels (each rounded to 1k and
+/// up to 45 s old) of at least four of the team's six slots; missing slots are bounded by the
+/// smallest and largest known label. None when too few labels are known.
+pub fn team_sum_range(status: &[coach_core::HeroStatus], ally: bool) -> Option<(u32, u32)> {
+    let known: Vec<u32> = status.iter().filter(|s| s.ally == ally && s.networth_observations >= 2).filter_map(|s| s.networth).collect();
+    if known.len() < 4 { return None; }
+    let (sum, min, max) = (known.iter().sum::<u32>(), *known.iter().min()?, *known.iter().max()?);
+    let missing = 6u32.saturating_sub(known.len() as u32);
+    let (lo, hi) = (sum + missing * min * 7 / 10, sum + missing * max * 13 / 10);
+    Some(((lo as f32 * 0.85) as u32 - 3000.min((lo as f32 * 0.85) as u32), (hi as f32 * 1.15) as u32 + 8000))
 }
 
 fn load_hero_names(root: &Path) -> Vec<(String, String)> {
@@ -198,6 +219,8 @@ impl Scanner {
             worth_rr: Default::default(),
             seen_hud: false,
             was_dead: false,
+            was_board: false,
+            own_hero: None,
             totals_flip: false,
             item_votes: Default::default(),
             own_slot: Default::default(),
@@ -221,6 +244,7 @@ impl Scanner {
         self.team_status.clear();
         self.item_votes = Default::default();
         self.own_slot = Default::default();
+        self.own_hero = None;
         self.cadence.reset();
         self.death_cause = None;
         self.name_rects = vec![None; 12];
@@ -322,6 +346,11 @@ impl Scanner {
         let mut map = self.map_analyzer.analyze(map_crop);
         laps.lap("minimap");
         let mut batch = LineBatch::default();
+        // Top-bar readers use a copy with the bar moved back to its calibrated rows when it is
+        // drawn lower (rec5 298-326).
+        let top_dy = crate::team::top_bar_offset(img);
+        let top = crate::team::top_bar_aligned(img, top_dy);
+        let top: &image::DynamicImage = &top;
         let rects: Option<Vec<coach_perception::Bounds>> = screen::PROBE_SLOTS.iter().map(|i| self.name_rects.get(*i).copied().flatten()).collect();
         // Line budget: every recognized line costs ~width-proportional model time, so only
         // lines that can change a decision this frame are included.
@@ -333,19 +362,23 @@ impl Scanner {
         let souls_line = located.1.is_none().then(|| batch.add(img.crop_imm(70, 742, 130, 30)));
         // Team totals alternate ally / enemy per frame.
         self.totals_flip = !self.totals_flip;
-        let total_line = batch.add(hud::crop(img, if self.totals_flip { hud::ALLY_TOTAL } else { hud::ENEMY_TOTAL }));
+        let total_line = batch.add(hud::crop(top, if self.totals_flip { hud::ALLY_TOTAL } else { hud::ENEMY_TOTAL }));
         let vitals = self.vitals.tracked_crops(img).map(|c| batch.add_all(c));
         let urn_line = map.urn_pos.is_some().then(|| batch.add(hud::crop(img, crate::Region { x: 710.0 / 1600.0, y: 585.0 / 900.0, w: 190.0 / 1600.0, h: 32.0 / 900.0 })));
-        // Team banners and earned-souls labels rotate: 4 + 3 of 12 per frame.
+        // Team banners and earned-souls labels rotate: 3 + 6 of 12 per frame (the 18x14 label
+        // crops are cheap; rec5 read 0.5% of slot-frames with 2 per frame and a wide crop).
         let status_slots = self.status_rr.take(12, 3);
-        let status = batch.add_all(crate::team::status_crops_for(img, &status_slots));
-        let worth_slots = self.worth_rr.take(12, 2);
-        let worth = batch.add_all(crate::team::networth_crops_for(img, &worth_slots));
+        let status = batch.add_all(crate::team::status_crops_for(top, &status_slots));
+        let worth_slots = self.worth_rr.take(12, 6);
+        let worth = batch.add_all(crate::team::networth_crops_for(top, &worth_slots));
+        // While dead, Tab overlays the scoreboard on the death screen (rec5 503-519), which the
+        // screen classifier reports as Dead: four hero-name lines tell.
+        let board_probe = (self.was_dead || self.was_board).then(|| batch.add_all(crate::scoreboard::hero_line_crops_for(img, &BOARD_PROBE)));
         // Health bars / dead portraits are pixel reads for all twelve slots; only dead slots add
         // a respawn-timer line. Committed below for gameplay frames only (the death screen tints them).
         let mut bar_status = self.team_status.clone();
-        let dead_slots = crate::team::apply_bars(img, &mut bar_status);
-        let respawn_lines = batch.add_all(crate::team::respawn_crops(img, &dead_slots));
+        let dead_slots = crate::team::apply_bars(top, &mut bar_status);
+        let respawn_lines = batch.add_all(crate::team::respawn_crops(top, &dead_slots));
         let batched = batch.len();
         let lines = batch.run(|crops| self.ocr.read_lines(crops));
         laps.lap(&format!("line batch ({batched} lines)"));
@@ -370,6 +403,8 @@ impl Scanner {
         laps.lap("screen + scoreboard check");
         self.seen_hud = scr.has_hud();
         self.was_dead = scr == Screen::Dead;
+        let board_visible = scr == Screen::Scoreboard || scr == Screen::Dead && board_probe.clone().is_some_and(|r| lines[r].iter().filter(|l| crate::scoreboard::match_hero(l, &self.hero_names).is_some()).count() >= 2);
+        self.was_board = board_visible;
         if !scr.has_hud() { self.laps = laps; return GameSnapshot { screen: Some(format!("{scr:?}")), ..Default::default() }; }
 
         // New match? Reset all per-match memory. The id needs detector OCR, so it is sampled.
@@ -509,7 +544,7 @@ impl Scanner {
         if raw_clock.is_some() && self.cadence.due("portraits", now_ms, 2000) {
             self.frames += 1;
             for (i, cx) in hud::ALLY_CENTERS.iter().chain(hud::ENEMY_CENTERS.iter()).enumerate() {
-                let c = hud::crop(&img, hud::portrait(*cx));
+                let c = hud::crop(top, hud::portrait(*cx));
                 let crit: HashMap<String, f32> = self.heroes_crit.scores(&c).into_iter().collect();
                 for (n, s) in self.heroes.scores(&c) {
                     let s = s.max(crit.get(&n).copied().unwrap_or(f32::MIN));
@@ -524,27 +559,49 @@ impl Scanner {
         laps.lap("portraits");
 
         // Scoreboard: names are far more reliable than portraits, so they win.
-        if scr == Screen::Scoreboard {
-            let (rows, found) = crate::scoreboard::read_with_rects(&self.ocr, &self.items, &self.hero_names, &img);
+        // Read on Tab screens only, including Tab over the death screen. Hero names come from the
+        // cheap per-column hero-name line; the detector runs only until every slot's name
+        // rectangle (used by the screen probe) is known.
+        if board_visible {
+            let acquire = self.name_rects.iter().any(Option::is_none);
+            let (mut rows, found) = crate::scoreboard::read_board(&self.ocr, &self.items, &self.hero_names, &img, acquire);
             for (slot, rect) in self.name_rects.iter_mut().zip(found) { if rect.is_some() { *slot = rect; } }
+            // K/D/A never decrease within a match: a lower read than the previous board is a misread.
+            if let Some(prev) = self.board_history.last() {
+                for (r, p) in rows.iter_mut().zip(prev) {
+                    if r.kills.zip(p.kills).is_some_and(|(a, b)| a < b) { r.kills = None; }
+                    if r.deaths.zip(p.deaths).is_some_and(|(a, b)| a < b) { r.deaths = None; }
+                    if r.assists.zip(p.assists).is_some_and(|(a, b)| a < b) { r.assists = None; }
+                }
+            }
             for (i, r) in rows.iter().enumerate() { if r.hero.is_some() { assign[i] = r.hero.clone(); } }
             self.board_history.push(rows.clone());
             if self.board_history.len() > 5 { self.board_history.remove(0); }
             self.last_board = self.voted_board();
             snap.players = self.last_board.clone();
+            // Your row: the slot whose bar follows your HP, else the ally row of your hero.
+            let own_row = own_slot(&self.own_slot).or_else(|| self.own_hero.as_ref().and_then(|h| (0..6).find(|i| assign[*i].as_ref() == Some(h))));
+            if let Some(own) = own_row.and_then(|s| rows.get(s)) {
+                snap.kills = own.kills; snap.deaths = own.deaths; snap.assists = own.assists;
+            }
         }
         for (i, r) in self.last_board.iter().enumerate() {
             if let Some(h) = &r.hero { if assign[i].is_none() { assign[i] = Some(h.clone()); } }
         }
         snap.ally_heroes = assign[..6].iter().flatten().cloned().collect();
         snap.enemy_heroes = assign[6..].iter().flatten().cloned().collect();
-        if scr==Screen::Gameplay {
-            self.team_status=crate::team::apply_status_slots(img,&lines[status.clone()],&status_slots,&bar_status);
-            crate::team::apply_respawn(&lines[respawn_lines.clone()],&dead_slots,&mut self.team_status);
+        // The top bar is drawn on gameplay, death and Tab screens alike (rec5: all 86 death
+        // frames showed it, with ally respawn timers), so it is read on every HUD screen.
+        if scr.has_hud() {
+            self.team_status=crate::team::apply_status_slots(top,&lines[status.clone()],&status_slots,&bar_status);
+            let respawn=crate::team::checked_respawn_lines(top,&lines[respawn_lines.clone()],&dead_slots);
+            crate::team::apply_respawn(&respawn,&dead_slots,now_ms,&mut self.team_status);
             for(i,status)in self.team_status.iter_mut().enumerate(){status.hero=assign[i].clone();}
             crate::team::apply_networth_slots(&lines[worth.clone()],&worth_slots,snap.game_clock_secs.or(raw_clock).unwrap_or(0),&mut self.team_status);
             snap.hero_status=self.team_status.clone();
             crate::team::positions(&mut snap,map_crop,&self.heroes);
+            // While dead the minimap "you" marker follows the spectated hero: not your identity.
+            if scr==Screen::Dead{snap.hero=None;snap.own_networth=None;}
             self.team_status=snap.hero_status.clone();
             // You are one of the six ally top-bar slots: the one whose health bar follows your own
             // HP. Accumulate the gap per slot (rec2: 0.035 mean for the right slot, >= 0.25 for
@@ -558,6 +615,13 @@ impl Scanner {
             if let Some(slot) = own_slot(&self.own_slot) {
                 snap.hero = assign[slot].clone();
                 if snap.own_networth.is_none() { snap.own_networth = snap.hero_status.iter().find(|s| s.ally && s.slot == slot).and_then(|s| s.networth); }
+            }
+            if scr == Screen::Gameplay { if let Some(h) = &snap.hero { self.own_hero = Some(h.clone()); } }
+            // Your earned souls stay readable from your own slot label while dead or on Tab.
+            if snap.own_networth.is_none() {
+                if let Some(h) = snap.hero.clone().or_else(|| self.own_hero.clone()) {
+                    snap.own_networth = snap.hero_status.iter().find(|s| s.ally && s.hero.as_ref() == Some(&h)).and_then(|s| s.networth);
+                }
             }
         }
         // Enemy items seen on the most recent scoreboard.
@@ -573,12 +637,26 @@ impl Scanner {
         let fresh = |at: Option<u64>| at.is_some_and(|t| now_ms >= t && now_ms - t <= 60_000);
         if !fresh(self.totals_at.0) { self.last_totals.0 = None; }
         if !fresh(self.totals_at.1) { self.last_totals.1 = None; }
-        if self.totals_flip {
-            let a = hud::pick_total(&hud::team_total_candidates(text(total_line)), self.last_totals.0);
-            if plausible(&mut self.last_totals.0, &mut self.pending_totals.0, a).is_some() { self.totals_at.0 = Some(now_ms); }
+        // Team-total candidates are limited to what the clock allows (rec5 after its recording gap
+        // read "184" as 18k and "197" as ambiguous, so the ally total stuck at 18k-62k and the
+        // enemy total stayed unknown for 300 frames) and to the per-hero labels' sum.
+        let clock_now = snap.game_clock_secs.or(raw_clock);
+        let since = |at: Option<u64>| at.map(|t| now_ms.saturating_sub(t) / 1000).unwrap_or(0);
+        let ally = self.totals_flip;
+        let mut cands = hud::team_total_candidates_at(text(total_line), clock_now);
+        if let Some((lo, hi)) = team_sum_range(&self.team_status, ally) {
+            cands.retain(|v| *v >= lo && *v <= hi);
+            // A baseline the labels contradict is dropped, not defended: rec5's white enemy
+            // digits read "193" as "103" on consecutive frames right after the recording gap.
+            let (last, pending) = if ally { (&mut self.last_totals.0, &mut self.pending_totals.0) } else { (&mut self.last_totals.1, &mut self.pending_totals.1) };
+            if last.is_some_and(|v| v < lo || v > hi) { *last = None; *pending = None; }
+        }
+        if ally {
+            let a = hud::pick_total(&cands, self.last_totals.0);
+            if plausible(&mut self.last_totals.0, &mut self.pending_totals.0, a, since(self.totals_at.0)).is_some() { self.totals_at.0 = Some(now_ms); }
         } else {
-            let e = hud::pick_total(&hud::team_total_candidates(text(total_line)), self.last_totals.1);
-            if plausible(&mut self.last_totals.1, &mut self.pending_totals.1, e).is_some() { self.totals_at.1 = Some(now_ms); }
+            let e = hud::pick_total(&cands, self.last_totals.1);
+            if plausible(&mut self.last_totals.1, &mut self.pending_totals.1, e, since(self.totals_at.1)).is_some() { self.totals_at.1 = Some(now_ms); }
         }
         snap.ally_networth = self.last_totals.0;
         snap.enemy_networth = self.last_totals.1;
