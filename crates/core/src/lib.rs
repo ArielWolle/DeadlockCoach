@@ -98,10 +98,28 @@ pub struct GameSnapshot {
     #[serde(default)]
     pub death_total_damage: Option<u32>,
     /// Status effects on you this frame: "stunned", "silenced", "disarmed", "out_of_stamina",
-    /// "knocked_off_zipline", plus debuff badge names (e.g. "Aura of Suffering"). Empty means
-    /// none read on this frame (not proof of none).
+    /// "knocked_off_zipline", "afflicted", "frozen", "slowed" (a movement-speed debuff badge),
+    /// "carrying_urn" (the "DELIVER THE URN" prompt), plus debuff badge names (e.g. "Aura of
+    /// Suffering"). Empty means none read on this frame (not proof of none).
     #[serde(default)]
     pub status_effects: Vec<String>,
+    /// Boss health banner at the top centre ("HIDDEN KING" / "ARCHMOTHER": a Patron is under
+    /// attack). None = no banner read on this frame.
+    #[serde(default)]
+    pub objective_banner: Option<ObjectiveBanner>,
+}
+
+/// A top-centre objective health banner.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ObjectiveBanner {
+    /// Canonical name: "HIDDEN KING" or "ARCHMOTHER".
+    pub name: String,
+    /// Whether it is your team's objective (Hidden King is yours on a mirrored lane layout,
+    /// Archmother otherwise); None while the layout is unknown.
+    pub own: Option<bool>,
+    /// Remaining health of the bar, 0..1 (both phases together); None when unreadable.
+    pub health_ratio: Option<f32>,
 }
 
 /// One source row of the incoming-damage panel.

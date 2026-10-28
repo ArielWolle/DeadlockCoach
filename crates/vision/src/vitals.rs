@@ -19,6 +19,10 @@ pub const MAX_PANEL: Region = Region { x: 145.0 / 1600.0, y: 675.0 / 900.0, w: 1
 /// readings, so near-empty bars catch a dropped digit ("10" for 104/964) that a fixed 15-point
 /// tolerance missed.
 pub fn bar_tolerance(bar: f32) -> f32 { 0.06 + 0.15 * bar }
+/// Whether a reading (`ratio` of max) agrees with the bar. The near-empty bar under-reads (rec8
+/// 44:24-44:56: 112/2917 measured 0.0, 286/2917 0.04, 614/2917 0.13), so a reading above the
+/// bar gets 0.06 more room; a reading below it (a dropped digit) keeps the tight tolerance.
+pub fn bar_agrees(ratio: f32, bar: f32) -> bool { let d = ratio - bar; d.abs() <= bar_tolerance(bar) || (d > 0.0 && d <= bar_tolerance(bar) + 0.06) }
 /// `bar_ratio` measured at full health (the top rows sit under the frame's tab).
 pub const BAR_FULL: f32 = 0.97;
 pub fn bar_ratio(frame: &DynamicImage) -> Option<f32> {
@@ -57,6 +61,8 @@ pub struct Tracker {
     max_pending: Option<(u32, u8)>,
     /// Last max HP that passed max_plausible (the bar fallback scales by it).
     trusted_max: Option<(u64, u32)>,
+    /// A low-HP tracked read held back for a detector re-read: (hp, max).
+    redetect: Option<(u32, u32)>,
 }
 pub struct Reading { pub hp: u32, pub max: u32, pub observations: u32, pub delta: Option<f32>, pub regions: Vec<RegionObservation> }
 
@@ -82,14 +88,25 @@ impl Tracker {
         Some([frame.crop_imm(a, b, c, d), frame.crop_imm(e, f, g, i)])
     }
     pub fn is_tracking(&self) -> bool { self.hp.bounds.is_some() && self.max.bounds.is_some() }
+    /// The last accepted reading was low (under 10% of max or below 100).
+    fn low(&self) -> bool { self.previous.is_some_and(|(_, hp, max, _)| max >= 500 && (hp < 100 || hp * 10 < max)) }
+    /// A low-HP tracked read that `accept_lines` held back: run the detector (`read`), and fall
+    /// back to `accept_held` with this value when it cannot read.
+    pub fn take_redetect(&mut self) -> Option<(u32, u32)> { self.redetect.take() }
+    /// Accept a held-back tracked read (the tracked boxes stay).
+    pub fn accept_held(&mut self, hp: u32, max: u32, now: u64) -> Reading {
+        let regions = self.hp.bounds.zip(self.max.bounds).map(|(h, m)| vec![region("hp", h), region("max_hp", m)]).unwrap_or_default();
+        let mut r = self.accept(hp, max, now); r.regions = regions; r
+    }
     /// Set the health-bar fraction of the frame about to be read.
     pub fn set_bar(&mut self, bar: Option<f32>) { self.bar = bar; }
     fn bar_supports(&self, hp: u32, max: u32) -> bool {
-        self.bar.is_some_and(|b| { let b = (b / BAR_FULL).min(1.0); (hp as f32 / max.max(1) as f32 - b).abs() <= bar_tolerance(b) })
+        self.bar.is_some_and(|b| { let b = (b / BAR_FULL).min(1.0); bar_agrees(hp as f32 / max.max(1) as f32, b) })
     }
 
     /// Interpret batched line reads of the tracked boxes.
     pub fn accept_lines(&mut self, current: &str, maximum: &str, now: u64) -> Option<Reading> {
+        self.redetect = None;
         let hp = numbers(current).into_iter().next();
         let maxima: Vec<u32> = numbers(maximum).into_iter().filter(|n| (100..=20000).contains(n)).collect();
         // A tracked box can truncate a number that just gained a digit (999 -> 1,021 read as
@@ -98,6 +115,12 @@ impl Tracker {
         let jump = |hp: u32, max: u32| self.previous.is_some_and(|(t, old, _, _)| now >= t && now - t <= 20000 && hp.abs_diff(old) as f32 > max as f32 * 0.3);
         match (hp, maxima.as_slice()) {
             (Some(hp), [max]) if hp <= *max && jump(hp, *max) && !self.bar_supports(hp, *max) => { self.hp.reset(); self.max.reset(); None }
+            // At low HP a tracked box is not trusted: the box of a short number truncates a longer
+            // one on both sides ("11" for 112 for 30 s in rec8 44:27-44:53; the near-empty bar
+            // under-reads by ~0.04 and cannot tell), and the box of "286" read 614 as "314". Low HP
+            // is when the value matters most, so the detector re-reads the whole number (the
+            // caller runs it, see `take_redetect`); this read is the fallback.
+            (Some(hp), [max]) if hp <= *max && *max >= 500 && (hp < 100 || hp * 10 < *max || self.low()) => { self.redetect = Some((hp, *max)); None }
             (Some(hp), [max]) if hp <= *max => {
                 let (hb, mb) = (self.hp.bounds?, self.max.bounds?);
                 let digits = (hp.to_string().len(), max.to_string().len());
@@ -107,6 +130,8 @@ impl Tracker {
                 if digits != self.digits { self.hp.reset(); self.max.reset(); } else { self.hp.hit(hb); self.max.hit(mb); }
                 Some(r)
             }
+            // At low HP one failed read re-acquires at once (rec8 44:15: the max box read "84").
+            _ if self.low() => { self.hp.reset(); self.max.reset(); self.previous = None; None }
             _ => { if self.hp.miss() | self.max.miss() { self.hp.forget(); self.max.forget(); } self.previous = None; None }
         }
     }
@@ -150,7 +175,7 @@ impl Tracker {
     /// beyond 15 percentage points the reading is rejected and both boxes are re-acquired.
     pub fn agrees_with_bar(&mut self, r: &Reading, bar: Option<f32>) -> bool {
         let Some(bar) = bar.map(|b| (b / BAR_FULL).min(1.0)) else { return true };
-        let ok = (r.hp as f32 / r.max.max(1) as f32 - bar).abs() <= bar_tolerance(bar);
+        let ok = bar_agrees(r.hp as f32 / r.max.max(1) as f32, bar);
         if !ok { self.hp.reset(); self.max.reset(); self.previous = None; }
         ok
     }
@@ -195,6 +220,26 @@ impl Tracker {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn a_short_number_in_a_tracked_box_is_re_read_by_the_detector() {
+        // rec8 44:27-44:53: the box of "92" read "11", "16", "22", "28" for 112..286 HP.
+        let mut t = Tracker::default();
+        let b = Bounds { x: 10, y: 10, w: 20, h: 12 };
+        t.hp.hit(b); t.max.hit(b); t.digits = (2, 4);
+        assert!(t.accept_lines("11", "/ 2917", 0).is_none(), "held back for the detector");
+        assert_eq!(t.take_redetect(), Some((11, 2917)));
+        assert!(t.is_tracking(), "the boxes stay for the fallback");
+        // The detector could not read: the tracked value is the fallback.
+        assert_eq!(t.accept_held(39, 2917, 1000).hp, 39);
+        // Still low (under 10%): a 3-digit tracked read is re-read too ("314" for 614).
+        t.digits = (3, 4);
+        assert!(t.accept_lines("286", "/ 2917", 2000).is_none());
+        assert_eq!(t.take_redetect(), Some((286, 2917)));
+        t.accept_held(1700, 2917, 3000);
+        t.digits = (4, 4);
+        assert_eq!(t.accept_lines("1712", "/ 2917", 4000).map(|r| r.hp), Some(1712), "healthy: tracked reads are used");
+        assert_eq!(t.take_redetect(), None);
+    }
     #[test]
     fn a_level_up_drops_the_held_max_so_the_bar_cannot_scale_a_stale_value() {
         // rec5 frame 481: 2786/3144 reported from the bar x the old max while the screen showed

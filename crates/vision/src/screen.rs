@@ -131,7 +131,11 @@ pub fn probe_says_respawn(lines: &[String], p: &Probe) -> bool { lines.get(p.res
 /// Majority vote over clock candidates; only readings with a separator are considered.
 pub fn vote_clock(lines: &[String], expected: Option<u32>) -> Option<u32> {
     let parsed: Vec<Option<u32>> = lines.iter().map(|s| Some(s.trim()).filter(|s| s.contains(':')).and_then(parse::parse_clock).filter(|v| *v <= 14400)).collect();
-    coach_perception::track::vote(&parsed, |v| expected.map_or(0, |e| v.abs_diff(e) as u64))
+    let winner = coach_perception::track::vote(&parsed, |v| expected.map_or(0, |e| v.abs_diff(e) as u64))?;
+    // The narrow tens-of-minutes "1" is the glyph a tight box loses ("5:31" for 15:31 in the
+    // leftmost box, rec8): a candidate exactly whole tens of minutes above the winner has the
+    // digit the winner dropped, and wins whatever the expectation (which may lack it too).
+    Some(parsed.iter().flatten().copied().filter(|c| *c > winner && (c - winner) % 600 == 0).max().unwrap_or(winner))
 }
 
 fn has(s: &str, needle: &str) -> bool { s.to_ascii_uppercase().contains(needle) }

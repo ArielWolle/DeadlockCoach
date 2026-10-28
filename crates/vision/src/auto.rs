@@ -47,7 +47,9 @@ pub struct AutoScanner {legacy:Scanner,reader:Reader,map:MapLocator,clock:crate:
     /// minimap (shop, menus, effects over the map) are classified in it.
     last_context:Option<(Bounds,(u32,u32))>,
     /// When the tracked minimap box is next re-checked by a fresh search (ms).
-    relocate_at:u64}
+    relocate_at:u64,
+    /// A differently sized minimap find and how many searches in a row found it (see `scan`).
+    map_contender:Option<(Bounds,u32)>}
 
 /// Canonical 1600x900 image of a context rectangle (pixel-exact when within 2% of 1:1; a ~0.1%
 /// resample blurred the small HUD digits enough to read 5:13 as 6:13 on a letterboxed shot).
@@ -69,10 +71,22 @@ const MAP_HOLD_SCORE:f32=0.2;
 /// must out-score it to replace it.
 const MAP_RECHECK_MS:u64=5_000;
 const MAP_SWITCH_MARGIN:f32=0.02;
+/// Consecutive searches that must find a differently sized minimap before it replaces the box
+/// in use.
+const MAP_CONTENDER_FINDS:u32=3;
+/// Minimap boxes of the same size (within 5%).
+fn same_size(a:Bounds,b:Bounds)->bool{(a.w as f32/b.w.max(1) as f32-1.).abs()<=0.05&&(a.h as f32/b.h.max(1) as f32-1.).abs()<=0.05}
+/// The same minimap box re-located with landmark jitter (within 3% / 3 px).
+fn jitter(a:Bounds,b:Bounds)->bool{let t=(b.w as f32*0.03).max(3.);(a.x as f32-b.x as f32).abs()<=t&&(a.y as f32-b.y as f32).abs()<=t&&(a.w as f32-b.w as f32).abs()<=t&&(a.h as f32-b.h as f32).abs()<=t}
+/// Count a contender find: consecutive finds of the same box, restarting on another box.
+fn contend(c:&mut Option<(Bounds,u32)>,f:Bounds)->u32{
+    let n=match *c{Some((b,n)) if jitter(f,b)=>n+1,_=>1};
+    *c=Some((f,n));n
+}
 impl AutoScanner {
     pub fn new(legacy:Scanner,reader:Reader)->Self{Self{legacy,reader,map:MapLocator::default(),clock:Default::default(),regions:vec![],previous_map:None,
-        clock_box:Tracked::default(),currency_box:Tracked::default(),map_tracker:Default::default(),laps:Default::default(),had_context:false,verified_map:None,relocate_at:0,last_context:None}}
-    pub fn reset(&mut self){self.legacy.reset();self.clock=Default::default();self.regions.clear();self.previous_map=None;self.clock_box.reset();self.currency_box.reset();self.map_tracker=Default::default();self.had_context=false;self.verified_map=None;self.last_context=None;}
+        clock_box:Tracked::default(),currency_box:Tracked::default(),map_tracker:Default::default(),laps:Default::default(),had_context:false,verified_map:None,relocate_at:0,last_context:None,map_contender:None}}
+    pub fn reset(&mut self){self.legacy.reset();self.clock=Default::default();self.regions.clear();self.previous_map=None;self.clock_box.reset();self.currency_box.reset();self.map_tracker=Default::default();self.had_context=false;self.verified_map=None;self.last_context=None;self.map_contender=None;}
     /// A frame without a located minimap is scanned in the last context rectangle of this frame
     /// size (the HUD does not move within a match), or the whole frame when it is 16:9. The
     /// scene then decides: Shop / dead with the shop open, post-game, menus, loading, or
@@ -102,26 +116,40 @@ impl AutoScanner {
         let due=now>=self.relocate_at||now+60_000<self.relocate_at;
         if due{self.relocate_at=now+MAP_RECHECK_MS;}
         let better=|f:&coach_perception::localization::Located,score:f32|f.score>score+MAP_SWITCH_MARGIN;
-        let rechecked=tracked.and_then(|t|due.then(||self.map.locate(frame)).flatten().filter(|f|better(f,t.score)));
+        // A fresh find of another size than the box it would replace is a contender: it replaces
+        // that box only after MAP_CONTENDER_FINDS searches in a row found it. rec5 8-32 re-checked
+        // a tracked minimap against a 262-px "minimap" over your hero that scored higher, and
+        // rec8 48:20 (base under siege, every lane red) adopted a 313-px one on a weak hold;
+        // both lost the minimap for the rest of the stretch (rec8: until death, 48:20-49:42).
+        let rechecked=match (tracked,due) {
+            (Some(t),true) => self.map.locate(frame).filter(|f|better(f,t.score))
+                .filter(|f|same_size(f.bounds,t.bounds)||contend(&mut self.map_contender,f.bounds)>=MAP_CONTENDER_FINDS),
+            _ => None,
+        };
         let tracked=rechecked.or(tracked);
         let map=tracked.or_else(||{
             let found=self.map.locate(frame);
-            let same=|a:Bounds,b:Bounds|(a.w as f32/b.w.max(1) as f32-1.).abs()<=0.05&&(a.h as f32/b.h.max(1) as f32-1.).abs()<=0.05;
-            // A find within a few pixels of the verified box is the same minimap re-located with
-            // landmark jitter: keep the verified box. rec2 late game re-located 398x416 for the
-            // verified 403x421, which moved the derived scene context by 17 px; every top-bar crop
-            // slid and ally slot 2 read Bookworm instead of Bebop for the rest of the match.
-            let jitter=|a:Bounds,b:Bounds|{let t=(b.w as f32*0.03).max(3.);(a.x as f32-b.x as f32).abs()<=t&&(a.y as f32-b.y as f32).abs()<=t&&(a.w as f32-b.w as f32).abs()<=t&&(a.h as f32-b.h as f32).abs()<=t};
             match (found,verified) {
-                // ...unless the find matches clearly better than the verified box (a wrong box latched).
-                (Some(f),Some(v)) if jitter(f.bounds,v) => match self.map.hold(frame,v,0.0) {
+                // A find within a few pixels of the verified box is the same minimap re-located with
+                // landmark jitter: keep the verified box (rec2 late game re-located 398x416 for the
+                // verified 403x421, which moved the derived scene context by 17 px; every top-bar
+                // crop slid and ally slot 2 read Bookworm instead of Bebop for the rest of the
+                // match), unless the find matches clearly better (a wrong box latched).
+                (Some(f),Some(v)) if jitter(f.bounds,v) => { self.map_contender=None; match self.map.hold(frame,v,0.0) {
                     Some(h) if !better(&f,h.score) => Some(coach_perception::localization::Located{bounds:v,score:h.score}),
                     _ => Some(f),
-                },
+                }},
                 // The minimap does not move within a match: a differently sized box is a false find
-                // while the verified one still matches (rec4 frame 500 found a 340-px box).
-                (Some(f),Some(v)) if !same(f.bounds,v) => self.map.hold(frame,v,MAP_HOLD_SCORE).or(Some(f)),
-                (Some(f),_) => Some(f),
+                // while the verified one still matches (rec4 frame 500 found a 340-px box); it
+                // replaces the verified box only as a confirmed contender.
+                (Some(f),Some(v)) if !same_size(f.bounds,v) => {
+                    let confirmed=contend(&mut self.map_contender,f.bounds)>=MAP_CONTENDER_FINDS;
+                    match self.map.hold(frame,v,MAP_HOLD_SCORE) {
+                        Some(h) if !(confirmed&&better(&f,h.score)) => Some(h),
+                        _ => confirmed.then_some(f),
+                    }
+                }
+                (Some(f),_) => { self.map_contender=None; Some(f) },
                 (None,Some(v)) => self.map.hold(frame,v,MAP_HOLD_SCORE),
                 (None,None) => None,
             }

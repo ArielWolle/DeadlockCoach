@@ -672,7 +672,15 @@ impl Scanner {
             let strip = crate::zone::label_strip(img, (crate::minimap::FRAC_X * fw, crate::minimap::FRAC_Y * fh, crate::minimap::FRAC_W * fw, crate::minimap::FRAC_H * fh));
             batch.add_all(crate::zone::label_parts(&strip))
         });
-        let urn_line = (map.urn_pos.is_some() || !map.urn_marks.is_empty()).then(|| batch.add(hud::crop(img, crate::Region { x: 710.0 / 1600.0, y: 585.0 / 900.0, w: 190.0 / 1600.0, h: 32.0 / 900.0 })));
+        // "DELIVER THE URN" is read when its pale-green glyph pixels are present (a cheap gate on
+        // every frame: rec8 27:27-27:41 lost the carry whenever the minimap vase was not found)
+        // or when the minimap shows an urn.
+        let urn_line = match crate::status::urn_prompt(&view) {
+            Some(c) => Some((batch.add(c), true)),
+            None => (map.urn_pos.is_some() || !map.urn_marks.is_empty()).then(|| (batch.add(crate::status::urn_prompt_crop(&view)), false)),
+        };
+        // Objective health banner (a Patron under attack), gated by its bar and name pixels.
+        let banner_line = crate::status::objective_banner(&view).map(|(c, health)| (batch.add(c), health));
         // Team banners and earned-souls labels rotate: 3 + 6 of 12 per frame (the 18x14 label
         // crops are cheap; rec5 read 0.5% of slot-frames with 2 per frame and a wide crop).
         let status_slots = self.status_rr.take(12, 3);
@@ -781,7 +789,11 @@ impl Scanner {
             // exact glyphs and read glyph-scaled context with a vote.
             let fixed = self.ocr.read(&hud::crop(img, hud::CLOCK)).ok().and_then(|s| parse::parse_clock(&s)).filter(|v| *v <= 14400);
             let near = |a: Option<u32>| matches!((fixed, a), (Some(f), Some(e)) if f.abs_diff(e) <= 1);
-            let agrees = near(expected) || near(located.0) || near(hint);
+            // Independent evidence that itself lacks the tens-of-minutes digit of the verified
+            // extrapolation does not vouch for a fixed read (rec8 live: a mis-scaled context and a
+            // narrow window-scale box both read "5:31" for 15:31 and "agreed").
+            let tens_drop = matches!((fixed, expected), (Some(f), Some(e)) if f < e && coach_perception::track::tens_of_minutes_apart(f, e));
+            let agrees = near(expected) || (!tens_drop && (near(located.0) || near(hint)));
             // The glyph search (~3 s in WASM) runs only when the fixed read is suspect: first anchor,
             // no read, or a whole-minute-only difference (the measured misread pattern).
             let minute_only = [expected, raw_clock, located.0, hint].into_iter().flatten()
@@ -804,10 +816,18 @@ impl Scanner {
 
         // Personal carry has a literal HUD instruction. Unlike proximity to a hero ring,
         // this can establish that YOU carry the urn, except while spectating.
-        if let Some(i) = urn_line {
+        let mut carrying_urn = false;
+        if let Some((i, gated)) = urn_line {
             let instruction = text(i).to_ascii_uppercase();
-            if scr != Screen::Dead && raw_clock.unwrap_or(0) >= 600 && instruction.contains("DELIVER") && instruction.contains("URN") {
+            let says = if gated { crate::status::says_deliver_urn(&instruction) } else { instruction.contains("DELIVER") && instruction.contains("URN") };
+            if scr != Screen::Dead && raw_clock.unwrap_or(0) >= 600 && says {
                 map.urn = Some(coach_core::UrnState::CarriedByYou);
+                carrying_urn = true;
+            }
+        }
+        if let Some((i, health)) = banner_line.filter(|_| matches!(scr, Screen::Gameplay | Screen::Dead)) {
+            if let Some(name) = crate::status::match_banner(text(i)) {
+                snap.objective_banner = Some(coach_core::ObjectiveBanner { name: name.into(), own: crate::status::banner_is_own(name, self.map_tracker.layout()), health_ratio: Some((health * 100.0).round() / 100.0) });
             }
         }
         // A cyan portrait must never create an urn before its first spawn.
@@ -863,6 +883,17 @@ impl Scanner {
                 self.vitals.set_bar(bar);
                 let mut reading = vitals.clone().and_then(|r| self.vitals.accept_lines(text(r.start), text(r.start + 1), now_ms))
                     .filter(|r| self.vitals.agrees_with_bar(r, bar)).filter(|r| self.vitals.max_plausible(r.max, now_ms));
+                // Low HP: a tracked read is re-read by the detector (whole number); the tracked
+                // value is the fallback when the detector cannot read it.
+                if reading.is_none() {
+                    if let Some((hp, max)) = self.vitals.take_redetect() {
+                        reading = self.vitals.read(&self.ocr, img, now_ms).filter(|r| self.vitals.agrees_with_bar(r, bar)).filter(|r| self.vitals.max_plausible(r.max, now_ms));
+                        if reading.is_none() && hp <= max {
+                            let held = self.vitals.accept_held(hp, max, now_ms);
+                            reading = Some(held).filter(|r| self.vitals.agrees_with_bar(r, bar)).filter(|r| self.vitals.max_plausible(r.max, now_ms));
+                        }
+                    }
+                }
                 // Lost or suspicious tracking re-acquires (detector) right away, throttled.
                 if reading.is_none() && !self.vitals.is_tracking() && self.vitals.may_acquire(now_ms) {
                     reading = self.vitals.read(&self.ocr, img, now_ms).filter(|r| self.vitals.agrees_with_bar(r, bar)).filter(|r| self.vitals.max_plausible(r.max, now_ms));
@@ -913,6 +944,7 @@ impl Scanner {
         snap.unsecured_souls = self.unsecured.observe(unsecured_line.and_then(|i| crate::hudtext::parse_unsecured(text(i))), now_ms);
         if scr == Screen::Gameplay {
             if let Some(r) = status_lines.clone() { snap.status_effects = crate::status::interpret(&status_kinds, &lines[r]); }
+            if carrying_urn { snap.status_effects.push("carrying_urn".into()); }
         }
         laps.lap("vitals + souls + items");
         if scr == Screen::Dead { self.vitals=crate::vitals::Tracker::default(); }
