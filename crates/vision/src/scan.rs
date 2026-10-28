@@ -14,7 +14,19 @@ pub struct Scanner {
     items: Arc<ColorLibrary>,
     heroes: Arc<ColorLibrary>,
     heroes_crit: Arc<ColorLibrary>,
-    tracker: parse::Tracker,
+    /// Own unspent souls (pixel-located `$` row, see hudtext) with purchase context.
+    souls: parse::Souls,
+    /// When the shop was last seen (ms), and the previous frame's owned items.
+    shop_seen: Option<u64>,
+    prev_items: Vec<String>,
+    /// Accepted level and the last raw level read.
+    level: (Option<u32>, Option<u32>),
+    unsecured: crate::hudtext::Unsecured,
+    /// Own respawn countdown and the death panel of the current death.
+    respawn: crate::death::Countdown,
+    panel: crate::death::Panel,
+    /// Top panel row source read by the detector when line reads missed it (compatibility death_cause).
+    panel_top_raw: Option<String>,
     /// Summed template scores per slot (0-5 ally, 6-11 enemy) and frames counted.
     sums: Vec<HashMap<String, Vec<f32>>>,
     frames: u32,
@@ -35,10 +47,6 @@ pub struct Scanner {
     team_status:Vec<coach_core::HeroStatus>,
     /// Refresh intervals for slow fields (team banners, earned souls, match id).
     cadence: coach_perception::track::Cadence,
-    /// Damage panel read once per death.
-    death_cause: Option<Option<String>>,
-    /// Respawn seconds last read during the current death (a jump up = a new death).
-    last_respawn: Option<u32>,
     /// Exact scoreboard name rectangles per slot, acquired by the detector once per match.
     name_rects: Vec<Option<coach_perception::Bounds>>,
     /// Match clock: detector-anchored, wall-time extrapolated, cheaply confirmed.
@@ -169,7 +177,14 @@ impl Scanner {
         heroes_crit: Arc<ColorLibrary>, hero_names: Vec<(String, String)>) -> Self {
         Scanner {
             ocr, items, heroes, heroes_crit,
-            tracker: parse::Tracker::default(),
+            souls: Default::default(),
+            shop_seen: None,
+            prev_items: vec![],
+            level: (None, None),
+            unsecured: Default::default(),
+            respawn: Default::default(),
+            panel: Default::default(),
+            panel_top_raw: None,
             sums: vec![HashMap::new(); 12],
             frames: 0,
             last_totals: (None, None),
@@ -187,8 +202,6 @@ impl Scanner {
             regions:vec![],
             team_status:vec![],
             cadence: Default::default(),
-            death_cause: None,
-            last_respawn: None,
             name_rects: vec![None; 12],
             clock_value: Default::default(),
             laps: Default::default(),
@@ -206,7 +219,14 @@ impl Scanner {
 
     /// Reset per-match memory (call when the clock goes back to the start).
     pub fn reset(&mut self) {
-        self.tracker = parse::Tracker::default();
+        self.souls.reset();
+        self.shop_seen = None;
+        self.prev_items.clear();
+        self.level = (None, None);
+        self.unsecured = Default::default();
+        self.respawn.reset();
+        self.panel = Default::default();
+        self.panel_top_raw = None;
         self.fixed_clock_distrusted = false;
         self.clock_hint = None;
         self.sums = vec![HashMap::new(); 12];
@@ -222,7 +242,6 @@ impl Scanner {
         self.item_votes = Default::default();
         self.own_slot = Default::default();
         self.cadence.reset();
-        self.death_cause = None;
         self.name_rects = vec![None; 12];
         self.clock_value.reset();
     }
@@ -303,12 +322,55 @@ impl Scanner {
     /// Pixel entry point shared with WebAssembly. Canvas supplies RGBA directly, so no
     /// lossy JPEG roundtrip is required. Main HUD stays at calibrated 16:9 coordinates.
     pub fn scan_image(&mut self, img: &image::DynamicImage, minimap: Option<&image::RgbImage>, now_ms: u64) -> GameSnapshot {
-        self.scan_inner(img,minimap,now_ms,(None,None))
+        self.scan_inner(img,minimap,now_ms,(None,None),None,false)
     }
     pub fn scan_located(&mut self,img:&image::DynamicImage,minimap:Option<&image::RgbImage>,now_ms:u64,clock:Option<u32>,currency:Option<u32>)->GameSnapshot{
-        self.scan_inner(img,minimap,now_ms,(clock,currency))
+        self.scan_inner(img,minimap,now_ms,(clock,currency),None,false)
     }
-    fn scan_inner(&mut self,img:&image::DynamicImage,minimap:Option<&image::RgbImage>,now_ms:u64,located:(Option<u32>,Option<u32>))->GameSnapshot{
+    /// Scan a canonical 1600x900 game context. `source` is the full-resolution frame and the
+    /// rectangle the context was cut from (small text such as the death panel is read from it).
+    /// `no_map`: the minimap was not located on this frame (shop, minimap hidden by effects):
+    /// no minimap state is reported and gameplay additionally needs the own health bar.
+    pub fn scan_context(&mut self,img:&image::DynamicImage,minimap:Option<&image::RgbImage>,now_ms:u64,currency:Option<u32>,
+        source:Option<(&image::DynamicImage,coach_perception::Bounds)>,no_map:bool)->GameSnapshot{
+        self.scan_inner(img,minimap,now_ms,(None,currency),source,no_map)
+    }
+    /// Shop screen: souls (the shop draws them higher), and while dead the respawn banner at
+    /// the top left. Nothing else of the HUD is visible.
+    fn shop_snapshot(&mut self, img: &image::DynamicImage, souls_read: Option<u32>, souls_px: bool, level_read: Option<u32>, now_ms: u64) -> GameSnapshot {
+        use crate::death;
+        self.shop_seen = Some(now_ms);
+        let mut snap = GameSnapshot { match_id: self.match_id, screen: Some("Shop".into()), ..Default::default() };
+        // The clock is not drawn in the shop: report the extrapolated clock only while recently confirmed.
+        if self.clock_value.confirmed_age_ms(now_ms).is_some_and(|a| a <= 60_000) { snap.game_clock_secs = self.clock_value.value(now_ms); }
+        let banner = { let b = death::SHOP_RESPAWN_LABEL; let rgb = img.crop_imm(b.x, b.y, b.w, b.h).to_rgb8();
+            rgb.pixels().filter(|p| { let (h, s, v) = crate::minimap::hsv(p[0], p[1], p[2]); (h < 12.0 || h > 350.0) && s > 0.45 && v > 0.75 }).count() as f32 / (b.w * b.h) as f32 > 0.45 };
+        let digits = banner.then(|| death::digit_glyphs(img, death::SHOP_RESPAWN_BOX)).flatten();
+        if let Some((b, n)) = digits {
+            snap.dead = true;
+            let read = self.ocr.read_lines(&[death::digits_crop(img, b)]).ok().and_then(|l| l.first().and_then(|s| death::read_count(s, n)));
+            let (secs, fresh) = self.respawn.observe(read, now_ms);
+            if fresh { self.panel = Default::default(); self.panel_top_raw = None; }
+            snap.respawn_secs = secs; snap.respawn_age_ms = secs.and(self.respawn.age_ms(now_ms));
+            self.fill_death(&mut snap);
+        }
+        self.was_dead = snap.dead;
+        if let Some((v, age)) = self.souls.observe_with(souls_read, now_ms, true, !souls_px) { snap.souls = Some(v); snap.souls_age_ms = Some(age); }
+        snap.level = self.accept_level(level_read);
+        snap
+    }
+    /// Death-panel fields of the current death (held across shop/death frames of one death).
+    fn fill_death(&self, snap: &mut GameSnapshot) {
+        snap.death_damage = self.panel.rows.iter().map(|r| coach_core::DamageRow { source: r.source.clone(), hits: r.hits, damage: r.damage }).collect();
+        snap.death_killing_blow = self.panel.rows.iter().find(|r| r.killing_blow).map(|r| r.source.clone());
+        snap.death_total_damage = self.panel.total;
+        let top = self.panel.rows.first().filter(|r| r.index == 0).map(|r| r.source.clone());
+        snap.death_cause = top.or_else(|| self.panel_top_raw.clone()).or_else(|| self.panel.rows.first().map(|r| r.source.clone()));
+    }
+    fn accept_level(&mut self, read: Option<u32>) -> Option<u32> { crate::hudtext::accept_level(&mut self.level, read) }
+    fn scan_inner(&mut self,img:&image::DynamicImage,minimap:Option<&image::RgbImage>,now_ms:u64,located:(Option<u32>,Option<u32>),
+        source:Option<(&image::DynamicImage,coach_perception::Bounds)>,no_map:bool)->GameSnapshot{
+        let view = crate::hudtext::View { canon: img, source };
         self.regions.clear();
         use crate::screen::{self, Screen};
         use coach_perception::track::LineBatch;
@@ -328,11 +390,24 @@ impl Scanner {
         let expected = self.clock_value.expected(now_ms);
         let hint = self.clock_hint.take();
         let probe = screen::add_probe(&mut batch, img, rects.as_deref(), !self.seen_hud, self.clock_value.value(now_ms).is_some());
-        // Respawn digits only matter while dead; Souls only when no tracked value is supplied.
-        let respawn_n = self.was_dead.then(|| batch.add(hud::crop(img, screen::respawn_number())));
-        let souls_line = located.1.is_none().then(|| batch.add(img.crop_imm(70, 742, 130, 30)));
+        // Respawn digits only matter while dead: the white digit glyphs are located and read as a
+        // tight crop whose digit count must match (the fixed box dropped digits: 30 -> 0, 74 -> 4).
+        let respawn_n = if self.was_dead { crate::death::digit_glyphs(img, crate::death::RESPAWN_BOX).map(|(b, n)| (batch.add(crate::death::digits_crop(img, b)), n)) } else { None };
+        // Souls are located from the `$` glyph (the row moves with the HUD state) and read right
+        // of it; a souls label located by the automatic scanner is the fallback.
+        let souls_img = crate::hudtext::souls_area(&view);
+        let souls_px = (img.width() == 1600 && img.height() == 900).then(|| crate::hudtext::locate_souls(&souls_img)).flatten();
+        let souls_lines = souls_px.map(|s| (batch.add_all(crate::hudtext::souls_crops(&souls_img, &s)), s.count));
+        let level_line = souls_px.and_then(|s| crate::hudtext::level_glyphs(&souls_img, &s)).map(|(b, n)| (batch.add(crate::death::digits_crop(&souls_img, b)), n));
+        let unsecured_line = souls_px.and_then(|s| crate::hudtext::unsecured_line(&souls_img, &s)).map(|b| batch.add(souls_img.crop_imm(b.x, b.y, b.w, b.h)));
+        // Status text / debuff badges on live-HUD frames: a cheap pixel gate (text-like glyph rows
+        // in fixed areas) runs every frame; only gated lines (typically none) are recognised.
+        let status_crops = if self.seen_hud && !self.was_dead { crate::status::crops(&view) } else { vec![] };
+        let status_kinds: Vec<crate::status::Kind> = status_crops.iter().map(|(k, _)| *k).collect();
+        let status_lines = (!status_crops.is_empty()).then(|| batch.add_all(status_crops.into_iter().map(|(_, c)| c)));
         // Team totals alternate ally / enemy per frame.
-        self.totals_flip = !self.totals_flip;
+        // Frames without a located minimap do not read totals (see below), so they keep the turn.
+        if !no_map { self.totals_flip = !self.totals_flip; }
         let total_line = batch.add(hud::crop(img, if self.totals_flip { hud::ALLY_TOTAL } else { hud::ENEMY_TOTAL }));
         let vitals = self.vitals.tracked_crops(img).map(|c| batch.add_all(c));
         let urn_line = map.urn_pos.is_some().then(|| batch.add(hud::crop(img, crate::Region { x: 710.0 / 1600.0, y: 585.0 / 900.0, w: 190.0 / 1600.0, h: 32.0 / 900.0 })));
@@ -366,11 +441,43 @@ impl Scanner {
             if screen::probe_says_respawn(&lines, &probe) { scr = Screen::Dead; }
             else if crate::vitals::bar_ratio(img).is_some() { scr = Screen::Gameplay; }
         }
-        // Only HUD screens yield data; menus, shop and loading yield an empty snapshot.
+        // Without a located minimap this frame, gameplay also needs the own health bar (only drawn
+        // on the live HUD): rec5 lost the midboss pit, ziplines and base fights to Unknown.
+        let bar_now = crate::vitals::bar_ratio(img);
+        if no_map && scr == Screen::Gameplay && bar_now.is_none() { scr = Screen::Unknown; }
+        // The end-of-match banner keeps the clock and top bar (rec5 570-572: classified Gameplay;
+        // its red tint even passes the health-bar check). A pixel gate (a large cream text block)
+        // runs the one-line read only when such text is present.
+        if matches!(scr, Screen::Gameplay | Screen::Unknown) && screen::post_game_gate(img)
+            && self.ocr.read_lines(&[screen::post_game_crop(img)]).ok().and_then(|l| l.into_iter().next()).is_some_and(|s| screen::says_post_game(&s)) {
+            scr = Screen::PostGame;
+        }
+        if scr == Screen::Unknown && screen::looks_black(img) { scr = Screen::Loading; }
         laps.lap("screen + scoreboard check");
+        // The pixel-located row is authoritative when found; the label located by the automatic
+        // scanner and the fixed box are fallbacks only when no `$` row was found.
+        // The old fixed box is not a fallback any more: without a `$` glyph it read a bare "1" on
+        // empty death-screen HUDs and "947" for a clipped "1,947" (rec4).
+        let souls_read = match souls_lines.clone() {
+            Some((r, n)) => crate::hudtext::souls_value(&[text(r.start), text(r.start + 1)], n),
+            None => located.1,
+        };
+        let level_read = level_line.and_then(|(i, n)| crate::death::read_count(text(i), n));
+        if scr == Screen::Shop {
+            self.seen_hud = false;
+            self.laps = laps;
+            return self.shop_snapshot(img, souls_read, souls_lines.is_some(), level_read, now_ms);
+        }
+        // Only HUD screens yield data; menus, post-game and loading yield an empty snapshot.
         self.seen_hud = scr.has_hud();
         self.was_dead = scr == Screen::Dead;
         if !scr.has_hud() { self.laps = laps; return GameSnapshot { screen: Some(format!("{scr:?}")), ..Default::default() }; }
+        // Max HP changes with levels: a level-up makes the remembered max stale, so the bar-only
+        // HP estimate (bar x remembered max) must wait for a fresh max read (rec5 frame 481
+        // reported 2786/3144 at a level-up to 3199/3199).
+        let level_before = self.level.0;
+        let level_now = self.accept_level(level_read);
+        if level_now.zip(level_before).is_some_and(|(n, b)| n != b) { self.vitals.forget_max(); }
 
         // New match? Reset all per-match memory. The id needs detector OCR, so it is sampled.
         let mid = if self.cadence.due("match_id", now_ms, 60_000) { self.text(&img, screen::match_id_region()).and_then(|s| parse::parse_match_id(&s)) } else { None };
@@ -431,31 +538,49 @@ impl Scanner {
         }
         // A cyan portrait must never create an urn before its first spawn.
         if raw_clock.unwrap_or(0) < 600 { map.urn = None; map.urn_pos = None; }
-        snap.minimap = Some(self.map_tracker.observe(map, now_ms));
+        if !no_map { snap.minimap = Some(self.map_tracker.observe(map, now_ms)); }
 
         if scr == Screen::Dead {
-            // While dead the HUD shows the spectated player, so personal values are not ours.
             snap.dead = true;
-            snap.souls = self.tracker.last_souls();
-            snap.respawn_secs = match respawn_n {
-                Some(i) => parse::parse_respawn(text(i)),
-                None => self.ocr.read_lines(&[hud::crop(img, screen::respawn_number())]).ok().and_then(|l| l.first().and_then(|s| parse::parse_respawn(s))),
+            // Respawn countdown: a read continues the running countdown (±2 s) or starts a new one
+            // after two agreeing reads (rec5: 30 read as 0, 7 as 77); between reads it is
+            // extrapolated for at most 10 s, with its age.
+            let read = match respawn_n {
+                Some((i, n)) => crate::death::read_count(text(i), n),
+                None => crate::death::digit_glyphs(img, crate::death::RESPAWN_BOX).and_then(|(b, n)|
+                    self.ocr.read_lines(&[crate::death::digits_crop(img, b)]).ok().and_then(|l| l.first().and_then(|s| crate::death::read_count(s, n)))),
             };
-            // The damage panel keeps filling in for several seconds of the death (rec5: top row
-            // "Still Life" at first, "Aura of Suffering" once complete), so it is re-read every 5 s
-            // (detector OCR) and the latest reading wins. A respawn timer that jumps up is a new
-            // death in a flickering run of death screens: its panel starts over.
-            if snap.respawn_secs.zip(self.last_respawn).is_some_and(|(now, before)| now > before + 5) { self.death_cause = None; }
-            if snap.respawn_secs.is_some() { self.last_respawn = snap.respawn_secs; }
-            if self.death_cause.is_none() || self.cadence.due("death_panel", now_ms, 5000) {
-                let read = self.ocr.read(&hud::crop(&img, crate::Region {
-                    x: 1352.0 / 1600.0, y: 276.0 / 900.0, w: 200.0 / 1600.0, h: 22.0 / 900.0 })).ok().and_then(|s| clean_cause(&s));
-                if read.is_some() || self.death_cause.is_none() { self.death_cause = Some(read); }
+            // No countdown read for 15 s (a recording gap, a long menu): this may be another death.
+            if self.respawn.age_ms(now_ms).is_some_and(|a| a > 15_000) { self.respawn.reset(); self.panel = Default::default(); self.panel_top_raw = None; }
+            let (secs, fresh) = self.respawn.observe(read, now_ms);
+            // A new countdown (the timer jumped up) is a new death: its panel starts over.
+            if fresh { self.panel = Default::default(); self.panel_top_raw = None; }
+            snap.respawn_secs = secs;
+            snap.respawn_age_ms = secs.and(self.respawn.age_ms(now_ms));
+            // The damage panel keeps filling in after the death (rec5 frame 291: top row Still Life
+            // 613, frame 300: Aura of Suffering 789), so it is re-read every 2 s until its Total
+            // Damage repeats. Rows are line reads on the full-resolution panel.
+            if !self.panel.stable && self.cadence.due("death_panel", now_ms, 2000) {
+                let size = crate::death::panel_size(&view);
+                let panel = view.region(crate::death::PANEL_CANONICAL, size, size);
+                let (rows, crops) = crate::death::panel_crops(&panel);
+                if !rows.is_empty() {
+                    let lines = self.ocr.read_lines(&crops).unwrap_or_default();
+                    let (parsed, total) = crate::death::parse_panel(&panel, &rows, &lines);
+                    self.panel.update(parsed, total, now_ms);
+                }
             }
-            snap.death_cause = self.death_cause.clone().flatten();
+            // When the line reads did not identify the top row (small 1600x900 text, world sources
+            // without an icon), the detector reads it, at most every 5 s: death_cause stays the top
+            // source as before, normalised against the dictionary when it matches.
+            if self.panel.rows.first().is_none_or(|r| r.index != 0) && self.cadence.due("death_top", now_ms, 5000) {
+                let raw = self.ocr.read(&hud::crop(img, crate::Region { x: 1352.0 / 1600.0, y: 276.0 / 900.0, w: 200.0 / 1600.0, h: 22.0 / 900.0 })).ok();
+                if let Some(c) = raw.as_deref().and_then(|s| crate::death::normalise_source(s).or_else(|| clean_cause(s))) { self.panel_top_raw = Some(c); }
+            }
+            self.fill_death(&mut snap);
         } else if scr == Screen::Gameplay {
             // Only a live HUD ends the death; menus and the scoreboard flicker in between.
-            self.death_cause = None; self.last_respawn = None;
+            self.respawn.reset(); self.panel = Default::default(); self.panel_top_raw = None;
         }
         if scr != Screen::Dead {
             if scr == Screen::Gameplay {
@@ -475,8 +600,6 @@ impl Scanner {
                     snap.hp=Some(hp); snap.max_hp=Some(max); snap.health_observations=1;
                 }
             }
-            let souls = located.1.or_else(|| souls_line.and_then(|i| parse::parse_souls(text(i))));
-            snap.souls = self.tracker.accept_souls(souls).or(self.tracker.last_souls());
             // Items: non-flat slots matched against shop art with a confidence gate. A slot's item
             // is listed once the same match repeats on two scans, and only if it is a real shop
             // item affordable by now (a recorded match listed 6,400 and placeholder tier-5 items,
@@ -501,6 +624,23 @@ impl Scanner {
             }
         }
 
+        // Souls (also on the death screen when its HUD shows them: rec5's death HUD showed the
+        // same values as the shop opened during that death and the first frame after respawning;
+        // while spectating another hero the row is absent). A drop is a purchase right away when
+        // the shop was seen in the last 30 s or a new item appeared; otherwise it needs a second read.
+        // A new item explains a drop only when the drop matches its shop cost (item matches
+        // flicker: rec5 frame 335 "gained" an item it did not buy).
+        let new_cost: u32 = if self.prev_items.is_empty() { 0 } else { snap.items.iter().filter(|i| !self.prev_items.contains(i)).filter_map(|i| item_costs().get(i)).sum() };
+        if !snap.items.is_empty() { self.prev_items = snap.items.clone(); }
+        let drop = self.souls.held(now_ms).zip(souls_read).filter(|((h, _), r)| r < h).map(|((h, _), r)| h - r);
+        let bought = new_cost > 0 && drop.is_some_and(|d| d + 300 >= new_cost / 2 && d <= new_cost + 500);
+        let spending = bought || self.shop_seen.is_some_and(|t| now_ms >= t && now_ms - t <= 30_000);
+        if let Some((v, age)) = self.souls.observe_with(souls_read, now_ms, spending, scr == Screen::Dead || souls_lines.is_none()) { snap.souls = Some(v); snap.souls_age_ms = Some(age); }
+        snap.level = level_now;
+        snap.unsecured_souls = self.unsecured.observe(unsecured_line.and_then(|i| crate::hudtext::parse_unsecured(text(i))), now_ms);
+        if scr == Screen::Gameplay {
+            if let Some(r) = status_lines.clone() { snap.status_effects = crate::status::interpret(&status_kinds, &lines[r]); }
+        }
         laps.lap("vitals + souls + items");
         if scr == Screen::Dead { self.vitals=crate::vitals::Tracker::default(); }
 
@@ -538,13 +678,13 @@ impl Scanner {
         }
         snap.ally_heroes = assign[..6].iter().flatten().cloned().collect();
         snap.enemy_heroes = assign[6..].iter().flatten().cloned().collect();
-        if scr==Screen::Gameplay {
+        if scr==Screen::Gameplay && !no_map {
             self.team_status=crate::team::apply_status_slots(img,&lines[status.clone()],&status_slots,&bar_status);
             crate::team::apply_respawn(&lines[respawn_lines.clone()],&dead_slots,&mut self.team_status);
             for(i,status)in self.team_status.iter_mut().enumerate(){status.hero=assign[i].clone();}
             crate::team::apply_networth_slots(&lines[worth.clone()],&worth_slots,snap.game_clock_secs.or(raw_clock).unwrap_or(0),&mut self.team_status);
             snap.hero_status=self.team_status.clone();
-            crate::team::positions(&mut snap,map_crop,&self.heroes);
+            if !no_map { crate::team::positions(&mut snap,map_crop,&self.heroes); }
             self.team_status=snap.hero_status.clone();
             // You are one of the six ally top-bar slots: the one whose health bar follows your own
             // HP. Accumulate the gap per slot (rec2: 0.035 mean for the right slot, >= 0.25 for
@@ -573,7 +713,10 @@ impl Scanner {
         let fresh = |at: Option<u64>| at.is_some_and(|t| now_ms >= t && now_ms - t <= 60_000);
         if !fresh(self.totals_at.0) { self.last_totals.0 = None; }
         if !fresh(self.totals_at.1) { self.last_totals.1 = None; }
-        if self.totals_flip {
+        // Frames classified without a located minimap (midboss pit, ziplines, base fights) only
+        // report held totals: their top bar is often covered by banners (rec5 357: "1,000").
+        if no_map {
+        } else if self.totals_flip {
             let a = hud::pick_total(&hud::team_total_candidates(text(total_line)), self.last_totals.0);
             if plausible(&mut self.last_totals.0, &mut self.pending_totals.0, a).is_some() { self.totals_at.0 = Some(now_ms); }
         } else {

@@ -73,6 +73,46 @@ pub struct GameSnapshot {
     pub screen: Option<String>,
     /// Read from the minimap; None if it could not be found on this frame.
     pub minimap: Option<MinimapState>,
+    /// Age of `souls` in ms: 0 when read on this frame, otherwise how long ago the reported
+    /// value was confirmed (held for at most 10 s). None when `souls` is None.
+    #[serde(default)]
+    pub souls_age_ms: Option<u64>,
+    /// Age of `respawn_secs` in ms: 0 when read on this frame, otherwise the countdown is
+    /// extrapolated from a read this long ago (at most 10 s).
+    #[serde(default)]
+    pub respawn_age_ms: Option<u64>,
+    /// Own hero level from the badge beside the souls counter.
+    #[serde(default)]
+    pub level: Option<u32>,
+    /// Unsecured souls ("N HAUNTED SOULS" under the souls counter), when the line is read.
+    /// None means not read, not zero.
+    #[serde(default)]
+    pub unsecured_souls: Option<u32>,
+    /// Rows of the "Incoming damage (last death)" panel, largest first, while dead.
+    #[serde(default)]
+    pub death_damage: Vec<DamageRow>,
+    /// Source of the row tagged "Killing Blow", when the tag was seen.
+    #[serde(default)]
+    pub death_killing_blow: Option<String>,
+    /// "Total Damage: N" from the same panel.
+    #[serde(default)]
+    pub death_total_damage: Option<u32>,
+    /// Status effects on you this frame: "stunned", "silenced", "disarmed", "out_of_stamina",
+    /// "knocked_off_zipline", plus debuff badge names (e.g. "Aura of Suffering"). Empty means
+    /// none read on this frame (not proof of none).
+    #[serde(default)]
+    pub status_effects: Vec<String>,
+}
+
+/// One source row of the incoming-damage panel.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DamageRow {
+    /// Ability / item / world source, normalised to its dictionary name when matched.
+    pub source: String,
+    /// Hit count ("x18"), when shown.
+    pub hits: Option<u32>,
+    pub damage: u32,
 }
 
 /// Lanes by colour: Yellow = right, Blue = centre, Green = left (as seen on the minimap,

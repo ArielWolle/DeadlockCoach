@@ -22,7 +22,16 @@ export interface Snapshot {
   minimap?: MinimapState | null; players?: { ally: boolean; hero?: string; items: string[] }[];
   hp?:number|null; max_hp?:number|null; health_observations?:number; health_delta_ratio?:number|null;
   coaching_context?:{focus_lane?:'Green'|'Blue'|'Yellow'|null};
+  /** Age (ms) of `souls`/`respawn_secs`: 0 = read this frame, >0 = held/extrapolated (≤10 s). */
+  souls_age_ms?: number | null; respawn_age_ms?: number | null;
+  level?: number | null;
+  /** "N HAUNTED SOULS"; null = not read (not zero). */
+  unsecured_souls?: number | null;
+  death_damage?: DamageRow[]; death_killing_blow?: string | null; death_total_damage?: number | null;
+  /** e.g. "stunned", "silenced", "out_of_stamina", "knocked_off_zipline", or a debuff name. Empty = none read. */
+  status_effects?: string[];
 }
+export interface DamageRow { source: string; hits?: number | null; damage: number }
 export interface HeroStatus {ally:boolean;slot:number;hero?:string|null;critical?:boolean|null;health_ratio?:number|null;networth?:number|null;networth_observations:number;observations:number;position?:Point|null;position_observations:number;lane?:string|null;
   /** false = enemy not seen recently (no top-bar health bar); not dead. */
   bar_visible?:boolean|null;health_observations?:number;dead?:boolean|null;respawn_secs?:number|null}

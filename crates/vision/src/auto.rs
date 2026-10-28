@@ -42,14 +42,44 @@ pub struct AutoScanner {legacy:Scanner,reader:Reader,map:MapLocator,clock:crate:
     /// Per-phase timing of the most recent scan (includes the nested scanner).
     pub laps:coach_perception::track::Laps,had_context:bool,
     /// Last landmark-verified minimap box and the frame size it was found in.
-    verified_map:Option<(Bounds,(u32,u32))>}
+    verified_map:Option<(Bounds,(u32,u32))>,
+    /// Last game-context rectangle and the frame size it was formed in. Frames without a located
+    /// minimap (shop, menus, effects over the map) are classified in it.
+    last_context:Option<(Bounds,(u32,u32))>}
+
+/// Canonical 1600x900 image of a context rectangle (pixel-exact when within 2% of 1:1; a ~0.1%
+/// resample blurred the small HUD digits enough to read 5:13 as 6:13 on a letterboxed shot).
+fn canonical_of(frame:&DynamicImage,left:u32,top:u32,w:u32,h:u32)->(image::RgbaImage,Bounds){
+    let near=(w as f32/1600.-1.).abs()<=0.02&&(h as f32/900.-1.).abs()<=0.02;
+    let (cx,cy)=(left+w/2,top+h/2);
+    let exact=near.then(||(cx.checked_sub(800),cy.checked_sub(450))).and_then(|(x,y)|x.zip(y)).filter(|(x,y)|x+1600<=frame.width()&&y+900<=frame.height());
+    let (left,top,w,h)=exact.map(|(x,y)|(x,y,1600,900)).unwrap_or((left,top,w,h));
+    let img=match exact{
+        Some((x,y))=>frame.crop_imm(x,y,1600,900).to_rgba8(),
+        None=>{let area=frame.crop_imm(left,top,w,h);if w>=1600&&h>=900{area.thumbnail_exact(1600,900).to_rgba8()}else{area.resize_exact(1600,900,image::imageops::FilterType::Triangle).to_rgba8()}}
+    };
+    (img,Bounds{x:left,y:top,w,h})
+}
 /// Template similarity needed to keep the verified map box without landmarks (normal frames
 /// measured 0.52-0.61, late-game base fights 0.26-0.37, the end screen 0.0).
 const MAP_HOLD_SCORE:f32=0.2;
 impl AutoScanner {
     pub fn new(legacy:Scanner,reader:Reader)->Self{Self{legacy,reader,map:MapLocator::default(),clock:Default::default(),regions:vec![],previous_map:None,
-        clock_box:Tracked::default(),currency_box:Tracked::default(),map_tracker:Default::default(),laps:Default::default(),had_context:false,verified_map:None}}
-    pub fn reset(&mut self){self.legacy.reset();self.clock=Default::default();self.regions.clear();self.previous_map=None;self.clock_box.reset();self.currency_box.reset();self.map_tracker=Default::default();self.had_context=false;self.verified_map=None;}
+        clock_box:Tracked::default(),currency_box:Tracked::default(),map_tracker:Default::default(),laps:Default::default(),had_context:false,verified_map:None,last_context:None}}
+    pub fn reset(&mut self){self.legacy.reset();self.clock=Default::default();self.regions.clear();self.previous_map=None;self.clock_box.reset();self.currency_box.reset();self.map_tracker=Default::default();self.had_context=false;self.verified_map=None;self.last_context=None;}
+    /// A frame without a located minimap is scanned in the last context rectangle of this frame
+    /// size (the HUD does not move within a match), or the whole frame when it is 16:9. The
+    /// scene then decides: Shop / dead with the shop open, post-game, menus, loading, or
+    /// gameplay when the clock and the own health bar are visible. None = Unknown.
+    fn scan_off_map(&mut self,frame:&DynamicImage,now:u64,souls:Option<u32>)->Option<GameSnapshot>{
+        let dims=(frame.width(),frame.height());
+        let rect=self.last_context.filter(|(_,d)|*d==dims).map(|(b,_)|b)
+            .or_else(||((dims.0 as f32/dims.1 as f32)/(16./9.)-1.).abs().le(&0.02).then_some(Bounds{x:0,y:0,w:dims.0,h:dims.1}))?;
+        if rect.w<320||rect.h<180{return None;}
+        let (canonical,ctx)=canonical_of(frame,rect.x,rect.y,rect.w,rect.h);
+        let snapshot=self.legacy.scan_context(&DynamicImage::ImageRgba8(canonical),None,now,souls,Some((frame,ctx)),true);
+        (snapshot.screen.as_deref()!=Some("Unknown")).then_some(snapshot)
+    }
     pub fn regions(&self)->Vec<RegionObservation>{self.regions.clone()}
     pub fn scan(&mut self,frame:&DynamicImage,now:u64)->GameSnapshot{
         self.regions.clear();
@@ -128,32 +158,34 @@ impl AutoScanner {
         // A landmark-verified map alone fixes the context scale and position. The souls label only
         // validates it when read: on light backgrounds its small SOULS text is often unreadable,
         // which used to drop the whole frame (57 of 120 frames in a recorded match).
-        let Some(map)=map else{independent!()};
-        let souls=currency.as_ref().map(|(v,_)|*v);let currency_box=currency.as_ref().map(|(_,r)|r.bounds);
+        let souls=currency.as_ref().map(|(v,_)|*v);
+        // No usable context from the map on this frame (not located, or a mis-scaled find that
+        // puts the context off the frame, rec5 base fight 564-568): the last good context decides.
+        macro_rules! off_map { () => {{
+            if let Some(s)=self.scan_off_map(frame,now,souls){
+                laps.absorb("off-map scene: ",&self.legacy.laps);self.laps=laps;self.had_context=false;
+                return s;
+            }
+            independent!()
+        }}}
+        let Some(map)=map else{ off_map!() };
+        let currency_box=currency.as_ref().map(|(_,r)|r.bounds);
         let clock_box=clock.as_ref().map(|(_,r)|r.bounds);
         let width=map.bounds.w as f32*1600./335.;let height=map.bounds.h as f32*900./350.;
         let x=map.bounds.x as f32-width*1255./1600.;let y=map.bounds.y as f32-height*525./900.;
         if x < -width*0.04 || y < -height*0.04 || x+width>frame.width() as f32+width*0.04 || y+height>frame.height() as f32+height*0.04 {
-            independent!();
+            off_map!();
         }
         let left=x.max(0.) as u32;let top=y.max(0.) as u32;
         let w=(width as u32).min(frame.width()-left);let h=(height as u32).min(frame.height()-top);
-        if w<320||h<180{independent!();}
+        if w<320||h<180{off_map!();}
         let within=|b:Bounds|b.x>=left.saturating_sub(10)&&b.y>=top.saturating_sub(10)&&b.x+b.w<=left+w+10&&b.y+b.h<=top+h+10;
-        if currency_box.is_some_and(|b|!within(b))||clock_box.is_some_and(|b|!within(b)){independent!();}
+        if currency_box.is_some_and(|b|!within(b))||clock_box.is_some_and(|b|!within(b)){off_map!();}
         // Box-filter downsampling is ~2x faster than a triangle filter for the common case of a
-        // larger-than-1600 window; smaller sources still upsample smoothly.
-        // A near-1:1 context (within 2%) is cropped pixel-exact: resampling by ~0.1% blurs the
-        // small HUD digits enough to read 5:13 as 6:13 (measured on a letterboxed screenshot).
-        let near=(w as f32/1600.-1.).abs()<=0.02&&(h as f32/900.-1.).abs()<=0.02;
-        let (cx,cy)=(left+w/2,top+h/2);
-        let exact=near.then(||(cx.checked_sub(800),cy.checked_sub(450))).and_then(|(x,y)|x.zip(y)).filter(|(x,y)|x+1600<=frame.width()&&y+900<=frame.height());
-        // Keep region mapping consistent with the pixels actually analyzed.
-        let (left,top,w,h)=exact.map(|(x,y)|(x,y,1600,900)).unwrap_or((left,top,w,h));
-        let mut canonical=match exact{
-            Some((x,y))=>frame.crop_imm(x,y,1600,900).to_rgba8(),
-            None=>{let area=frame.crop_imm(left,top,w,h);if w>=1600&&h>=900{area.thumbnail_exact(1600,900).to_rgba8()}else{area.resize_exact(1600,900,image::imageops::FilterType::Triangle).to_rgba8()}}
-        };
+        // larger-than-1600 window; smaller sources still upsample smoothly. Region mapping uses
+        // the pixels actually analyzed.
+        let (mut canonical,ctx)=canonical_of(frame,left,top,w,h);
+        let (left,top,w,h)=(ctx.x,ctx.y,ctx.w,ctx.h);
         // If the clock has moved within a custom HUD, preserve its detected glyphs at the
         // compatibility reader's clock anchor; its exposed box remains the original one.
         if let Some(b)=clock_box {
@@ -170,12 +202,13 @@ impl AutoScanner {
         // The window-scale glyph read is independent of the context crop's pixel offset, so it
         // lets the scene's clock verifier skip the expensive glyph search when they agree.
         self.legacy.clock_hint=clock.as_ref().map(|(n,_)|*n);
-        let mut snapshot=self.legacy.scan_located(&DynamicImage::ImageRgba8(canonical),Some(&map_image),now,None,souls);
+        let mut snapshot=self.legacy.scan_context(&DynamicImage::ImageRgba8(canonical),Some(&map_image),now,souls,Some((frame,ctx)),false);
         laps.absorb("scene: ",&self.legacy.laps);
         if snapshot.screen.as_deref()==Some("Unknown"){independent!();}
+        if matches!(snapshot.screen.as_deref(),Some("Gameplay"|"Scoreboard"|"Dead")){self.last_context=Some((ctx,dims));}
         self.regions.push(RegionObservation{id:"game_context".into(),label:"Registered game context · compatibility".into(),bounds:Bounds{x:left,y:top,w,h},origin:RegionOrigin::Configured,score:None,value_path:None});
         if snapshot.game_clock_secs.is_none(){snapshot.game_clock_secs=independent.game_clock_secs;}
-        if !snapshot.dead{snapshot.souls=independent.souls;}else{if let Some(r)=self.regions.iter_mut().find(|r|r.id=="souls"){r.value_path=None;r.label.push_str(" · ownership unconfirmed while spectating");}}
+        // Souls come from the scene's pixel-located `$` row (the located label is one candidate).
         for mut r in self.legacy.regions(){r.bounds=Bounds{x:left+(r.bounds.x as f32/1600.*w as f32).round() as u32,
             y:top+(r.bounds.y as f32/900.*h as f32).round() as u32,w:(r.bounds.w as f32/1600.*w as f32).round().max(1.) as u32,h:(r.bounds.h as f32/900.*h as f32).round().max(1.) as u32};self.regions.push(r);}
         // Compatibility-only boxes are explicitly not exposed as located detections.

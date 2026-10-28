@@ -51,7 +51,12 @@ fn classifies_every_screen() {
 
 #[test]
 fn reads_death_screen() {
-    let snap = scanner().scan_at(&frame("00216"), 0);
+    // The respawn countdown needs two agreeing reads before it is reported (a single read
+    // dropped or doubled digits on ~30% of a recorded match's death frames).
+    let mut s = scanner();
+    let first = s.scan_at(&frame("00216"), 0);
+    assert!(first.dead && first.respawn_secs.is_none());
+    let snap = s.scan_at(&frame("00216"), 1000);
     assert!(snap.dead);
     assert_eq!(snap.respawn_secs, Some(4));
     assert_eq!(snap.death_cause.as_deref(), Some("T2 Walker"));

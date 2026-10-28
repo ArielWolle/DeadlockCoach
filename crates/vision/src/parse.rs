@@ -124,9 +124,80 @@ impl Tracker {
     }
 }
 
+/// Unspent souls over time. A read that rises by a plausible amount continues the confirmed
+/// value; a drop is a purchase only in a spending context (shop seen recently, owned items
+/// changed, or dead with the shop available) and otherwise needs a second agreeing read; a first
+/// value needs two agreeing reads. When this frame has no acceptable read, the last confirmed
+/// value is reported only while fresh (10 s), with its age; it is never invented.
+#[derive(Default, Debug, Clone)]
+pub struct Souls {
+    confirmed: Option<(u32, u64)>,
+    pending: Option<(u32, u64)>,
+}
+/// How long a confirmed souls value may be reported without a new accepted read.
+pub const SOULS_FRESH_MS: u64 = 10_000;
+impl Souls {
+    /// Feed this frame's read. Returns (souls, age in ms of the reported value).
+    pub fn observe(&mut self, read: Option<u32>, now: u64, spending: bool) -> Option<(u32, u64)> {
+        self.observe_with(read, now, spending, false)
+    }
+    /// `continuation_only`: once a value is confirmed, the read may only continue it (death
+    /// screen: the HUD may belong to a spectated hero; fallback label reads: a clipped "1,947"
+    /// read as 947 must not become a purchase).
+    pub fn observe_with(&mut self, read: Option<u32>, now: u64, spending: bool, continuation_only: bool) -> Option<(u32, u64)> {
+        if continuation_only && self.confirmed.is_some() {
+            let ok = read.zip(self.confirmed).is_some_and(|(r, (c, t))| r >= c && r - c <= SOULS_RISE_OK + (now.saturating_sub(t) / 1000).min(120) as u32 * 150);
+            if ok { self.confirmed = read.map(|r| (r, now)); self.pending = None; return read.map(|r| (r, 0)); }
+            return self.held(now);
+        }
+        if let Some(r) = read {
+            let accept = match self.confirmed {
+                Some((c, t)) => {
+                    // Souls rise with farming/kills: generous per elapsed second (rec5: +1,303 in
+                    // 7 s), never a leap. Reads are glyph-count checked, so a leading `$` misread
+                    // as a digit no longer reaches here.
+                    let rise = SOULS_RISE_OK + (now.saturating_sub(t) / 1000).min(120) as u32 * 150;
+                    (r >= c && r - c <= rise) || (r < c && spending)
+                }
+                None => false,
+            };
+            let agrees = self.pending.is_some_and(|(p, t)| now >= t && now - t <= 15_000 && r.abs_diff(p) <= 150 + (now - t) as u32 / 100);
+            if accept || agrees { self.confirmed = Some((r, now)); self.pending = None; return Some((r, 0)); }
+            self.pending = Some((r, now));
+        }
+        self.held(now)
+    }
+    /// Last confirmed value and its age while fresh.
+    pub fn held(&self, now: u64) -> Option<(u32, u64)> {
+        self.confirmed.filter(|(_, t)| now >= *t && now - *t <= SOULS_FRESH_MS).map(|(v, t)| (v, now - t))
+    }
+    pub fn reset(&mut self) { *self = Self::default(); }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn souls_spending_is_immediate_in_the_shop_and_held_values_expire() {
+        let mut s = Souls::default();
+        assert_eq!(s.observe(Some(2448), 0, false), None, "first value needs a second read");
+        assert_eq!(s.observe(Some(2460), 1000, false), Some((2460, 0)));
+        assert_eq!(s.observe(None, 4000, false), Some((2460, 3000)), "held with its age");
+        assert_eq!(s.observe(Some(869), 5000, true), Some((869, 0)), "purchase in the shop");
+        assert_eq!(s.observe(Some(86), 6000, false), Some((869, 1000)), "drop outside the shop: held, not accepted");
+        assert_eq!(s.observe(Some(872), 7000, false), Some((872, 0)));
+        assert_eq!(s.observe(Some(3656), 8000, false), Some((872, 1000)), "leap rejected");
+        assert_eq!(s.observe(None, 30_000, false), None, "stale: unknown, not the old value");
+        // After a gap the allowed rise grows with elapsed time; a drop still needs a second read.
+        assert_eq!(s.observe(Some(5912), 400_000, false), Some((5912, 0)));
+        assert_eq!(s.observe(Some(250), 402_000, false), Some((5912, 2000)));
+        assert_eq!(s.observe(Some(255), 403_000, false), Some((255, 0)), "second agreeing read");
+        // On the death screen only a continuation of our own value counts.
+        assert_eq!(s.observe_with(Some(4000), 404_000, false, true), Some((255, 1000)));
+        assert_eq!(s.observe_with(Some(4000), 405_000, false, true), Some((255, 2000)), "a spectated hero's value is never adopted");
+        assert_eq!(s.observe_with(Some(270), 406_000, false, true), Some((270, 0)));
+    }
 
     #[test]
     fn parses() {
