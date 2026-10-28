@@ -20,6 +20,8 @@ pub struct Scanner {
     frames: u32,
     last_totals: (Option<u32>, Option<u32>),
     pending_totals: (Option<(u32, u32)>, Option<(u32, u32)>),
+    /// When each team total was last confirmed (ms).
+    totals_at: (Option<u64>, Option<u64>),
     hero_names: Vec<(String, String)>,
     match_id: Option<u64>,
     pending_match: Option<u64>,
@@ -35,6 +37,8 @@ pub struct Scanner {
     cadence: coach_perception::track::Cadence,
     /// Damage panel read once per death.
     death_cause: Option<Option<String>>,
+    /// Respawn seconds last read during the current death (a jump up = a new death).
+    last_respawn: Option<u32>,
     /// Exact scoreboard name rectangles per slot, acquired by the detector once per match.
     name_rects: Vec<Option<coach_perception::Bounds>>,
     /// Match clock: detector-anchored, wall-time extrapolated, cheaply confirmed.
@@ -89,15 +93,17 @@ pub fn plausible_item(name: &str, clock: Option<u32>) -> bool {
 
 /// Team totals only grow (mostly), and not by leaps. A value outside that band is accepted
 /// only if the next reading agrees with it (so one misread cannot poison later frames).
-/// Team net worth only grows (minor losses on death). A rise outside the band needs one
-/// confirming read; a drop of more than 10% needs ten consistent reads: a recorded match read
+/// Team net worth only grows (minor losses on death). A first value needs two consistent reads,
+/// a rise outside the band three; a drop of more than 10% needs ten consistent reads: a recorded match read
 /// ~100k as 1000 for 12 frames, which produced a false "you are behind" call.
 fn plausible(prev: &mut Option<u32>, pending: &mut Option<(u32, u32)>, v: Option<u32>) -> Option<u32> {
     let v = v?;
-    let in_band = match *prev { Some(p) => v + p / 10 >= p && v <= p + p / 2 + 3000, None => false };
+    // A team earns a few hundred souls a second: +8% (+2,500) between reads is already generous.
+    // rec5 accepted 121k -> 173k in one read (+43%) and called a lead while 20k behind.
+    let in_band = match *prev { Some(p) => v + p / 10 >= p && v <= p + p / 12 + 2500, None => false };
     let count = pending.filter(|(q, _)| v.abs_diff(*q) <= q / 10 + 1000).map(|(_, n)| n + 1).unwrap_or(1);
     let drop = prev.is_some_and(|p| v + p / 10 < p);
-    let confirmed = count >= if drop { 10 } else { 2 };
+    let confirmed = count >= if drop { 10 } else if prev.is_none() { 2 } else { 3 };
     if in_band || confirmed { *prev = Some(v); *pending = None; Some(v) } else { *pending = Some((v, count)); None }
 }
 
@@ -133,6 +139,8 @@ fn clean_cause(s: &str) -> Option<String> {
             if words.is_empty() && stem.len() >= 3 { words.push(stem); }
             break;
         }
+        // A mark icon read as a glued capital X ("Stalkers MarkX").
+        let w = if w.len() > 3 && w.ends_with('X') && w[..w.len() - 1].ends_with(|c: char| c.is_ascii_lowercase()) { w[..w.len() - 1].to_string() } else { w };
         words.push(w);
     }
     let t = words.join(" ").trim().to_string();
@@ -166,6 +174,7 @@ impl Scanner {
             frames: 0,
             last_totals: (None, None),
             pending_totals: (None, None),
+            totals_at: (None, None),
             hero_names,
             match_id: None,
             pending_match: None,
@@ -179,6 +188,7 @@ impl Scanner {
             team_status:vec![],
             cadence: Default::default(),
             death_cause: None,
+            last_respawn: None,
             name_rects: vec![None; 12],
             clock_value: Default::default(),
             laps: Default::default(),
@@ -203,6 +213,7 @@ impl Scanner {
         self.frames = 0;
         self.last_totals = (None, None);
         self.pending_totals = (None, None);
+        self.totals_at = (None, None);
         self.last_board.clear();
         self.board_history.clear();
         self.map_tracker = crate::minimap::Tracker::default();
@@ -430,14 +441,23 @@ impl Scanner {
                 Some(i) => parse::parse_respawn(text(i)),
                 None => self.ocr.read_lines(&[hud::crop(img, screen::respawn_number())]).ok().and_then(|l| l.first().and_then(|s| parse::parse_respawn(s))),
             };
-            // The damage panel is static during one death: read it (detector OCR) once.
-            if self.death_cause.is_none() {
-                self.death_cause = Some(self.ocr.read(&hud::crop(&img, crate::Region {
-                    x: 1352.0 / 1600.0, y: 276.0 / 900.0, w: 200.0 / 1600.0, h: 22.0 / 900.0 })).ok().and_then(|s| clean_cause(&s)));
+            // The damage panel keeps filling in for several seconds of the death (rec5: top row
+            // "Still Life" at first, "Aura of Suffering" once complete), so it is re-read every 5 s
+            // (detector OCR) and the latest reading wins. A respawn timer that jumps up is a new
+            // death in a flickering run of death screens: its panel starts over.
+            if snap.respawn_secs.zip(self.last_respawn).is_some_and(|(now, before)| now > before + 5) { self.death_cause = None; }
+            if snap.respawn_secs.is_some() { self.last_respawn = snap.respawn_secs; }
+            if self.death_cause.is_none() || self.cadence.due("death_panel", now_ms, 5000) {
+                let read = self.ocr.read(&hud::crop(&img, crate::Region {
+                    x: 1352.0 / 1600.0, y: 276.0 / 900.0, w: 200.0 / 1600.0, h: 22.0 / 900.0 })).ok().and_then(|s| clean_cause(&s));
+                if read.is_some() || self.death_cause.is_none() { self.death_cause = Some(read); }
             }
             snap.death_cause = self.death_cause.clone().flatten();
-        } else {
-            self.death_cause = None;
+        } else if scr == Screen::Gameplay {
+            // Only a live HUD ends the death; menus and the scoreboard flicker in between.
+            self.death_cause = None; self.last_respawn = None;
+        }
+        if scr != Screen::Dead {
             if scr == Screen::Gameplay {
                 let bar = crate::vitals::bar_ratio(img);
                 self.vitals.set_bar(bar);
@@ -547,12 +567,18 @@ impl Scanner {
 
         // These fields are tightly calibrated single lines. Direct recognition avoids
         // two full detection-model passes; multiline/uncertain fields keep full detection.
+        // A total not confirmed for a minute is stale: it is neither reported nor used as the
+        // plausibility baseline (rec5 compared a fresh ally total with a 7-minute-old enemy one
+        // after a recording gap and called "ahead" while 16k behind).
+        let fresh = |at: Option<u64>| at.is_some_and(|t| now_ms >= t && now_ms - t <= 60_000);
+        if !fresh(self.totals_at.0) { self.last_totals.0 = None; }
+        if !fresh(self.totals_at.1) { self.last_totals.1 = None; }
         if self.totals_flip {
             let a = hud::pick_total(&hud::team_total_candidates(text(total_line)), self.last_totals.0);
-            plausible(&mut self.last_totals.0, &mut self.pending_totals.0, a);
+            if plausible(&mut self.last_totals.0, &mut self.pending_totals.0, a).is_some() { self.totals_at.0 = Some(now_ms); }
         } else {
             let e = hud::pick_total(&hud::team_total_candidates(text(total_line)), self.last_totals.1);
-            plausible(&mut self.last_totals.1, &mut self.pending_totals.1, e);
+            if plausible(&mut self.last_totals.1, &mut self.pending_totals.1, e).is_some() { self.totals_at.1 = Some(now_ms); }
         }
         snap.ally_networth = self.last_totals.0;
         snap.enemy_networth = self.last_totals.1;
@@ -572,7 +598,7 @@ impl Scanner {
 mod tests {
     #[test]
     fn death_cause_drops_the_killing_blow_tag_and_counts() {
-        for (raw, want) in [("Melee kiling Bow 3", "Melee"), ("Meleegilling Blow  23", "Melee"), ("Chimera MKI x232", "Chimera MKI"), ("Hyper Beam 7", "Hyper Beam"), ("T2 Walker Killing Blow x30", "T2 Walker"), ("Meleeiing Bow", "Melee"), ("Chimera MKI ×232", "Chimera MKI"), ("Temple Guardian Killing Blow", "Temple Guardian")] {
+        for (raw, want) in [("Melee kiling Bow 3", "Melee"), ("Meleegilling Blow  23", "Melee"), ("Chimera MKI x232", "Chimera MKI"), ("Hyper Beam 7", "Hyper Beam"), ("T2 Walker Killing Blow x30", "T2 Walker"), ("Meleeiing Bow", "Melee"), ("Chimera MKI ×232", "Chimera MKI"), ("Temple Guardian Killing Blow", "Temple Guardian"), ("Stalkers MarkX", "Stalkers Mark")] {
             assert_eq!(super::clean_cause(raw).as_deref(), Some(want), "{raw}");
         }
     }

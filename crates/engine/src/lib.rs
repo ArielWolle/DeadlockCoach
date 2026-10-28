@@ -209,10 +209,10 @@ pub fn death_cause_advice(cause: &str) -> (&'static str, &'static str) {
             ("heroes", "Enemy heroes killed you. Check the scoreboard before you re-engage.")
         }
 }
-/// Speaks only after the same state (ahead/behind) is seen on 3 snapshots in a row and the gap
+/// Speaks only after the same state (ahead/behind) is seen on 4 snapshots in a row and the gap
 /// is at least `lead_min_abs` souls, so noisy reads near parity do not flip-flop.
-pub struct NetworthLeadRule { cfg: RulesConfig, streak: std::cell::Cell<(i8, u8)> }
-impl NetworthLeadRule { pub fn new(cfg: RulesConfig) -> Self { NetworthLeadRule { cfg, streak: std::cell::Cell::new((0, 0)) } } }
+pub struct NetworthLeadRule { cfg: RulesConfig, streak: std::cell::Cell<(i8, u8)>, last: std::cell::Cell<Option<(u32, u32)>> }
+impl NetworthLeadRule { pub fn new(cfg: RulesConfig) -> Self { NetworthLeadRule { cfg, streak: std::cell::Cell::new((0, 0)), last: std::cell::Cell::new(None) } } }
 impl Rule for NetworthLeadRule {
     fn evaluate(&self, snap: &GameSnapshot) -> Vec<Cue> {
         let (Some(a), Some(e), Some(t)) = (snap.ally_networth, snap.enemy_networth, snap.game_clock_secs) else { return vec![] };
@@ -221,12 +221,17 @@ impl Rule for NetworthLeadRule {
         // One team at under half the other's souls is a digit drop, not a match state (a
         // recorded match read ~100k as 1000 and called "behind"): say nothing.
         if a.min(e) * 2 < a.max(e) { self.streak.set((0, 0)); return vec![]; }
+        // Either total jumping more than 8% since the previous snapshot is a misread or a
+        // correction in progress: start over (rec5 called "ahead" right after 121k -> 173k).
+        let jumped = self.last.get().is_some_and(|(pa, pe)| a.abs_diff(pa) * 100 > pa * 8 || e.abs_diff(pe) * 100 > pe * 8);
+        self.last.set(Some((a, e)));
+        if jumped { self.streak.set((0, 0)); return vec![]; }
         let state: i8 = if diff >= self.cfg.lead_pct && a.saturating_sub(e) >= self.cfg.lead_min_abs { 1 }
             else if diff <= -self.cfg.lead_pct && e.saturating_sub(a) >= self.cfg.lead_min_abs { -1 } else { 0 };
         let (prev, n) = self.streak.get();
         let n = if state == prev { n.saturating_add(1) } else { 1 };
         self.streak.set((state, n));
-        if state == 0 || n < 3 { return vec![]; }
+        if state == 0 || n < 4 { return vec![]; }
         let (key, text) = if state > 0 {
             ("lead", "Your team is ahead in souls. Take objectives and avoid risky fights.")
         } else {
@@ -356,8 +361,11 @@ mod tests {
         e.max_per_step = 5;
         let mut s = at(850);
         s.dead = true; s.souls = Some(2000); s.respawn_secs = Some(20); s.death_cause = Some("Temple Guardia".into());
-        let t: Vec<String> = e.step(&s).into_iter().map(|c| c.text).collect();
+        let mut t: Vec<String> = e.step(&s).into_iter().map(|c| c.text).collect();
         assert!(t.iter().any(|x| x.contains("dead with 2000 souls") && x.contains("20 seconds")), "{t:?}");
+        // The death review waits ~5 s for the damage panel to fill in.
+        s.game_clock_secs = Some(856); s.respawn_secs = Some(14);
+        t.extend(e.step(&s).into_iter().map(|c| c.text));
         assert!(t.iter().any(|x| x.contains("Midboss")), "{t:?}");
     }
 

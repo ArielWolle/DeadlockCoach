@@ -29,7 +29,7 @@ pub enum Area { Lane, Jungle, Base, Dead, Unknown }
 struct Sample {
     clock: u32, area: Area, hp: Option<f32>, you: Option<Pt>, nearest_ally: Option<f32>,
     /// Alive enemies with no top-bar health bar (not seen by your team).
-    unseen: Option<usize>, allies_dead: Option<usize>, souls: Option<u32>,
+    unseen: Option<usize>, allies_dead: Option<usize>, enemies_dead: Option<usize>, souls: Option<u32>,
     /// A cluster of >= 2 allies and >= 2 enemies on the minimap: its distance from you.
     fight_at: Option<f32>, deep_wave: bool,
 }
@@ -41,6 +41,10 @@ struct Death { clock: u32, cause: Option<String> }
 struct State {
     samples: VecDeque<Sample>, deaths: Vec<Death>, dead: bool, reviewed: bool,
     respawned_at: Option<u32>, last_clock: Option<u32>,
+    /// Respawn seconds last read in the current death, and the clock of the last dead sample.
+    last_respawn: Option<u32>, last_dead_clock: Option<u32>,
+    /// The last spoken pattern text (the same summary is never said twice in a row).
+    last_pattern: Option<String>,
 }
 
 /// The review coach. One instance per engine; it keeps its own history.
@@ -90,7 +94,8 @@ impl ReviewCoach {
         }).map(|a| a.distance(me)).min_by(f32::total_cmp));
         let deep_wave = map.is_some_and(|m| [&m.green, &m.blue, &m.yellow].iter().any(|l| l.push.is_some_and(|p| p < 0.3) && l.enemy_troopers >= 2));
         Sample { clock, area, hp: s.hp.zip(s.max_hp).filter(|(h, m)| *m >= 100 && h <= m).map(|(h, m)| h as f32 / m as f32), you, nearest_ally,
-            unseen: team.as_ref().map(|p| p.enemies_unseen), allies_dead: team.as_ref().map(|p| p.allies_dead.len()), souls: s.souls, fight_at, deep_wave }
+            unseen: team.as_ref().map(|p| p.enemies_unseen), allies_dead: team.as_ref().map(|p| p.allies_dead.len()),
+            enemies_dead: team.as_ref().map(|p| p.enemies_dead.len()), souls: s.souls, fight_at, deep_wave }
     }
 
     /// Why the last death happened, from the samples before it. Returns (spoken text, reason ids).
@@ -102,10 +107,21 @@ impl ReviewCoach {
             .map(|x| x.clock).unwrap_or(death.clock);
         let before: Vec<&Sample> = st.samples.iter().filter(|x| x.area != Area::Dead && x.clock + t.death_window_secs >= end && x.clock <= end).collect();
         let alive_known: Vec<&&Sample> = before.iter().filter(|x| x.hp.is_some()).collect();
+        // No readable frames before the death (a recording gap, menus): say so, not "no cause".
+        if before.iter().all(|x| x.area == Area::Unknown) {
+            let (a, b) = self.fill("no_frames", &[]);
+            let cause = death.cause.as_deref().map(|c| format!(" Damage panel: {c}.")).unwrap_or_default();
+            // A Midboss / Walker / structure / trooper cause has its own advice.
+            let advice = death.cause.as_deref().map(crate::death_cause_advice).filter(|(tag, _)| *tag != "heroes").map(|(_, a)| a).unwrap_or(&b);
+            return (format!("{a}{cause} {advice}"), vec!["no_frames".into()]);
+        }
         let mut reasons: Vec<(u8, String, String, String)> = vec![]; // (rank, id, text, lesson)
         let mk = |rank: u8, id: &str, vars: &[(&str, String)]| { let (a, b) = self.fill(id, vars); (rank, id.to_string(), a, b) };
-        // Burst: the last healthy (>= 60%) reading and how long before the death it was.
-        if let Some(h) = alive_known.iter().rev().find(|x| x.hp.is_some_and(|h| h >= 0.6)) {
+        // Burst: from the healthiest reading in the window (the earliest one at that level) to the
+        // end; rec5 said "69% to dead in 2 s" for a 100% -> 0 fall over ~10 s.
+        let peak = alive_known.iter().map(|x| x.hp.unwrap()).fold(0.0f32, f32::max);
+        // From 30%: rec5 went back in at 49% and fell to dead in 6 s, which is still a burst.
+        if let Some(h) = alive_known.iter().find(|x| x.hp.is_some_and(|h| h >= 0.3 && h >= peak - 0.03)) {
             // If even the last alive reading was healthy, the fall was between readings: count to
             // the death screen instead (an upper bound, never an invented shorter time).
             let secs = (if h.clock == end { death.clock } else { end }).saturating_sub(h.clock).max(2);
@@ -123,6 +139,16 @@ impl ReviewCoach {
         let after_respawn = st.respawned_at.is_some_and(|r| end.saturating_sub(r) <= t.respawn_window_secs);
         if alone && after_respawn { reasons.push(mk(2, "respawn_alone", &[("secs", end.saturating_sub(st.respawned_at.unwrap()).to_string())])); }
         else if alone { reasons.push(mk(4, "alone", &[])); }
+        else if st.respawned_at.is_some_and(|r| end >= r && end - r <= 90) {
+            reasons.push(mk(4, "soon_after_respawn", &[("secs", (end - st.respawned_at.unwrap()).to_string())]));
+        }
+        // Went back in weak: every health reading of the last 30 s under 60% (rec5: 44-49% for 30 s
+        // after shopping, then dead).
+        let minute: Vec<f32> = st.samples.iter().filter(|x| x.clock + 30 >= end && x.clock <= end).filter_map(|x| x.hp).collect();
+        if minute.len() >= 3 && minute.iter().all(|h| *h < 0.6) {
+            let top = minute.iter().copied().fold(0.0f32, f32::max);
+            reasons.push(mk(2, "weak_entry", &[("pct", format!("{}", ((top * 100.0 / 5.0).ceil() * 5.0) as u32))]));
+        }
         // In the enemy half with enemies unseen.
         if let Some(x) = before.iter().rev().find(|x| x.you.is_some_and(|p| p.y < 0.48) && x.unseen.is_some_and(|u| u >= t.unseen_enemies)) {
             reasons.push(mk(3, "forward_missing", &[("count", plural(x.unseen.unwrap(), "enemy", "enemies"))]));
@@ -158,13 +184,22 @@ impl ReviewCoach {
         let span = w.last()?.clock.saturating_sub(w.first()?.clock);
         if span < t.pattern_window_secs * 4 / 5 { return None; }
         // Time per area: each sample stands for the gap to the next one (capped at 10 s).
-        let mut time = [0u32; 5]; let mut hoard = 0u32; let mut deep_away = 0u32;
+        let mut time = [0u32; 5]; let mut hoard = 0u32; let mut deep_away = 0u32; let mut peak = 0u32;
+        // Enemy-dead windows: (start, length, most dead, ever in their half).
+        let mut windows: Vec<(u32, u32, usize, bool)> = vec![]; let mut open: Option<(u32, u32, usize, bool)> = None;
         let mut fights_missed = 0u32; let mut fights_joined = 0u32; let mut in_fight: Option<bool> = None;
         for (a, b) in w.iter().zip(w.iter().skip(1)) {
             let dt = b.clock.saturating_sub(a.clock).min(10);
             time[a.area as usize] += dt;
-            if a.area != Area::Dead && a.souls.is_some_and(|v| v >= t.hoard_souls) { hoard += dt; }
-            if a.deep_wave && matches!(a.area, Area::Jungle | Area::Base) { deep_away += dt; }
+            if a.area != Area::Dead && a.souls.is_some_and(|v| v >= t.hoard_souls) { hoard += dt; peak = peak.max(a.souls.unwrap()); }
+            // Defending in base is not being away from a deep wave; only farming camps is.
+            if a.deep_wave && a.area == Area::Jungle { deep_away += dt; }
+            let alive = matches!(a.area, Area::Lane | Area::Jungle | Area::Base);
+            match (a.enemies_dead.filter(|n| *n >= 2), alive, open.as_mut()) {
+                (Some(n), true, Some(w)) => { w.1 += dt; w.2 = w.2.max(n); w.3 |= a.you.is_some_and(|p| p.y < 0.5); }
+                (Some(n), true, None) => open = Some((a.clock, dt, n, a.you.is_some_and(|p| p.y < 0.5))),
+                _ => if let Some(w) = open.take() { windows.push(w); },
+            }
             // A fight episode starts when a cluster appears; it counts once, joined if you were close.
             match (a.fight_at, in_fight) {
                 (Some(d), None) => { let far = d > t.missed_fight_distance && a.area != Area::Dead; in_fight = Some(far); if far { fights_missed += 1 } else { fights_joined += 1 } }
@@ -172,7 +207,12 @@ impl ReviewCoach {
                 _ => {}
             }
         }
-        let deaths = st.deaths.iter().filter(|d| d.clock + t.pattern_window_secs >= now).count();
+        if let Some(w) = open.take() { windows.push(w); }
+        let unused = windows.into_iter().filter(|w| w.1 >= 20 && !w.3).max_by_key(|w| w.1);
+        // Deaths = death-screen runs inside the window (a death just before it still counts).
+        // (Unreadable frames between death screens do not split a death.)
+        let deaths = (0..w.len()).filter(|&i| w[i].area == Area::Dead
+            && w[..i].iter().rev().find(|x| x.area != Area::Unknown).is_none_or(|p| p.area != Area::Dead)).count();
         let known = (time[Area::Lane as usize] + time[Area::Jungle as usize] + time[Area::Base as usize]).max(1);
         let pct = |a: Area| time[a as usize] * 100 / known;
         let min = (span + 30) / 60;
@@ -180,16 +220,20 @@ impl ReviewCoach {
         if deaths >= 2 || time[Area::Dead as usize] >= 60 {
             out.push(self.fill("pattern_deaths", &[("min", min.to_string()), ("deaths", plural(deaths, "time", "times")), ("dead", minutes(time[Area::Dead as usize]))]));
         }
+        if let Some((start, secs, n, _)) = unused {
+            out.push(self.fill("pattern_window", &[("time", format!("{}:{:02}", start / 60, start % 60)), ("count", plural(n, "enemy", "enemies")), ("secs", secs.to_string())]));
+        }
         if fights_missed >= 2 { out.push(self.fill("pattern_missed", &[("fights", plural(fights_missed as usize, "time", "times"))])); }
         if pct(Area::Jungle) >= 50 && known >= 120 { out.push(self.fill("pattern_jungle", &[("jungle", pct(Area::Jungle).to_string()), ("min", min.to_string())])); }
         if deep_away >= 30 { out.push(self.fill("pattern_waves", &[("secs", deep_away.to_string())])); }
-        if hoard >= 60 { out.push(self.fill("pattern_hoard", &[("hoard", t.hoard_souls.to_string()), ("secs", hoard.to_string())])); }
+        if hoard >= 60 { out.push(self.fill("pattern_hoard", &[("hoard", t.hoard_souls.to_string()), ("secs", hoard.to_string()), ("peak", peak.to_string())])); }
         if out.is_empty() {
             if deaths > 0 || known < 120 { return None; }
             out.push(self.fill("pattern_good", &[("min", min.to_string()), ("lane", pct(Area::Lane).to_string()), ("jungle", pct(Area::Jungle).to_string()), ("joined", fights_joined.to_string())]));
         }
         let picked: Vec<_> = out.into_iter().take(2).collect();
-        Some(picked.iter().map(|(a, b)| format!("{a} {b}")).collect::<Vec<_>>().join(" "))
+        let text = picked.iter().map(|(a, b)| format!("{a} {b}")).collect::<Vec<_>>().join(" ");
+        (st.last_pattern.as_deref() != Some(text.as_str())).then_some(text)
     }
 }
 
@@ -204,16 +248,23 @@ impl Rule for ReviewCoach {
         let sample = self.sample(s, clock);
         let dead = sample.area == Area::Dead;
         let mut cues = vec![];
-        if dead && !st.dead {
+        // A new death: entering the death screen, or, while it shows, more than 60 s without any
+        // frame (rec5 merged a death across a 7-minute recording gap). The respawn timer is not
+        // used: its digits misread too often (9 read as 45 split one rec4 death into four).
+        let jumped = dead && st.dead && st.last_dead_clock.is_some_and(|c| clock > c + 60);
+        if dead && (!st.dead || jumped) {
             st.dead = true; st.reviewed = false;
             st.deaths.push(Death { clock, cause: None });
         }
         if dead {
-            if let Some(c) = s.death_cause.clone() { if let Some(d) = st.deaths.last_mut() { d.cause.get_or_insert(c); } }
+            st.last_dead_clock = Some(clock);
+            if s.respawn_secs.is_some() { st.last_respawn = s.respawn_secs; }
+            // The panel fills in over a few seconds: the latest reading wins.
+            if let Some(c) = s.death_cause.clone() { if let Some(d) = st.deaths.last_mut() { d.cause = Some(c); } }
             // Offered on every death-screen frame under a per-death key (the engine speaks a key
             // once): another High cue may take this frame's slot, and a rule cannot know whether
             // it was spoken. Ready once the cause is read, or on a later dead frame.
-            let ready = st.deaths.last().is_some_and(|d| d.cause.is_some() || clock > d.clock + 2);
+            let ready = st.deaths.last().is_some_and(|d| clock >= d.clock + 5);
             if ready {
                 let death = st.deaths.last().unwrap().clone();
                 let (text, _) = self.death_review(&st, &death);
@@ -222,10 +273,11 @@ impl Rule for ReviewCoach {
             }
             // Waiting to respawn is the natural moment for the bigger picture.
             if st.reviewed { if let Some(text) = self.pattern(&st, clock) {
+                st.last_pattern = Some(text.clone());
                 cues.push(Cue { key: format!("review:pattern:{}", clock / t.pattern_window_secs), text, priority: Priority::Normal, cooldown_secs: 600 });
             }}
         } else if s.screen.as_deref() == Some("Gameplay") {
-            if st.dead { st.dead = false; st.respawned_at = Some(clock); }
+            if st.dead { st.dead = false; st.respawned_at = Some(clock); st.last_respawn = None; st.last_dead_clock = None; }
             let me = sample.you;
             // Live: two teammates fell in the last 10 s while an enemy is on you.
             let earlier = st.samples.iter().filter(|x| x.clock + 10 >= clock).filter_map(|x| x.allies_dead).next();
@@ -244,6 +296,7 @@ impl Rule for ReviewCoach {
             // One summary per five-minute block of game time (the key carries the block).
             let calm = sample.hp.is_some_and(|h| h >= 0.6) && !enemy_close;
             if calm { if let Some(text) = self.pattern(&st, clock) {
+                st.last_pattern = Some(text.clone());
                 cues.push(Cue { key: format!("review:pattern:{}", clock / t.pattern_window_secs), text, priority: Priority::Low, cooldown_secs: 600 });
             }}
         }
