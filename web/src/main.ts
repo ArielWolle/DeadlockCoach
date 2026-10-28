@@ -11,6 +11,9 @@ import {regionsFromReport,drawRegions} from './region-overlays';
 import {QuickMonitor} from './quick';
 import {freshCue} from './live-cues';
 import { mountAiCoach, type AiUi } from './ai-coach-ui';
+import { setProfileProvider } from './ai-coach';
+import { PlayerProfile } from './player-profile';
+import { PlayerPage } from './player-page';
 import { clearFrames, download, listFrames, recordFrame, snapshotLines } from './storage';
 import type { Analysis, Cue, GameItem, Knowledge, Options, Settings, Snapshot, WorkerReply, ProfileReply, PerceptionReport, TacticalDecision, PoolStatus, HeroStatus } from './types';
 
@@ -60,6 +63,25 @@ let knowledge: Knowledge[] = [], knowledgeReady: Promise<void> | undefined;
 let itemNames: Record<string, string> = {}, heroNames: Record<string, string> = {};
 let pending: { id: number; resolve: (r: { analysis: Analysis; elapsed: number }) => void;
   reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> } | undefined;
+
+// ---- Player profile hooks (logic: player-profile.ts, UI: player-page.ts) ----
+const playerProfile = new PlayerProfile({ store: (() => { try { return localStorage; } catch { return null; } })() }).load();
+let playerPage: PlayerPage | undefined;
+/** Snapshots analyzed by the replay in progress / the last completed replay (for "Add replay results"). */
+let replayCollect: Snapshot[] | null = null, lastReplay: { snapshots: Snapshot[]; label: string } | null = null;
+/** Feeds a live full-scan result to the profile; at a match start or a respawn it may append one
+ *  'player:focus' reminder (Normal, >= 5 min apart), which deliver() then speaks like any cue. */
+function playerFrame(analysis: Analysis, timestamp: number) {
+  if (!settings.playerProfile || !isDeadlock(activeProfile)) return;
+  const ev = playerProfile.observe(analysis.snapshot, timestamp);
+  if (ev.matchStarted || ev.respawned) { const cue = playerProfile.focusCue(); if (cue) analysis.cues = [...analysis.cues, cue]; }
+  if (ev.ended && location.hash === '#player') playerPage?.render();
+}
+/** Compact profile text for the AI coach prompt (null when off or empty): setProfileProvider(playerPromptText). */
+export function playerPromptText(): string | null { return settings.playerProfile ? playerProfile.promptText() : null; }
+// The AI coach adds the profile (strengths / weaknesses) to its prompt.
+setProfileProvider(playerPromptText);
+(window as unknown as { deadlockPlayerProfile?: unknown }).deadlockPlayerProfile = { promptText: playerPromptText, summary: () => playerProfile.summary(), focusTips: (n = 1) => playerProfile.focusTips(n) };
 
 function notice(message: string, error = false) {
   text('notice', message); $('notice').hidden = !message; $('notice').classList.toggle('error', error);
@@ -170,6 +192,7 @@ function request(message: Record<string, unknown>, transfer: Transferable[] = []
 
 function cancelMode() {
   clearTimeout(recoveryTimer);recoveringFull=false;recoveryAttempts=0;
+  playerProfile.save(); // a stopped session keeps its match open; a long gap or a new clock ends it
   generation++; running = false; paused = false; replaying = false; clearTimeout(timer);
   cropEditor.cancel(); needsViewport = false; button('fix-viewport').hidden = true;
   capture.stop(); speaker.cancel();quick.reset(); button('cancel-replay').disabled = true; ai?.cancel();
@@ -305,7 +328,7 @@ function logCue(cue:Cue,s:Snapshot,fast:boolean,aiCue=false){
   if(settings.record)try{localStorage.setItem(CUE_LOG_KEY,JSON.stringify(cueLog));}catch{/* quota: export keeps the in-memory log */}
 }
 /** Cue keys (or key prefixes) only the full scan's engine produces (QuickCoach::configure). */
-const FULL_ONLY=['counter','death','review','lead','behind','unspent-dead'];
+const FULL_ONLY=['counter','death','review','lead','behind','unspent-dead','player'];
 function deliver(analysis:Analysis,timestamp:number,fast=false){
   const now=Date.now(),age=Math.max(0,now-timestamp);const delivered:Cue[]=[];
   for(const original of analysis.cues){
@@ -379,6 +402,7 @@ async function analyzeLiveFrame(pixels:Pixels,current:number){
     if(current!==generation||!running||paused)return;
     recoveryAttempts=0;
     if(result.analysis.perception)quick.seed(result.analysis.snapshot,result.analysis.perception);
+    playerFrame(result.analysis,timestamp);
     const delivered=deliver(result.analysis,timestamp);
     apply(delivered,result.elapsed);status('Coaching live');
     if(recording&&preview)try{await recordFrame({created:Date.now(),timestamp,snapshot:result.analysis.snapshot,cues:delivered.cues,image:preview,perception:result.analysis.perception,profile_id:activeProfile.id});}
@@ -441,6 +465,7 @@ function drawMap(s: Snapshot) {
 function apply(analysis: Analysis, elapsed: number) {
   latest = analysis.snapshot; lastResultAt = Date.now(); lastElapsed = elapsed;
   ai?.observe(latest, analysis.cues, running && !paused && !replaying);
+  if (replaying && replayCollect && replayCollect.length < 5000) replayCollect.push(analysis.snapshot);
   // The automatic adapter supplies a detected box, not a fixed browser-side map crop.
   // Use pixels from the matching analyzed frame for the game-specific map panel.
   const mapReading=analysis.perception?.fields['world.minimap'];
@@ -561,6 +586,7 @@ async function loadNames() {
     if (!items.ok || !heroes.ok) throw new Error('Game data is unavailable; run the asset build.');
     itemNames = Object.fromEntries((await items.json() as GameItem[]).map(i => [i.class_name, i.name]));
     heroNames = Object.fromEntries((await heroes.json() as { class_name: string; name: string }[]).map(h => [h.class_name, h.name]));
+    playerProfile.setHeroNames(heroNames); if (location.hash === '#player') playerPage?.render();
     const select=$<HTMLSelectElement>('hero-focus');
     for(const [id,name]of Object.entries(heroNames).sort((a,b)=>a[1].localeCompare(b[1]))){const option=document.createElement('option');option.value=id;option.textContent=name;select.append(option);}select.value=settings.heroFocus;
   } catch (e) { notice(String(e), true); }
@@ -574,6 +600,7 @@ async function beginReplay() {
   button('start').disabled = true; text('feed-badge', 'REPLAY · SILENT'); status('Replay lab', 'Local playback · speech is disabled');
   await initialize(); if (!replaying) throw new Error('Replay canceled');
   resetEngine(); cues = []; renderCues(); $('replay-results').replaceChildren(); latestFrame = undefined; latestMap = undefined; drawPreview();
+  replayCollect = [];
   return generation;
 }
 function resultRow(name: string, analysis: Analysis, elapsed: number) {
@@ -615,6 +642,12 @@ function endReplay() {
   replaying = false; button('cancel-replay').disabled = true; button('start').disabled = running;
   for (const key of ['demo', 'demo-replay', 'replay-import']) button(key).disabled = false;
   if (!running) status('Replay complete', 'Start coaching to capture your game, or import more frames');
+  // Offer a completed replay to the player profile (Replay lab and Player page buttons).
+  if (replayCollect?.length && /complete/i.test($('replay-status').textContent || '')) {
+    const names = [...input('replay-files').files || []].map(f => f.name).join(', ');
+    lastReplay = { snapshots: replayCollect, label: names.slice(0, 120) };
+  }
+  replayCollect = null; playerPage?.replayReady();
 }
 async function importFiles() {
   const files = [...input('replay-files').files || []];
@@ -723,6 +756,7 @@ function populateSettings() {
   input('auto-crop').checked = settings.autoCrop;
   $<HTMLSelectElement>('lane-focus').value=settings.laneFocus;
   $<HTMLSelectElement>('hero-focus').value=settings.heroFocus;
+  input('player-profile-enabled').checked=settings.playerProfile;
   for (const key of Object.keys(settings.options) as Array<keyof Options>) input(`opt-${key}`).checked = settings.options[key];
   for (const key of ['x', 'y', 'w', 'h'] as const) input(`crop-${key}`).value = String(Math.round(settings.crop[key] * 1000000) / 10000);
   text('rate-value', `${settings.rate.toFixed(1)}×`); text('volume-value', `${Math.round(settings.volume * 100)}%`);
@@ -744,6 +778,7 @@ function saveForm() {
   next.voice = $<HTMLSelectElement>('voice').value; next.rate = Number(input('rate').value); next.volume = Number(input('volume').value);
   next.interval = Number(input('interval').value); next.record = input('record').checked;
   next.autoCrop = input('auto-crop').checked;
+  next.playerProfile = input('player-profile-enabled').checked;
   for (const key of Object.keys(next.options) as Array<keyof Options>) next.options[key] = input(`opt-${key}`).checked;
   for (const key of ['x', 'y', 'w', 'h'] as const) next.crop[key] = Number(input(`crop-${key}`).value) / 100;
   if(activeProfile.viewport.auto_crop===false)next.crop={x:0,y:0,w:1,h:1};
@@ -756,16 +791,17 @@ function saveForm() {
 }
 function route() {
   let page = location.hash.slice(1) || 'coach';
-  if (!['coach', 'map', 'match', 'replay', 'pipeline', 'knowledge', 'settings'].includes(page)) page = 'coach';
-  if (!isDeadlock(activeProfile) && ['map', 'match', 'knowledge'].includes(page)) page = 'coach';
+  if (!['coach', 'map', 'match', 'player', 'replay', 'pipeline', 'knowledge', 'settings'].includes(page)) page = 'coach';
+  if (!isDeadlock(activeProfile) && ['map', 'match', 'player', 'knowledge'].includes(page)) page = 'coach';
   document.querySelectorAll<HTMLElement>('.page').forEach(el => { el.hidden = el.id !== `page-${page}`; });
   document.querySelectorAll<HTMLAnchorElement>('[data-page]').forEach(a => { if (a.dataset.page === page) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
   if (page === 'knowledge') void loadKnowledge(); if (page === 'replay') void recordings(); if (page === 'settings') diagnostics();
+  if (page === 'player') playerPage?.render();
 }
 
 function refreshGameLayout() {
   const legacy = isDeadlock(activeProfile);
-  for (const page of ['map', 'match', 'knowledge']) document.querySelector<HTMLElement>(`[data-page="${page}"]`)!.hidden = !legacy;
+  for (const page of ['map', 'match', 'player', 'knowledge']) document.querySelector<HTMLElement>(`[data-page="${page}"]`)!.hidden = !legacy;
   document.querySelector<HTMLElement>('.metrics')!.hidden = !legacy;
   $('generic-observations').hidden = legacy;
   $('lane-plan').hidden=!legacy;
@@ -937,7 +973,7 @@ button('reload-engine').onclick = async () => {
 };
 button('clear-cache').onclick = async () => { try { for (const key of await caches.keys()) if (key.startsWith('deadlock-assets-')) await caches.delete(key); notice('Model cache cleared. The next initialization will download models again.'); } catch (e) { notice(String(e), true); } };
 window.addEventListener('hashchange', () => { route(); $('main').focus(); });
-window.addEventListener('beforeunload', () => { capture.stop(); speaker.cancel();quick.stop(); });
+window.addEventListener('beforeunload', () => { capture.stop(); speaker.cancel();quick.stop(); playerProfile.save(); });
 window.speechSynthesis?.addEventListener('voiceschanged', voices);
 // Detect browser scheduling stalls. Never synthesize stale cues while the game has moved on.
 setInterval(() => {
@@ -969,6 +1005,7 @@ ai = mountAiCoach({ settings: () => settings, save: s => { settings = normalize(
   deliver: deliverAi, changed: () => { if (location.hash === '#settings') diagnostics(); } });
 profilePanel = new ProfilePanel({ current: () => activeProfile, apply: applyGameProfile, pick: pickFieldRegion,
   reference: loadReferenceImage, runReference });
+playerPage = new PlayerPage({ profile: playerProfile, notice, download, replay: () => lastReplay });
 refreshGameLayout();
 populateSettings(); renderSnapshot(latest); renderTactics(null,latest); diagnostics(); route(); void loadNames();
 if (import.meta.env.PROD && 'serviceWorker' in navigator) {

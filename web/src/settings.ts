@@ -4,6 +4,7 @@ export const defaults: Settings = {
   options: { timers: true, economy: true, map: true, counters: true, deaths: true, laning:true },
   laneFocus:'auto',
   heroFocus:'',
+  playerProfile:true,
   crop: { x: 0, y: 0, w: 1, h: 1 },
   // Optional AI coach: off by default.
   aiEnabled: false, aiProvider: 'openai', aiBaseUrl: '', aiModel: '', aiKey: '', aiInterval: 40, aiMaxTokens: 200, aiSpeak: true, aiHeaders: '',
@@ -28,6 +29,7 @@ export function normalize(input: unknown): Settings {
   s.aiHeaders = typeof value.aiHeaders === 'string' ? value.aiHeaders.slice(0, 2000) : '';
   s.aiInterval = Math.round(number(value.aiInterval, 15, 600, defaults.aiInterval));
   s.aiMaxTokens = Math.round(number(value.aiMaxTokens, 32, 4096, defaults.aiMaxTokens));
+  s.playerProfile=value.playerProfile!==false;
   for (const key of Object.keys(s.options) as Array<keyof Settings['options']>) if (typeof value.options?.[key] === 'boolean') s.options[key] = value.options[key];
   const c = value.crop;
   // Preserve precise visual selections, including a small game player inside a large

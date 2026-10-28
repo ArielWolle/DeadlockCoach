@@ -32,3 +32,15 @@
 .ai-settings textarea{display:block;width:100%;min-height:64px;resize:vertical;padding:10px;margin:6px 0 12px;background:#0f191c;border:1px solid #60726b;border-radius:5px;color:#d8eadd;font:12px/1.5 Consolas,ui-monospace,monospace}
 .ai-settings #ai-clear-key{margin-top:4px}.ai-secret{-webkit-text-security:disc}
 .ai-test-result{font-size:12px;line-height:1.5;overflow-wrap:anywhere;color:#cfe8dc}.ai-test-result.error{color:#ffd5ce}
+
+/* Player profile page */
+.visually-hidden{position:absolute!important;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
+.button-like{display:inline-flex;align-items:center;border:1px solid #52605f;border-radius:6px;background:#233033;color:inherit;padding:10px 15px;cursor:pointer;font-size:13px;font-weight:600;min-height:40px;letter-spacing:normal;margin:0}
+.button-like:hover{background:#2c3c3f}.visually-hidden:focus-visible+.button-like{outline:2px solid var(--teal);outline-offset:4px}
+.player-filter{display:flex;align-items:center;gap:10px}.player-filter label{margin:0;font-size:12px;color:var(--muted)}
+.player-traits{list-style:none;margin:0;padding:0;display:grid;gap:12px}.player-trait{border:1px solid var(--border);border-radius:8px;padding:12px 14px;background:#141c1f}
+.player-trait.weakness{border-left:3px solid #e39a8e}.player-trait.strength{border-left:3px solid #8fd18b}.player-trait p{margin:8px 0 0;font-size:13px}
+.player-trait-head{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.player-trend.improving{color:#a9e6a5;border-color:#5e8a5b}.player-trend.worse{color:#ffbbb2;border-color:#955950}
+.player-severity.s3{color:#ffbbb2;border-color:#955950}.player-tip{color:#d9e2dc}.player-tip strong{color:var(--amber)}
+.player-table-wrap{overflow-x:auto}.player-table{width:100%;border-collapse:collapse;font-size:13px}.player-table th,.player-table td{text-align:left;padding:8px 10px;border-bottom:1px solid #263134;white-space:nowrap}.player-table th{color:var(--muted);font-weight:600}
+#player-prompt{white-space:pre-wrap;font-size:12px}

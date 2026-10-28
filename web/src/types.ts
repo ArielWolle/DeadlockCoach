@@ -63,6 +63,8 @@ export interface Settings {
   aiEnabled: boolean; aiProvider: 'openai' | 'anthropic'; aiBaseUrl: string; aiModel: string;
   /** Stored only in this browser's localStorage; never logged or exported. */
   aiKey: string; aiInterval: number; aiMaxTokens: number; aiSpeak: boolean; aiHeaders: string;
+  /** Player profile (player-profile.ts): learn from matches and speak one focus reminder. Local only. */
+  playerProfile:boolean;
 }
 export interface RecordedFrame { id?: number; created: number; timestamp: number; snapshot: Snapshot; cues: Cue[]; image: Blob; perception?: PerceptionReport | null; profile_id?: string }
 export interface Manifest { schema: number; version: string; files: Record<string, { bytes: number; sha256: string }> }
