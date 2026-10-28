@@ -37,7 +37,7 @@ export function mountAiCoach(deps: AiUiDeps): AiUi {
     } else {
       setText('ai-advice', s.message); setText('ai-why', ''); setText('ai-meta', s.state === 'off' ? '' : `${s.requests} requests so far`);
     }
-    const error = el('ai-error'); error.hidden = s.state !== 'error' && !(s.state === 'idle' && /stale|canceled|in flight/i.test(s.message));
+    const error = el('ai-error'); error.hidden = s.state !== 'error' && !(s.state === 'idle' && /stale|canceled|in flight|skipped/i.test(s.message));
     error.textContent = s.state === 'error' ? `${s.message} ${s.error || ''}`.trim() : s.message;
     error.classList.toggle('error', s.state === 'error');
     deps.changed?.();

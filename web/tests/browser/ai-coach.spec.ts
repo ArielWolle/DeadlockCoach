@@ -6,6 +6,8 @@ test.use({ serviceWorkers: 'block' });
 const KEY = 'sk-test-PLAYWRIGHT-SECRET-4242';
 const cors = { 'access-control-allow-origin': '*', 'access-control-allow-headers': 'authorization, content-type, x-api-key, anthropic-version, anthropic-dangerous-direct-browser-access', 'access-control-allow-methods': 'POST, OPTIONS' };
 const ADVICE = 'Spend your 3,400 souls now. Buy before Graves catches you in Blue.';
+// Automatic advice passes the repeat/souls gate (checkAdvice), so the live test uses a non-souls call.
+const LIVE_ADVICE = 'Walk out with a teammate and hold max range behind your front line.';
 
 function settings(provider: 'openai' | 'anthropic') {
   return { aiEnabled: true, aiProvider: provider, aiBaseUrl: provider === 'openai' ? 'https://gateway.test/v1' : 'https://anthropic.test', aiModel: 'mock-model',
@@ -77,6 +79,8 @@ for (const provider of ['openai', 'anthropic'] as const) {
       expect(seen[0].headers.authorization).toBe(`Bearer ${KEY}`);
       expect(body.model).toBe('mock-model'); expect(body.messages.map((m: { role: string }) => m.role)).toEqual(['system', 'user']);
       expect(body.messages[1].content).toContain('Unspent souls 3,400');
+      // Souls are worded against the usual buy at 10:05 (3,200 tier), with the souls gate stated.
+      expect(body.messages[1].content).toMatch(/can afford the usual 3,200 buy for 10:05 · Souls advice: (allowed|not allowed \(the rule coach already said it)/);
     } else {
       expect(seen[0].headers['x-api-key']).toBe(KEY); expect(seen[0].headers['anthropic-version']).toBe('2023-06-01');
       expect(seen[0].headers['anthropic-dangerous-direct-browser-access']).toBe('true');
@@ -143,14 +147,14 @@ test('live coaching: periodic AI advice is spoken through the speaker, and pause
       const draw = () => ctx.drawImage(image, 0, 0); draw(); setInterval(draw, 100); return canvas.captureStream(10);
     } });
   }, { ...settings('openai'), aiInterval: 15, record: false });
-  const seen = await mockGateway(page, 'gateway.test', () => ({ choices: [{ message: { content: JSON.stringify({ speak: ADVICE, priority: 'Normal', why: 'live test', focus: 'souls' }) } }] }));
+  const seen = await mockGateway(page, 'gateway.test', () => ({ choices: [{ message: { content: JSON.stringify({ speak: LIVE_ADVICE, priority: 'Normal', why: 'live test', focus: 'positioning' }) } }] }));
   await page.goto('./'); await page.getByRole('button', { name: 'Start coaching' }).click();
   await expect(page.locator('#session-state')).toHaveText('Coaching live', { timeout: 110000 });
   // The first periodic request waits a full interval after gameplay is first observed.
   await expect.poll(() => seen.length, { timeout: 60000 }).toBeGreaterThanOrEqual(1);
   expect(JSON.parse(seen[0].body).messages[1].content).toContain('Trigger: periodic');
   await expect(page.locator('#ai-meta')).toContainText('Periodic');
-  await expect.poll(() => page.evaluate(() => (window as unknown as { spoken: string[] }).spoken), { timeout: 10000 }).toContain(ADVICE);
+  await expect.poll(() => page.evaluate(() => (window as unknown as { spoken: string[] }).spoken), { timeout: 10000 }).toContain(LIVE_ADVICE);
   await page.getByRole('button', { name: 'Pause', exact: true }).click();
   const count = seen.length; await page.waitForTimeout(17000);
   expect(seen.length).toBe(count);
