@@ -1,18 +1,158 @@
-use coach_core::{GameSnapshot, HeroStatus, HeroTrack, Lane, MinimapState, Pt};
-use coach_engine::{review::{Catalog, ReviewCoach}, Rule};
+use coach_core::{DamageRow, GameSnapshot, HeroStatus, HeroTrack, Lane, MinimapState, Pt};
+use coach_engine::{review::{game_data, Catalog, ReviewCoach}, Rule};
 
 #[test]
 fn review_cards_quote_real_document_guidance() {
     let catalog: Catalog = serde_json::from_str(include_str!("../../../data/coaching/review.json")).unwrap();
     assert_eq!(catalog.schema_version, 1);
-    for c in catalog.cards {
-        assert!(!c.sources.is_empty(), "{}", c.id);
-        for s in c.sources {
+    let mut all: Vec<(String, Vec<coach_engine::laning::Source>)> = catalog.cards.iter().map(|c| (c.id.clone(), c.sources.clone())).collect();
+    all.extend(catalog.threats.iter().map(|t| (format!("threat:{}", t.source), t.sources.clone())));
+    all.extend(catalog.counters.iter().map(|c| (format!("counter:{}", c.need), c.sources.clone())));
+    for (id, sources) in all {
+        assert!(!sources.is_empty(), "{id}");
+        for s in sources {
             let text = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs").join(&s.path)).unwrap();
-            assert!(text.contains(&s.excerpt), "{}: missing excerpt {}", c.id, s.excerpt);
-            assert!(text.contains(&s.section), "{}: missing section {}", c.id, s.section);
+            assert!(text.contains(&s.excerpt), "{id}: missing excerpt {}", s.excerpt);
+            assert!(text.contains(&s.section), "{id}: missing section {}", s.section);
         }
     }
+}
+
+#[test]
+fn threats_and_counter_items_exist_in_the_game_data() {
+    let catalog: Catalog = serde_json::from_str(include_str!("../../../data/coaching/review.json")).unwrap();
+    let data = game_data();
+    for t in &catalog.threats {
+        if !t.hero.is_empty() { assert_ne!(data.hero_name(&t.hero), t.hero.trim_start_matches("hero_"), "unknown hero {}", t.hero); }
+        if !t.counter.is_empty() { assert!(catalog.counters.iter().any(|c| c.need == t.counter), "{}", t.counter); }
+    }
+    for c in &catalog.counters {
+        for name in &c.items {
+            let item = data.item(name).unwrap_or_else(|| panic!("{name} is not in items.json"));
+            assert!(item.cost > 0, "{name}");
+            assert!(format!("{} {}", item.desc, item.effect).to_lowercase().contains(&c.keyword.to_lowercase()), "{name} lacks {}", c.keyword);
+        }
+    }
+    for h in &catalog.roles.ranged { assert_ne!(data.hero_name(h), h.trim_start_matches("hero_"), "unknown hero {h}"); }
+}
+
+/// Replays real pipeline outputs through the review coach and prints every cue. Run with
+/// `cargo test --release -p coach-engine --test review replay -- --ignored --nocapture`
+/// (REVIEW_REPLAY=path1;path2 overrides the default recordings).
+#[test]
+#[ignore]
+fn replay_recordings() {
+    let paths = std::env::var("REVIEW_REPLAY").unwrap_or_else(|_| [
+        r"C:\Users\arielwolle\Documents\Github\DeadlockCoach\frames\rec5\replay5.jsonl",
+        r"C:\Users\arielwolle\Documents\Github\DeadlockCoach\frames\rec3\replay4.jsonl"].join(";"));
+    for path in paths.split(';') {
+        let Ok(text) = std::fs::read_to_string(path) else { println!("skip {path}"); continue };
+        println!("===== {path}");
+        let mut e = coach_engine::Engine::new(vec![Box::new(ReviewCoach::default())]);
+        for line in text.lines() {
+            let v: serde_json::Value = match serde_json::from_str(line) { Ok(v) => v, Err(_) => continue };
+            let Ok(s) = serde_json::from_value::<GameSnapshot>(v["snapshot"].clone()) else { continue };
+            let clock = s.game_clock_secs.unwrap_or(0);
+            for c in e.step(&s) { println!("[{}:{:02}] {} :: {}", clock / 60, clock % 60, c.key, c.text); }
+        }
+    }
+}
+
+fn rows(r: &[(&str, u32)]) -> Vec<DamageRow> { r.iter().map(|(s, d)| DamageRow { source: s.to_string(), hits: None, damage: *d }).collect() }
+fn enemy_team() -> Vec<String> { ["hero_drifter", "hero_artist", "hero_nurse", "hero_frank", "hero_doorman", "hero_chrono"].map(String::from).to_vec() }
+fn panel(clock: u32, r: &[(&str, u32)], kb: &str, total: Option<u32>) -> GameSnapshot {
+    let mut d = dead(clock, Some(r[0].0)); d.death_damage = rows(r); d.death_killing_blow = Some(kb.into()); d.death_total_damage = total;
+    d.enemy_heroes = enemy_team(); d.hero = Some("hero_orion".into()); d
+}
+
+#[test]
+fn the_panel_names_the_heroes_the_crowd_control_and_a_hero_specific_lesson() {
+    // rec5 death 1: Victor's aura, stunned twice, knocked off the zipline; Violet, Nurse Harrow.
+    let r = ReviewCoach::default();
+    let p = Pt { x: 0.3, y: 0.74 };
+    for (t, hp, fx) in [(1489u32, 2065u32, vec![]), (1492, 1472, vec!["Aura of Suffering"]), (1493, 1417, vec!["stunned", "Aura of Suffering"]), (1494, 1069, vec![]), (1497, 369, vec!["stunned", "Aura of Suffering"])] {
+        let mut s = alive(t, hp, p, Some(Lane::Yellow), vec![track(1, true, 0.31, 0.74)], team(0, 0), 600);
+        s.max_hp = Some(2065); s.status_effects = fx.into_iter().map(String::from).collect(); s.hero = Some("hero_orion".into()); s.enemy_heroes = enemy_team();
+        r.evaluate(&s);
+    }
+    let rows = [("Aura of Suffering", 789), ("Still Life", 613), ("Lurking Terrors", 540), ("Knocked off Zipline", 332), ("Sinner's Sacrifice", 320), ("Mystic Shot", 175)];
+    r.evaluate(&panel(1500, &rows, "Mystic Shot", Some(4451)));
+    let t = &r.evaluate(&panel(1505, &rows, "Mystic Shot", Some(4451)))[0].text;
+    assert!(t.contains("Victor did at least 789 damage with Aura of Suffering, 28% of what the panel lists"), "{t}");
+    assert!(t.contains("At least 3 enemy heroes hit you: Victor, Violet and Nurse Harrow"), "{t}");
+    assert!(t.contains("You were stunned twice and knocked off the zipline"), "{t}");
+    assert!(t.contains("inside Victor's Aura of Suffering"), "{t}");
+    assert!(t.contains("As Grey Talon, back off to max range when the Aura of Suffering badge appears"), "{t}");
+    assert!(t.contains("Get off the zipline before you reach a fight"), "{t}");
+    assert!(!t.contains("no clear cause"), "{t}");
+}
+
+#[test]
+fn a_marked_solo_kill_by_a_repeat_killer_gets_the_mark_lesson_and_a_counter_item() {
+    let r = ReviewCoach::default();
+    let p = Pt { x: 0.2, y: 0.68 };
+    // First death to Drifter (Bloodscent: isolated).
+    r.evaluate(&alive(2300, 1500, p, Some(Lane::Yellow), vec![], team(0, 0), 800));
+    r.evaluate(&panel(2310, &[("Gun Damage", 604), ("Gun Damage", 417), ("Bloodscent", 241), ("Rend", 231)], "Gun Damage", None));
+    let t = &r.evaluate(&panel(2318, &[("Gun Damage", 604), ("Gun Damage", 417), ("Bloodscent", 241), ("Rend", 231)], "Gun Damage", None))[0].text;
+    assert!(t.contains("At least 2 enemy heroes hit you: Drifter and another hero's gun"), "{t}");
+    assert!(t.contains("you were isolated"), "{t}");
+    // Respawn, marked, silenced, knocked off the zipline, solo kill holding 3,467 souls.
+    for (c, hp, fx) in [(2402u32, 3199u32, vec![]), (2449, 2745, vec!["silenced", "stalkers mark"]), (2459, 1831, vec!["stunned", "knocked_off_zipline"])] {
+        let mut s = alive(c, hp, p, Some(Lane::Yellow), vec![], team(0, 0), 3467);
+        s.max_hp = Some(3199); s.status_effects = fx.into_iter().map(String::from).collect(); s.hero = Some("hero_orion".into());
+        r.evaluate(&s);
+    }
+    let rows = [("Stalker's Mark", 895), ("Melee", 638), ("Rend", 559), ("Knocked off Zipline", 473), ("Spirit Burn", 214)];
+    r.evaluate(&panel(2463, &rows, "Spirit Burn", Some(3332)));
+    let t = &r.evaluate(&panel(2468, &rows, "Spirit Burn", Some(3332)))[0].text;
+    assert!(t.contains("Drifter is the only hero named on the damage panel, with Stalker's Mark and Rend: likely a solo kill"), "{t}");
+    assert!(t.contains("That is 2 deaths to Drifter"), "{t}");
+    assert!(t.contains("When Stalker's Mark is on you, stand next to a teammate"), "{t}");
+    assert!(t.contains("Buy Dispel Magic (3,200), you had 3,467 souls"), "{t}");
+    assert!(!t.contains("first big hit"), "wrong advice against a Mark commit: {t}");
+}
+
+#[test]
+fn a_panel_without_named_heroes_is_reported_not_called_unclear() {
+    let r = ReviewCoach::default();
+    r.evaluate(&alive(900, 2000, Pt { x: 0.5, y: 0.6 }, Some(Lane::Blue), vec![], team(0, 0), 300));
+    let rows = [("Trooper", 700), ("Gun Damage", 300)];
+    let mut d = dead(905, Some("Trooper")); d.death_damage = super_rows(&rows);
+    r.evaluate(&d);
+    let mut d = dead(913, Some("Trooper")); d.death_damage = super_rows(&rows);
+    let t = &r.evaluate(&d)[0].text;
+    assert!(t.contains("The damage panel shows Trooper as the biggest source (700)"), "{t}");
+    assert!(t.contains("Troopers did 700 damage: you were fighting inside their wave"), "{t}");
+    assert!(!t.contains("no clear cause"), "{t}");
+}
+fn super_rows(r: &[(&str, u32)]) -> Vec<DamageRow> { rows(r) }
+
+#[test]
+fn the_pattern_names_a_repeat_killer_crowd_control_and_close_range_deaths() {
+    let r = ReviewCoach::default();
+    let p = Pt { x: 0.3, y: 0.7 };
+    let mut said = vec![];
+    let drifter = [("Stalker's Mark", 900), ("Rend", 560), ("Melee", 600)];
+    for t in (1000..=1300).step_by(2) {
+        let death = (1100..1120).contains(&t) || (1260..1300).contains(&t);
+        let s = if death {
+            let mut d = panel(t, &drifter, "Rend", Some(2100));
+            d.souls = Some(500);
+            d
+        } else {
+            let mut s = alive(t, 2400, p, Some(Lane::Yellow), vec![track(1, true, 0.31, 0.7)], team(0, 0), 500);
+            s.hero = Some("hero_orion".into()); s.enemy_heroes = enemy_team();
+            if t == 1096 || t == 1256 { s.status_effects = vec!["stunned".into()]; }
+            s
+        };
+        said.extend(r.evaluate(&s));
+    }
+    let p = said.iter().find(|c| c.key == "review:pattern:death:2").unwrap_or_else(|| panic!("{said:?}"));
+    assert!(p.text.contains("Drifter killed you 2 times in the last"), "{}", p.text);
+    assert!(p.text.contains("Buy Dispel Magic (3,200)"), "{}", p.text);
+    assert!(p.text.contains("crowd-controlled before both deaths (stunned)"), "{}", p.text);
+    assert!(p.text.contains("Both deaths were at close range (Stalker's Mark, Rend and Melee)"), "{}", p.text);
 }
 
 /// Top bar: `allies_dead` of slots 0-5 dead, `unseen` alive enemies without a health bar.

@@ -39,7 +39,7 @@ thresholds of `data/coaching/review.json`:
 | Killer family | Victor's Aura of Suffering / Still Life, Drifter's Stalker's Mark and melee hits count as melee range; Bebop's Hyper Beam, structures, troopers, gun damage and unknown abilities (grouped by first word, so OCR variants match) are named but range is not claimed. Optional `death_damage` / `death_killing_blow` are used when the reader provides them. |
 | Fights | A minimap cluster of >= 2 allies and >= 2 enemies within 0.13; joined if you were within 0.3 (a third of the map); a cluster absent for less than 10 s is the same fight. |
 | Enemy-dead windows | >= 2 enemies dead for >= 20 s while you are alive; *used* when you were in their half (y < 0.5) or the front of the lane you were on moved >= 0.15 toward them. Unknown frames keep a window open without adding time. |
-| Souls | Alive time over 3,000 unspent (`hoard_souls`), its peak, and souls at each death (`souls_at_death` 1,500). A missing souls read keeps the previous read for up to 10 s. |
+| Souls | Alive time over 3,000 unspent (`hoard_souls`), its peak, and souls at each death (`souls_at_death` 1,200). A missing souls read keeps the previous read for up to 10 s. |
 | Low health | Alive time under 30%; episodes under 30% end *survived* (back to >= 50% or in base) or *died*. |
 | Deep waves | A wave deep on your side (front < 0.3, >= 2 enemy troopers) while you were in the jungle. |
 | Farm pace | Souls per minute from the own earned-souls label, when it was read twice >= 2 minutes apart. |
