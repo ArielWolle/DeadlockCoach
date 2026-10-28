@@ -6,7 +6,8 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { AiCoach, AiHistory, MAX_INPUT_CHARS, SUMMARY_MAX_CHARS, SYSTEM_PROMPT, COACH_BRIEF, buildPrompt, buildRequest, buildSummary, callGateway, cleanSpeech,
   endpoint, extractText, heroMatchup, parseAdvice, retrieve, sections, situationTerms, testConnection, upcomingObjectives, setProfileProvider, profileText,
-  type AiConfig, type AiSnapshot } from '../src/ai-coach.ts';
+  checkAdvice, coachingAngles, overlap, soulsView, topicOf, TASKS,
+  type Advice, type AiConfig, type AiSnapshot } from '../src/ai-coach.ts';
 import { defaults, normalize } from '../src/settings.ts';
 import type { Knowledge, Settings } from '../src/types.ts';
 
@@ -51,7 +52,7 @@ test('state summary is deterministic, cites history and stays within budget', ()
   const input = { snapshot: snap(690), history: h, now: 91000, trigger: 'periodic' as const, name: (id: string) => id === 'hero_graves' ? 'Graves' : id.replace(/^(hero_|upgrade_)/, '') };
   const a = buildSummary(input), b = buildSummary(input);
   assert.equal(a, b);
-  for (const part of ['clock 11:30 (midgame)', 'You: haze', 'HP 600/1,000 (60%)', '100→90→70→60', 'Unspent souls 3,400', 'held ≥2,550 for 90s', 'can afford a 3,200 item',
+  for (const part of ['clock 11:30 (midgame)', 'You: haze', 'HP 600/1,000 (60%)', '100→90→70→60', 'Unspent souls 3,400', 'held ≥2,550 for 90s', 'can afford the usual 3,200 buy for 11:30 · Souls advice: allowed',
     'Area: Blue lane, 45% up lane · zone Blue jungle', 'Enemies: 1 alive, dead: Graves (22s), not seen recently: 1', 'Team souls: yours 20,000 vs enemy 18,000 (+2,000)',
     '1 enemies visible (1 near you', '1 missing (last seen 12s ago)', 'Midboss icon visible', 'rule: Back off to cover.']) assert.ok(a.includes(part), `${part}\n---\n${a}`);
   assert.ok(a.includes('Upcoming: Guardians reach minimum resist at 12:00 (in 0:30)'), a);
@@ -70,7 +71,7 @@ test('death history records the death panel and the souls held before dying', ()
   assert.equal(h.deathCount, 1);
   const s = buildSummary({ snapshot: snap(704, { dead: true, screen: 'Dead' }), history: h, now: 4000, trigger: 'death' });
   assert.match(s, /YOU ARE DEAD/);
-  assert.match(s, /Death at 11:42: cause Graves · damage taken: Graves 620, Shiv 300 · killing blow Graves · last alive HP 15% · unspent before death 2,400 \(unsecured 600\) · respawn 16s/);
+  assert.match(s, /Death at 11:42: cause Graves · damage taken: Graves 620, Shiv 300 · killing blow Graves · last alive HP 15% · allies near you 0, enemies near 1 · unspent before death 2,400 \(unsecured 600\) · death-spend threshold 1,600: reached · respawn 16s/);
 });
 
 test('objective timer helper lists only near events in order', () => {
@@ -102,7 +103,7 @@ test('prompt stays within ~2,500 tokens and includes the profile, brief and exce
   assert.ok(p.user.includes('PLAYER PROFILE') && p.user.includes(COACH_BRIEF) && p.user.includes('REFERENCE EXCERPTS'));
   assert.ok(p.user.startsWith('TASK: The player pressed'));
   const small = buildPrompt({ trigger: 'death', summary: 'Trigger: death' });
-  assert.ok(!small.user.includes('PLAYER PROFILE')); assert.ok(small.user.includes('just died'));
+  assert.ok(!small.user.includes('PLAYER PROFILE (from')); assert.ok(small.user.includes('just died'));
 });
 
 test('request shapes for OpenAI-compatible and Anthropic gateways', () => {
@@ -170,7 +171,7 @@ test('controller: periodic cadence, one request in flight, stale drop, backoff a
   now += 2000; coach.observe(snap(621), [{ key: 'lane:back_off', text: 'Back off', priority: 'High', cooldown_secs: 5 }], true); await flush();
   assert.equal(calls, 0, 'a High rule moment suppresses periodic requests');
   now += 11000; coach.observe(snap(632), [], true); await flush(); await flush();
-  assert.equal(calls, 1); assert.deepEqual(delivered, [{ key: 'ai:periodic:souls', priority: 'Normal', live: true }]);
+  assert.equal(calls, 1); assert.deepEqual(delivered, [{ key: 'ai:periodic:economy', priority: 'Normal', live: true }]);
   assert.ok(!bodies[0].includes('SECRET'), 'key travels only in headers');
   // Stale answers (older than 15 s) are dropped for live triggers.
   let release!: () => void; gate = new Promise(r => { release = r; });
@@ -185,11 +186,14 @@ test('controller: periodic cadence, one request in flight, stale drop, backoff a
   now += 21000 - 1; const before = calls; now += 1; coach.observe(snap(721), [], true); await flush(); await flush(); assert.equal(calls, before + 1);
   assert.match(coach.diagnostic(), /backing off 10 s/);
   // Death: one deeper review per death, after the death panel is read.
-  reply = () => new Response(JSON.stringify({ choices: [{ message: { content: '{"speak":"You died to Graves while holding 2,400 souls. Spend before you fight.","priority":"Normal","why":"death panel","focus":"death"}' } }] }));
+  reply = () => new Response(JSON.stringify({ choices: [{ message: { content: '{"speak":"Graves caught you in melee range. Next life hold max range behind your front line.","priority":"Normal","why":"death panel","focus":"death"}' } }] }));
   now += 60000; coach.observe(snap(780, { dead: true, screen: 'Dead' }), [], true); await flush(); const atDeath = calls;
   assert.equal(atDeath, before + 1, 'waits for the death panel');
-  now += 500; coach.observe(snap(781, { dead: true, screen: 'Dead', death_cause: 'Graves' }), [], true); await flush(); await flush();
+  now += 500; coach.observe(snap(781, { dead: true, screen: 'Dead', death_cause: 'Graves' }), [], true); await flush();
+  assert.equal(calls, atDeath, 'waits for the rule death review or 4 s after the panel');
+  now += 500; coach.observe(snap(782, { dead: true, screen: 'Dead', death_cause: 'Graves' }), [{ key: 'death:review:780', text: 'Why you died: Graves did 620 damage at close range.', priority: 'Normal', cooldown_secs: 0 }], true); await flush(); await flush();
   assert.equal(calls, atDeath + 1); assert.equal(delivered.at(-1)?.key, 'ai:death:death');
+  assert.ok(bodies.at(-1)!.includes('Rule death review (already spoken): Why you died: Graves did 620'));
   assert.ok(bodies.at(-1)!.includes('just died') && bodies.at(-1)!.includes('cause Graves'));
   now += 3000; coach.observe(snap(784, { dead: true, screen: 'Dead', death_cause: 'Graves' }), [], true); await flush(); assert.equal(calls, atDeath + 1);
   // Not live (replay/paused): no automatic requests; generation change drops a manual answer.
@@ -198,4 +202,132 @@ test('controller: periodic cadence, one request in flight, stale drop, backoff a
   assert.equal(delivered.at(-1)?.key, 'ai:death:death');
   // Disabled: nothing is sent.
   st = settings({ aiEnabled: false }); gate = Promise.resolve(); await coach.ask('manual'); assert.equal(coach.status.state, 'off');
+});
+
+// ---------------------------------------------------------------------------------------
+// Souls tiers, repeat gate, death review and coaching angles (rec8 regressions)
+// ---------------------------------------------------------------------------------------
+const unspent = (text = 'You can afford a 6,400-soul item: you have 7,443 souls.') => ({ key: 'unspent', text, priority: 'Normal' as const, cooldown_secs: 150 });
+function summaryAt(clock: number, souls: number, cues: ReturnType<typeof unspent>[] = []) {
+  const h = new AiHistory();
+  h.push(snap(clock - 60, { souls }), cues, 0); h.push(snap(clock, { souls }), [], 60000);
+  return buildSummary({ snapshot: snap(clock, { souls }), history: h, now: 60000, trigger: 'periodic' });
+}
+
+test('souls are worded against the usual buy for the game time (economy.rs spend_target), never as "can afford a 1,600 item" late', () => {
+  const late = summaryAt(2049, 2834);
+  assert.ok(late.includes('Souls 2,834 (saving: the usual buy now is a 6,400 item; 3,566 short) · Souls advice: not allowed (saving for the usual 6,400 buy)'), late);
+  assert.ok(!/can afford|1,600 item/.test(late), late);
+  assert.ok(summaryAt(2426, 7443).includes('Unspent souls 7,443 · held ≥5,582 for 60s · can afford the usual 6,400 buy for 40:26 · Souls advice: allowed'));
+  assert.ok(summaryAt(2426, 7443, [unspent()]).includes('can afford the usual 6,400 buy for 40:26 · Souls advice: not allowed (the rule coach already said it at 39:26)'));
+  assert.ok(summaryAt(540, 1700).includes('can afford the usual 1,600 buy for 9:00 · Souls advice: allowed'));
+  assert.ok(summaryAt(900, 2000).includes('Souls 2,000 (saving: the usual buy now is a 3,200 item; 1,200 short)'));
+  // The rule reminder closes the gate for 3 minutes only.
+  const h = new AiHistory(); h.push(snap(2200, { souls: 7443 }), [unspent()], 0); h.push(snap(2390, { souls: 7443 }), [], 190000);
+  assert.equal(soulsView(snap(2390, { souls: 7443 }), h, 190000).allowed, true);
+});
+
+test('repeat gate: same focus within 3 min, near-duplicate text and rule repeats are not spoken; manual and urgent calls pass', () => {
+  const a = (speak: string, focus: string, priority: Advice['priority'] = 'Normal'): Advice => ({ speak, focus, priority, why: '' });
+  const h = new AiHistory();
+  h.push(snap(2000, { souls: 7000 }), [], 0);
+  h.noteAdvice({ t: 0, clock: 2000, trigger: 'periodic', topic: 'economy', text: 'Spend your 7,000 souls now at the nearest shop on a 6,400 item.' });
+  h.push(snap(2100, { souls: 7200 }), [{ key: 'lane:back_off', text: 'Health looks low or falling. Back behind cover before trading.', priority: 'Normal', cooldown_secs: 20 }], 100000);
+  const v = soulsView(snap(2100, { souls: 7200 }), h, 100000); assert.equal(v.allowed, true);
+  const repeat = a('Spend your 7,200 souls at the Blue shop and get a 6,400 item.', 'items');
+  const r1 = checkAdvice(repeat, 'periodic', v, h, 100000);
+  assert.ok(!r1.ok && /same focus \(economy\) as the AI call at 33:20/.test(r1.reason), JSON.stringify(r1));
+  assert.ok(checkAdvice(repeat, 'manual', v, h, 100000).ok, 'the player asked: no gating');
+  const r2 = checkAdvice(a('Yamato is alive: hold max range behind Abrams.', 'positioning'), 'periodic', v, h, 100000);
+  assert.ok(r2.ok && r2.topic === 'positioning' && r2.speak === 'Yamato is alive: hold max range behind Abrams.');
+  const r3 = checkAdvice(a('Your health is low: back behind cover before trading.', 'health'), 'periodic', v, h, 100000);
+  assert.ok(!r3.ok && /repeats the rule call/.test(r3.reason), JSON.stringify(r3));
+  // After the 3-minute focus window a near-identical text is still a repeat (5-minute window).
+  h.push(snap(2200, { souls: 7200 }), [], 200000);
+  const r4 = checkAdvice(a('Spend your 7,200 souls now at the nearest shop on a 6,400 item.', 'general'), 'periodic', soulsView(snap(2200, { souls: 7200 }), h, 200000), h, 200000);
+  assert.ok(!r4.ok && /near-duplicate of the AI call at 33:20/.test(r4.reason), JSON.stringify(r4));
+  // Same focus again is allowed only when urgent (High, not souls).
+  h.noteAdvice({ t: 200000, clock: 2200, trigger: 'periodic', topic: 'positioning', text: 'Hold max range behind Abrams while Yamato is up.' });
+  h.push(snap(2230), [], 230000);
+  const v2 = soulsView(snap(2230), h, 230000);
+  assert.equal(checkAdvice(a('Shiv is diving you now: dash back to Bebop.', 'range'), 'periodic', v2, h, 230000).ok, false);
+  assert.equal(checkAdvice(a('Shiv is diving you now: dash back to Bebop.', 'range', 'High'), 'periodic', v2, h, 230000).ok, true);
+  // Topics and overlap (the rec8 calls tagged "souls" and "items" are one topic).
+  assert.equal(topicOf('items', "Spend your 2,834 souls now at the nearest shop on a 1,600 item - you're holding too long."), 'economy');
+  assert.equal(topicOf('objective', 'Escort the Soul Urn to the delivery point.'), 'objective');
+  assert.ok(overlap("Spend your 2,834 souls now at the nearest shop on a 1,600 item - you're holding too long and risk losing them. Buy before pushing the next wave.",
+    'Spend your 2,026 souls at the Blue shop after this wave - get a 1,600 item to stay ahead.') >= .6);
+  assert.ok(overlap('Push the Green wave into the enemy guardian, then grab the easy camp.', 'Walk out with Bebop and hold max range behind him.') < .2);
+});
+
+test('death review: no souls talk below the death-spend threshold; the prompt carries damage, killing blow, CC and the rule review', () => {
+  const h = new AiHistory();
+  h.push(snap(1670, { souls: 2394, hp: 1800, max_hp: 1890, status_effects: ['stunned'] }), [], 0);
+  h.push(snap(1674, { souls: 2394, hp: 599, max_hp: 1890 }), [], 4000);
+  const dead = snap(1677, { dead: true, screen: 'Dead', hero: null, hp: null, max_hp: null, souls: 2409, respawn_secs: 56, death_cause: 'Melee',
+    death_damage: [{ source: 'Melee', damage: 525 }, { source: 'Flying Slash', damage: 501 }], death_killing_blow: 'Melee' });
+  h.push(dead, [{ key: 'death:review:1677', text: 'Why you died: Yamato did 35% of the damage (622) with Flying Slash and Power Slash.', priority: 'Normal', cooldown_secs: 0 }], 7000);
+  const summary = buildSummary({ snapshot: dead, history: h, now: 7000, trigger: 'death' });
+  for (const part of ['YOU ARE DEAD', 'You: haze', 'cause Melee · damage taken: Melee 525, Flying Slash 501 · killing blow Melee · status effects before death: stunned · last alive HP 32%',
+    'death-spend threshold 3,200: not reached', 'Souls advice: not allowed (2,409 is below the 3,200 death-spend threshold: not a souls death)',
+    'Rule death review (already spoken): Why you died: Yamato did 35%']) assert.ok(summary.includes(part), `${part}\n---\n${summary}`);
+  const p = buildPrompt({ trigger: 'death', summary });
+  assert.ok(p.user.startsWith(TASKS.death)); assert.match(p.user, /Explain WHY/); assert.match(p.system, /Souls advice: allowed/);
+  assert.ok(!situationTerms(dead, h, 'death').includes('haunted'), 'no unsecured-souls excerpts for a death below the threshold');
+  const v = soulsView(dead, h, 7000); assert.equal(v.allowed, false);
+  const mixed = checkAdvice({ speak: 'Yamato dove you at close range again. Buy a 1,600 item now. Next life hold max range behind your front line.', priority: 'Normal', why: '', focus: 'items' }, 'death', v, h, 7000);
+  assert.ok(mixed.ok && mixed.speak === 'Yamato dove you at close range again. Next life hold max range behind your front line.' && mixed.topic === 'positioning', JSON.stringify(mixed));
+  assert.equal(checkAdvice({ speak: 'Spend your 2,409 souls on the death screen.', priority: 'Normal', why: '', focus: 'souls' }, 'death', v, h, 7000).ok, false);
+  // At or above the threshold souls may be named, but not a tier below half the usual buy.
+  const rich = new AiHistory(); rich.push(snap(2980, { souls: 4474 }), [], 0); const late = snap(2982, { dead: true, screen: 'Dead', souls: 4474 }); rich.push(late, [], 2000);
+  const rv = soulsView(late, rich, 2000); assert.equal(rv.allowed, true);
+  assert.ok(buildSummary({ snapshot: late, history: rich, now: 2000, trigger: 'death' }).includes('Souls 4,474 on the death screen (≥ the 3,200 death-spend threshold: buy before respawning) · Souls advice: allowed'));
+  const tier = checkAdvice({ speak: 'Bullet Dance shredded you. Spend 4,474 souls on a 1,600 item now. Buy a 3,200 item for bullet resist.', priority: 'Normal', why: '', focus: 'death' }, 'death', rv, rich, 2000);
+  assert.ok(tier.ok && tier.speak === 'Bullet Dance shredded you. Buy a 3,200 item for bullet resist.', JSON.stringify(tier));
+});
+
+test('coaching angles tie the live situation to profile weaknesses; the death-screen shop is not a second death', () => {
+  const profile = 'Player profile (3 matches, mostly Haze). Weak: Killed at close range: 6 of 7 deaths came from melee range (melee hits x3); Dies soon after respawning: 8 of 12 deaths within 90 s of respawning. Strong: Keeps lanes covered. Focus: keep distance from divers.';
+  const h = new AiHistory();
+  h.push(snap(990), [], 0);
+  h.push(snap(1000, { dead: true, screen: 'Dead', death_cause: 'Melee' }), [], 10000);
+  h.push(snap(1020, { screen: 'Shop', hp: null, max_hp: null }), [], 30000);
+  assert.equal(h.samples.at(-1)!.dead, true, 'the shop opened from the death screen is still dead');
+  h.push(snap(1040, { dead: true, screen: 'Dead' }), [], 50000); assert.equal(h.deathCount, 1);
+  h.push(snap(1060), [], 70000);
+  const status = [
+    { ally: true, slot: 0, hero: 'hero_haze', health_ratio: 1, networth_observations: 3, observations: 3, position_observations: 0 },
+    { ally: false, slot: 0, hero: 'hero_graves', dead: true, respawn_secs: 22, networth_observations: 3, observations: 3, position_observations: 0 },
+    { ally: false, slot: 1, hero: 'hero_shiv', dead: true, respawn_secs: 30, networth_observations: 3, observations: 3, position_observations: 0 },
+    { ally: false, slot: 2, hero: 'hero_yamato', networth_observations: 3, observations: 3, position_observations: 0 },
+  ];
+  const s = snap(1070, { hp: 1000, hero_status: status, enemy_heroes: ['hero_graves', 'hero_shiv', 'hero_yamato'] });
+  h.push(s, [], 80000);
+  const angles = coachingAngles({ snapshot: s, history: h, now: 80000, profile });
+  assert.equal(angles.length, 3, angles.join('\n'));
+  assert.match(angles[0], /^- Respawned 10s ago, 0 allies near you → walk out with a teammate .*\[profile: Dies soon after respawning\]$/);
+  assert.match(angles[1], /^- Close-range divers alive: yamato \(1 enemy near you\); your last death was at close range → hold max range behind your front line .*\[profile: Killed at close range\]$/);
+  assert.match(angles[2], /^- 2 enemies dead \(first back in 22s\) → group up and hit a Guardian/);
+  const summary = buildSummary({ snapshot: s, history: h, now: 80000, trigger: 'periodic', profile });
+  assert.ok(summary.includes('Respawned 10s ago (last death at 16:40, cause Melee)') && summary.includes('COACHING ANGLES'), summary);
+  assert.deepEqual(coachingAngles({ snapshot: snap(1080, { dead: true, screen: 'Dead' }), history: h, now: 90000, profile }), []);
+});
+
+test('controller: a model that always says "spend your souls" is gated, gets one cheap retry, and is never spoken twice in a row', async () => {
+  let now = 100000; const bodies: string[] = []; const delivered: string[] = [];
+  const fetchImpl = (async (_u: string, init: RequestInit) => { bodies.push(String(init.body));
+    return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ speak: 'Spend your souls now, you are holding too long.', priority: 'Normal', why: 'souls', focus: bodies.length % 2 ? 'souls' : 'items' }) } }] })); }) as unknown as typeof fetch;
+  const coach = new AiCoach({ settings: () => settings({ aiInterval: 20 }), isLive: () => true, generation: () => 1, knowledge: async () => [], now: () => now, fetchImpl, onAdvice: c => delivered.push(c.text) });
+  const flush = async () => { for (let i = 0; i < 6; i++) await new Promise(r => setTimeout(r, 0)); };
+  coach.observe(snap(2040, { souls: 2834 }), [], true);
+  now += 21000; coach.observe(snap(2061, { souls: 2834 }), [], true); await flush();
+  assert.equal(bodies.length, 2, 'one cheap retry');
+  assert.match(JSON.parse(bodies[1]).messages[1].content, /YOUR PREVIOUS ANSWER WAS NOT USED \(souls advice blocked: saving for the usual 6,400 buy\)/);
+  assert.equal(delivered.length, 0); assert.equal(coach.status.suppressed, 2); assert.match(coach.status.message, /^Skipped a repeat: souls advice blocked/);
+  now += 21000; coach.observe(snap(2400, { souls: 7443 }), [], true); await flush();
+  assert.deepEqual(delivered, ['Spend your souls now, you are holding too long.']);
+  now += 21000; coach.observe(snap(2421, { souls: 7443 }), [], true); await flush();
+  assert.equal(delivered.length, 1, 'same focus within 3 minutes is not spoken');
+  assert.match(JSON.parse(bodies.at(-1)!).messages[1].content, /RECENT AI ADVICE \(yours; do not reuse a focus within 3 min\):\n- \[40:00\] economy: Spend your souls now/);
+  assert.match(coach.diagnostic(), /4 repeats skipped/);
 });
