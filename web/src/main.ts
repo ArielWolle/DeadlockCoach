@@ -10,6 +10,7 @@ import { ProfilePanel } from './profile-panel';
 import {regionsFromReport,drawRegions} from './region-overlays';
 import {QuickMonitor} from './quick';
 import {freshCue} from './live-cues';
+import { mountAiCoach, type AiUi } from './ai-coach-ui';
 import { clearFrames, download, listFrames, recordFrame, snapshotLines } from './storage';
 import type { Analysis, Cue, GameItem, Knowledge, Options, Settings, Snapshot, WorkerReply, ProfileReply, PerceptionReport, TacticalDecision, PoolStatus, HeroStatus } from './types';
 
@@ -30,6 +31,8 @@ let activeProfile = loadProfile();
 const capture = new Capture(), speaker = new Speaker(settings);
 const quick=new QuickMonitor();
 const spokenAt=new Map<string,number>();
+/** Optional AI coach (ai-coach-ui.ts); mounted near the end of this module. */
+let ai: AiUi | undefined;
 capture.configure(activeProfile);
 const cropEditor = new CropEditor();
 let profilePanel: ProfilePanel | undefined, profileChanging = false, referenceTimestamp = 0;
@@ -79,7 +82,7 @@ function diagnostics() {
     'Full scene analysis': lastElapsed ? `${Math.round(lastElapsed)} ms` : '—', 'Slowest scene phases': lastPhases || '—',
     'Parallel line recognition': poolStatus ? `${poolStatus.state}${poolStatus.avg_ms != null ? ` · ${poolStatus.avg_ms} ms per batch` : ''}${poolStatus.fallbacks ? ` · ${poolStatus.fallbacks} fallbacks` : ''}` : (window.crossOriginIsolated ? 'Waiting for first frame' : 'Unavailable · page is not cross-origin isolated'),
     'Fast health/map monitor':quick.elapsed?`${Math.round(quick.elapsed)} ms · separate worker`:'Waiting for registered gameplay',
-    'Screenshot cadence':`${settings.interval}s · full scans skip busy frames`, 'Recording': settings.record ? 'Local · bounded' : 'Off' };
+    'Screenshot cadence':`${settings.interval}s · full scans skip busy frames`, 'Recording': settings.record ? 'Local · bounded' : 'Off', 'AI coach': ai?.diagnostic() ?? 'Off' };
   $('diagnostics').replaceChildren(...Object.entries(values).flatMap(([key, value]) => {
     const dt = document.createElement('dt'), dd = document.createElement('dd'); dt.textContent = key; dd.textContent = value; return [dt, dd];
   }));
@@ -169,7 +172,7 @@ function cancelMode() {
   clearTimeout(recoveryTimer);recoveringFull=false;recoveryAttempts=0;
   generation++; running = false; paused = false; replaying = false; clearTimeout(timer);
   cropEditor.cancel(); needsViewport = false; button('fix-viewport').hidden = true;
-  capture.stop(); speaker.cancel();quick.reset(); button('cancel-replay').disabled = true;
+  capture.stop(); speaker.cancel();quick.reset(); button('cancel-replay').disabled = true; ai?.cancel();
   for (const key of ['demo', 'demo-replay', 'replay-import']) button(key).disabled = false;
   // A worker cannot cancel synchronous WASM inference. Terminate an in-flight instance
   // rather than allowing old frames/reset commands to race with the next session.
@@ -186,7 +189,7 @@ function cancelMode() {
 function resetEngine() {
   worker?.postMessage({ type: 'reset' }); latest = {}; lastResultAt = 0;
   latestReport = undefined; profilePanel?.clear();
-  quick.reset();spokenAt.clear();
+  quick.reset();spokenAt.clear();ai?.reset();
   text('fast-analysis-time','Fast HP/map: waiting for registered gameplay');text('quick-time','Fast monitor waiting for located HUD');
   renderTactics(null,{});
   renderSnapshot(latest);
@@ -295,9 +298,9 @@ function schedule(delay = settings.interval * 1000) { clearTimeout(timer); if (r
 /** Every spoken cue from either analysis path, kept for recording exports (the fast path speaks
  *  most cues but its results are not stored as frames). Bounded; persisted only while recording. */
 const CUE_LOG_KEY='deadlock-coach-cue-log-v1';
-const cueLog:{t:number;clock:number|null;source:'fast'|'full';key:string;text:string;priority:string;hp:number|null;max_hp:number|null}[]=(()=>{try{return JSON.parse(localStorage.getItem(CUE_LOG_KEY)||'[]');}catch{return [];}})();
-function logCue(cue:Cue,s:Snapshot,fast:boolean){
-  cueLog.push({t:Date.now(),clock:s.game_clock_secs??null,source:fast?'fast':'full',key:cue.key,text:cue.text,priority:cue.priority,hp:s.hp??null,max_hp:s.max_hp??null});
+const cueLog:{t:number;clock:number|null;source:'fast'|'full'|'ai';key:string;text:string;priority:string;hp:number|null;max_hp:number|null}[]=(()=>{try{return JSON.parse(localStorage.getItem(CUE_LOG_KEY)||'[]');}catch{return [];}})();
+function logCue(cue:Cue,s:Snapshot,fast:boolean,aiCue=false){
+  cueLog.push({t:Date.now(),clock:s.game_clock_secs??null,source:aiCue?'ai':fast?'fast':'full',key:cue.key,text:cue.text,priority:cue.priority,hp:s.hp??null,max_hp:s.max_hp??null});
   if(cueLog.length>3000)cueLog.splice(0,cueLog.length-3000);
   if(settings.record)try{localStorage.setItem(CUE_LOG_KEY,JSON.stringify(cueLog));}catch{/* quota: export keeps the in-memory log */}
 }
@@ -324,7 +327,7 @@ function deliver(analysis:Analysis,timestamp:number,fast=false){
 quick.onError=message=>{text('fast-analysis-time','Fast HP/map: unavailable · full analysis only');notice(`Fast monitor unavailable: ${message}. Full analysis continues.`,true);};
 quick.onResult=(analysis,current,timestamp,elapsed,sourceId,context)=>{
   if(current!==generation||!running||paused||Date.now()-timestamp>2500)return;
-  const result=deliver(analysis,timestamp,true);latest=result.snapshot;renderSnapshot(latest);renderTactics(result.tactics||null,latest);
+  const result=deliver(analysis,timestamp,true);latest=result.snapshot;ai?.observe(latest,result.cues,true);renderSnapshot(latest);renderTactics(result.tactics||null,latest);
   const crop=settings.crop;const [w,h]=context.frame_size;
   capture.attachRegions(sourceId,[['hp','Tracked HP search',context.hp],['minimap','Tracked minimap search',context.map]].map(([id,label,b])=>{
     const bounds=b as {x:number;y:number;w:number;h:number};return {id:String(id),label:String(label),origin:'configured' as const,x:crop.x+bounds.x/w*crop.w,y:crop.y+bounds.y/h*crop.h,w:bounds.w/w*crop.w,h:bounds.h/h*crop.h};
@@ -437,6 +440,7 @@ function drawMap(s: Snapshot) {
 
 function apply(analysis: Analysis, elapsed: number) {
   latest = analysis.snapshot; lastResultAt = Date.now(); lastElapsed = elapsed;
+  ai?.observe(latest, analysis.cues, running && !paused && !replaying);
   // The automatic adapter supplies a detected box, not a fixed browser-side map crop.
   // Use pixels from the matching analyzed frame for the game-specific map panel.
   const mapReading=analysis.perception?.fields['world.minimap'];
@@ -487,6 +491,7 @@ function renderCues() {
     const li = document.createElement('li'), time = document.createElement('time'), priority = document.createElement('span'), body = document.createElement('span');
     time.textContent = clock(cue.at); priority.textContent = cue.priority.toUpperCase(); priority.className = `priority ${cue.priority.toLowerCase()}`;
     body.textContent = cue.text; li.append(time, priority, body); list.append(li);
+    if (cue.key.startsWith('ai:')) { const mark = document.createElement('span'); mark.className = 'ai-mark'; mark.textContent = 'AI'; mark.title = 'AI coach advice'; priority.after(mark); li.classList.add('ai-cue'); }
   }
 }
 function label(className: string, dict: Record<string, string>) { return dict[className] || className.replace(/^(upgrade_|hero_)/, '').replaceAll('_', ' '); }
@@ -722,6 +727,7 @@ function populateSettings() {
   for (const key of ['x', 'y', 'w', 'h'] as const) input(`crop-${key}`).value = String(Math.round(settings.crop[key] * 1000000) / 10000);
   text('rate-value', `${settings.rate.toFixed(1)}×`); text('volume-value', `${Math.round(settings.volume * 100)}%`);
   button('mute').textContent = settings.muted ? 'Unmute voice' : 'Mute voice'; button('mute').setAttribute('aria-pressed', String(settings.muted));
+  ai?.populate(settings);
 }
 function syncVolume(){
   const level=Math.round(settings.volume*100),label=`${level}%`;
@@ -741,6 +747,7 @@ function saveForm() {
   for (const key of Object.keys(next.options) as Array<keyof Options>) next.options[key] = input(`opt-${key}`).checked;
   for (const key of ['x', 'y', 'w', 'h'] as const) next.crop[key] = Number(input(`crop-${key}`).value) / 100;
   if(activeProfile.viewport.auto_crop===false)next.crop={x:0,y:0,w:1,h:1};
+  const aiProblem = ai?.read(next); if (aiProblem) { notice(aiProblem, true); return; }
   if (next.crop.x + next.crop.w > 1.001 || next.crop.y + next.crop.h > 1.001) { notice('Calibration extends beyond the captured source. Offset + size must be no more than 100%.', true); return; }
   if (JSON.stringify(next.crop) !== JSON.stringify(settings.crop)) { manualViewport = true; automaticViewport = false; }
   settings = normalize(next); saveSettings(settings); speaker.configure(settings); configureOptions();
@@ -763,6 +770,8 @@ function refreshGameLayout() {
   $('generic-observations').hidden = legacy;
   $('lane-plan').hidden=!legacy;
   $('live-observations').hidden=!legacy;
+  $('ai-panel').hidden=!legacy; // AI coach is Deadlock-specific
+  if(!legacy)ai?.cancel();
   $('fast-analysis-time').hidden=!legacy;
   text('active-game-profile', `${activeProfile.name} · game-independent perception outputs`);
   document.querySelector('.visual-calibration-controls p')!.textContent = activeProfile.viewport.auto_crop===false
@@ -871,7 +880,7 @@ for (const key of ['edit-viewport', 'fix-viewport']) button(key).onclick = () =>
 button('stop').onclick = () => { cancelMode(); status('Capture stopped', 'No further frames are being captured.'); };
 button('pause').onclick = async () => {
   if (!running) return;
-  paused = !paused; generation++; speaker.cancel();
+  paused = !paused; generation++; speaker.cancel(); ai?.cancel();
   if(!paused)try{await capture.resume();}catch{paused=true;}
   if (!paused && !ready) { try { await initialize(); } catch { paused = true; } }
   status(paused ? 'Coaching paused' : 'Coaching live'); if (!paused) schedule(0);
@@ -947,6 +956,17 @@ for (const key of ['x', 'y', 'w', 'h']) { input(`crop-${key}`).min = key === 'x'
 // Settings editor controls were cloned after event setup.
 button('edit-viewport-settings').onclick = () => { void editLiveViewport(); };
 input('opt-timers').closest('fieldset')!.querySelector('legend')!.after($<HTMLTemplateElement>('lane-settings-control').content.cloneNode(true));
+// --- AI coach hooks: advice is spoken only while live (never in replays) and always listed as AI. ---
+function deliverAi(cue: Cue, live: boolean) {
+  const now = Date.now();
+  if (live && settings.aiSpeak && running && !paused && !replaying && now - (spokenAt.get(cue.key) ?? -Infinity) >= cue.cooldown_secs * 1000) { spokenAt.set(cue.key, now); speaker.say(cue); }
+  logCue(cue, latest, false, true);
+  cues.unshift({ ...cue, at: latest.game_clock_secs }); cues = cues.slice(0, 60); renderCues();
+}
+ai = mountAiCoach({ settings: () => settings, save: s => { settings = normalize(s); saveSettings(settings); },
+  isLive: () => running && !paused && !replaying, generation: () => generation,
+  knowledge: async () => { await loadKnowledge(); return knowledge; }, name: id => heroNames[id] || itemNames[id] || label(id, {}),
+  deliver: deliverAi, changed: () => { if (location.hash === '#settings') diagnostics(); } });
 profilePanel = new ProfilePanel({ current: () => activeProfile, apply: applyGameProfile, pick: pickFieldRegion,
   reference: loadReferenceImage, runReference });
 refreshGameLayout();

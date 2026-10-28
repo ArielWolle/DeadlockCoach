@@ -5,6 +5,8 @@ export const defaults: Settings = {
   laneFocus:'auto',
   heroFocus:'',
   crop: { x: 0, y: 0, w: 1, h: 1 },
+  // Optional AI coach: off by default.
+  aiEnabled: false, aiProvider: 'openai', aiBaseUrl: '', aiModel: '', aiKey: '', aiInterval: 40, aiMaxTokens: 200, aiSpeak: true, aiHeaders: '',
 };
 const number = (n: unknown, lo: number, hi: number, fallback: number) => typeof n === 'number' && Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : fallback;
 export function normalize(input: unknown): Settings {
@@ -17,6 +19,15 @@ export function normalize(input: unknown): Settings {
   s.rate = number(value.rate, .5, 2, defaults.rate); s.volume = number(value.volume, 0, 1, defaults.volume);
   s.interval = number(value.interval, 1, 30, defaults.interval);
   s.heroFocus=typeof value.heroFocus==='string'?value.heroFocus.slice(0,80):'';
+  // AI coach fields (top level, never part of `options`, which is sent to the engine).
+  s.aiEnabled = value.aiEnabled === true; s.aiSpeak = value.aiSpeak !== false;
+  s.aiProvider = value.aiProvider === 'anthropic' ? 'anthropic' : 'openai';
+  s.aiBaseUrl = typeof value.aiBaseUrl === 'string' ? value.aiBaseUrl.trim().slice(0, 300) : '';
+  s.aiModel = typeof value.aiModel === 'string' ? value.aiModel.trim().slice(0, 120) : '';
+  s.aiKey = typeof value.aiKey === 'string' ? value.aiKey.trim().slice(0, 500) : '';
+  s.aiHeaders = typeof value.aiHeaders === 'string' ? value.aiHeaders.slice(0, 2000) : '';
+  s.aiInterval = Math.round(number(value.aiInterval, 15, 600, defaults.aiInterval));
+  s.aiMaxTokens = Math.round(number(value.aiMaxTokens, 32, 4096, defaults.aiMaxTokens));
   for (const key of Object.keys(s.options) as Array<keyof Settings['options']>) if (typeof value.options?.[key] === 'boolean') s.options[key] = value.options[key];
   const c = value.crop;
   // Preserve precise visual selections, including a small game player inside a large
