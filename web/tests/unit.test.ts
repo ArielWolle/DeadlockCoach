@@ -149,3 +149,6 @@ test('region overlays use reported boxes and preserve their provenance across ca
   const [box]=regionsFromReport(report,{x:.1,y:.2,w:.5,h:.5});assert.equal(box.origin,'detected');
   assert.ok(Math.abs(box.x-.15)<1e-9);assert.equal(box.y,.25);assert.equal(box.w,.1);assert.equal(box.h,.03);
 });
+
+// Optional AI coach tests live in their own file to keep merges with other modules simple.
+import './ai-coach.unit.ts';

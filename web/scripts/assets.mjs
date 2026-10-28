@@ -52,6 +52,8 @@ for (const file of (await readdir(path.join(root, 'data/profiles'))).filter(f =>
 }
 await emit('profiles.json', JSON.stringify(profiles));
 await emit('perception-guide.md', await readFile(path.join(root, 'docs/perception/README.md')));
+// Optional AI coach setup and privacy guide, linked from Settings.
+await emit('ai-coach.md', await readFile(path.join(root, 'docs/ai-coach.md')));
 await emit('laning-policy.json', await readFile(path.join(root,'data/coaching/laning.json')));
 await emit('item-rationales.json', await readFile(path.join(root,'data/coaching/item-rationales.json')));
 // Only the already checked-in, explicitly named regression fixtures are included.

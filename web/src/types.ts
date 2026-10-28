@@ -42,6 +42,10 @@ export interface Settings {
   options: Options; crop: { x: number; y: number; w: number; h: number };
   laneFocus:'auto'|'Green'|'Blue'|'Yellow';
   heroFocus:string;
+  // --- Optional AI coach (web/src/ai-coach.ts). Browser-only; never sent to the Rust engine. ---
+  aiEnabled: boolean; aiProvider: 'openai' | 'anthropic'; aiBaseUrl: string; aiModel: string;
+  /** Stored only in this browser's localStorage; never logged or exported. */
+  aiKey: string; aiInterval: number; aiMaxTokens: number; aiSpeak: boolean; aiHeaders: string;
 }
 export interface RecordedFrame { id?: number; created: number; timestamp: number; snapshot: Snapshot; cues: Cue[]; image: Blob; perception?: PerceptionReport | null; profile_id?: string }
 export interface Manifest { schema: number; version: string; files: Record<string, { bytes: number; sha256: string }> }
