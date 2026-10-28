@@ -21,7 +21,7 @@ export const MAX_MATCHES = 30;
 
 /** data/coaching/review.json `thresholds` (keep in sync). */
 export const REVIEW = {
-  death_window_secs: 15, alone_distance: 0.25, unseen_enemies: 3, souls_at_death: 1500,
+  death_window_secs: 15, alone_distance: 0.25, unseen_enemies: 3, souls_at_death: 1200,
   fight_radius: 0.13, missed_fight_distance: 0.3, hoard_souls: 3000, respawn_window_secs: 40,
 } as const;
 /** Profile-only constants. */
@@ -455,7 +455,7 @@ export class PlayerProfileModel {
         trend: trend(ms, deadF, true), events: per10.raw.den, needed: 3, tip: 'Keep it up: being alive is what lets you take the next objective.', focus: '' });
     }
 
-    // 2. Unspent souls (common-mistakes.md #6; review.json souls_at_death 1500, hoard_souls 3000,
+    // 2. Unspent souls (common-mistakes.md #6; review.json souls_at_death 1200, hoard_souls 3000,
     //    pattern_hoard = >= 60 s of a 5-minute window, i.e. 20%).
     const atDeathF = (m: MatchRecord): Ratio | null => { const d = m.deaths.filter(x => x.souls != null); return d.length ? { num: d.filter(x => x.souls! >= REVIEW.souls_at_death).length, den: d.length } : null; };
     const hoardF = (m: MatchRecord): Ratio | null => m.souls.knownSecs >= 120 ? { num: m.souls.hoardSecs, den: m.souls.knownSecs } : null;
