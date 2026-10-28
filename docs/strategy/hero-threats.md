@@ -1,5 +1,4 @@
-<<<<<<< HEAD
-# Hero threats, crowd control and recovery (live reactions)
+# Hero threats, crowd control, recovery and counter items
 
 Retrieved: 2026-10-28
 
@@ -37,8 +36,10 @@ repeat killer, or the player leaving a fight weak. Quotes are verbatim from the 
 - [WIKI] Health Regen: "Standing in base will quickly regenerate the player's health (adding +60 health per second and +6% of max health per second), allowing them to recover from fights."
 - [WIKI] Health Regen: out of combat regen starts "4 seconds after damaging/being damaged by heroes."
 - [INFERENCE] Shopping does not heal: walking out of a shop at half health means fighting the next hero at half health.
-=======
-# Hero threats and counter items (death review)
+
+---
+
+# Part 2: hero threats and counter items (death review)
 
 Retrieved: 2026-10-28
 
@@ -81,4 +82,3 @@ badges it reads on the player.
 - [WIKI] Dispel Magic (3,200): "Purge all non-ultimate negative effects currently applied to you."
 - [WIKI] Reactive Barrier (1,600): "Gain a Barrier when you are Stunned, Chained, Immobilized, Slept or Silenced."
 - [WIKI] Debuff Reducer (1,600): "Reduces the duration of all negative effects applied to you."
->>>>>>> wt/review2
