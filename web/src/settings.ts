@@ -4,6 +4,7 @@ export const defaults: Settings = {
   options: { timers: true, economy: true, map: true, counters: true, deaths: true, laning:true },
   laneFocus:'auto',
   heroFocus:'',
+  playerProfile:true,
   crop: { x: 0, y: 0, w: 1, h: 1 },
 };
 const number = (n: unknown, lo: number, hi: number, fallback: number) => typeof n === 'number' && Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : fallback;
@@ -17,6 +18,7 @@ export function normalize(input: unknown): Settings {
   s.rate = number(value.rate, .5, 2, defaults.rate); s.volume = number(value.volume, 0, 1, defaults.volume);
   s.interval = number(value.interval, 1, 30, defaults.interval);
   s.heroFocus=typeof value.heroFocus==='string'?value.heroFocus.slice(0,80):'';
+  s.playerProfile=value.playerProfile!==false;
   for (const key of Object.keys(s.options) as Array<keyof Settings['options']>) if (typeof value.options?.[key] === 'boolean') s.options[key] = value.options[key];
   const c = value.crop;
   // Preserve precise visual selections, including a small game player inside a large

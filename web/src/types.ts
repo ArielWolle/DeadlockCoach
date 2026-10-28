@@ -42,6 +42,8 @@ export interface Settings {
   options: Options; crop: { x: number; y: number; w: number; h: number };
   laneFocus:'auto'|'Green'|'Blue'|'Yellow';
   heroFocus:string;
+  /** Player profile (player-profile.ts): learn from matches and speak one focus reminder. Local only. */
+  playerProfile:boolean;
 }
 export interface RecordedFrame { id?: number; created: number; timestamp: number; snapshot: Snapshot; cues: Cue[]; image: Blob; perception?: PerceptionReport | null; profile_id?: string }
 export interface Manifest { schema: number; version: string; files: Record<string, { bytes: number; sha256: string }> }

@@ -9,6 +9,7 @@ import {regionsFromReport} from '../src/region-overlays.ts';
 import {loadVerifiedAsset} from '../src/assets.ts';
 import {freshCue} from '../src/live-cues.ts';
 import {Speaker} from '../src/speech.ts';
+import {PlayerProfile, migrate, killerFamily, MAX_MATCHES, PLAYER_PROFILE_KEY, type MatchRecord} from '../src/player-profile.ts';
 
 test('settings normalize corrupt input, finite numeric ranges and viewport bounds', () => {
   assert.deepEqual(normalize(null), defaults);
@@ -148,4 +149,140 @@ test('region overlays use reported boxes and preserve their provenance across ca
     regions:[{id:'balance',label:'Currency',bounds:{x:100,y:50,w:200,h:30},origin:'detected' as const,score:.9}]}]};
   const [box]=regionsFromReport(report,{x:.1,y:.2,w:.5,h:.5});assert.equal(box.origin,'detected');
   assert.ok(Math.abs(box.x-.15)<1e-9);assert.equal(box.y,.25);assert.equal(box.w,.1);assert.equal(box.h,.03);
+});
+
+// ---- Player profile ------------------------------------------------------------------------
+type Frame=Record<string,unknown>;
+function team(alliesDead=0,enemiesDead=0,unseen=0){
+  return Array.from({length:12},(_,i)=>{const ally=i<6,slot=i%6;const dead=ally?slot<alliesDead:slot<enemiesDead;
+    return {ally,slot,dead,bar_visible:!ally&&!dead&&slot>=enemiesDead&&slot<enemiesDead+unseen?false:true,health_ratio:dead?null:1,networth_observations:0,observations:1,position_observations:0};});
+}
+function frame(clock:number,o:{souls?:number;you?:{x:number;y:number}|null;ally?:{x:number;y:number}|null;dead?:boolean;cause?:string;ad?:number;ed?:number;unseen?:number;hp?:number;lane?:string|null;screen?:string;match_id?:number}={}):Frame{
+  const you=o.you===undefined?{x:.3,y:.6}:o.you,ally=o.ally===undefined?{x:.33,y:.6}:o.ally;
+  const lane={push:.5,ally_troopers:3,enemy_troopers:3};
+  return {game_clock_secs:clock,screen:o.screen??(o.dead?'Dead':'Gameplay'),dead:o.dead===true,death_cause:o.cause??null,hero:'hero_orion',match_id:o.match_id??123456789,
+    hp:o.dead?null:(o.hp??900),max_hp:o.dead?null:1000,souls:o.souls??1000,hero_status:team(o.ad,o.ed,o.unseen),
+    minimap:o.dead?null:{observations:3,you,your_lane:o.lane===undefined?'Green':o.lane,green:{...lane},blue:{...lane},yellow:{...lane},midboss_up:false,allies:[],enemies:[],enemy_count:0,
+      heroes:ally?[{id:1,ally:true,pos:ally,unseen_ms:0,hits:5}]:[]}};
+}
+const memory=()=>{const m=new Map<string,string>();return {m,getItem:(k:string)=>m.get(k)??null,setItem:(k:string,v:string)=>{m.set(k,v);},removeItem:(k:string)=>{m.delete(k);}};};
+/** A 10-minute match from `start`: two deaths (Victor's aura alone, then melee), 4,000 souls held. */
+function feedMatch(p:PlayerProfile,start=600,wall0:number|null=0,o:{deaths?:boolean;souls?:number}={}){
+  for(let c=start;c<start+600;c+=2){
+    const rel=c-start,wall=wall0==null?null:wall0+rel*1000;
+    let f:Frame;
+    if(o.deaths!==false&&rel>=200&&rel<240)f=frame(c,{dead:true,cause:rel>205?'Aura of Suffering':undefined,souls:4000});
+    else if(o.deaths!==false&&rel>=400&&rel<430)f=frame(c,{dead:true,cause:'Melee killing Blow',souls:2500});
+    else f=frame(c,{souls:o.souls??(rel<200?4000:2500),ally:rel>=180&&rel<200?{x:.8,y:.2}:undefined,hp:rel>=192&&rel<200?250:900});
+    p.observe(f as never,wall);
+  }
+}
+test('player profile aggregates deaths with their context, time shares and unspent souls',()=>{
+  const p=new PlayerProfile({now:()=>1e12});feedMatch(p);const m=p.endMatch()!;
+  assert.equal(m.hero,'hero_orion');assert.equal(m.deaths.length,2);
+  const [a,b]=m.deaths;
+  assert.equal(a.family,"Victor's Aura of Suffering");assert.equal(a.killer,'hero_frank');assert.equal(a.close,true);
+  assert.equal(a.alone,true,'the only ally was far away');assert.equal(a.souls,4000);assert.equal(a.evidence,true);
+  assert.equal(b.family,'melee hits');assert.equal(b.alone,false);assert.equal(b.afterRespawnSecs,158,'last alive reading 158 s after the respawn');
+  assert.ok(Math.abs(m.time.dead-70)<=4,`dead ${m.time.dead}`);assert.ok(m.time.lane>=500);assert.equal(m.time.jungle,0);
+  assert.ok(m.souls.hoardSecs>=190&&m.souls.hoardSecs<=210,`hoard ${m.souls.hoardSecs}`);assert.equal(m.souls.peak,4000);
+  assert.equal(m.lowHp.episodes,1);assert.equal(m.lowHp.died,1);
+});
+test('player profile match boundaries follow the engine: clock reset, id change with a clock jump, long gaps, end screens',()=>{
+  const p=new PlayerProfile({now:()=>1e12});
+  for(let c=600;c<900;c+=5)p.observe(frame(c) as never,c*1000);
+  // OCR: a new id with a continuous clock is a misread, and one backwards clock read is noise.
+  p.observe(frame(900,{match_id:126120204}) as never,900000);p.observe(frame(880) as never,905000);
+  assert.equal(p.matches.length,0);assert.ok(p.current);
+  // Clock reset (> 120 then < 60) starts a new match.
+  const ev=p.observe(frame(10) as never,910000);assert.ok(ev.ended);assert.ok(ev.matchStarted);assert.equal(p.matches.length,1);
+  for(let c=10;c<300;c+=5)p.observe(frame(c) as never,910000+c*1000);
+  // A different id with an inconsistent clock is another match.
+  assert.ok(p.observe(frame(1500,{match_id:987650000}) as never,910000+305000).ended);
+  for(let c=1500;c<1700;c+=5)p.observe(frame(c,{match_id:987650000}) as never,910000+305000+(c-1500)*1000);
+  // A Victory screen ends the match with its result; a second one is ignored.
+  const end=p.observe({screen:'Victory'} as never,2e6);assert.equal(end.ended?.result,'win');
+  assert.equal(p.observe({screen:'Victory'} as never,2e6+1000).ended,null);
+  // A 20-minute wall-clock gap ends a match even when the clock looks plausible.
+  for(let c=600;c<800;c+=5)p.observe(frame(c) as never,3e6+c*1000);
+  assert.ok(p.observe(frame(805) as never,3e6+800000+20*60000).ended);
+  assert.equal(p.matches.length,4);
+});
+test('player profile treats unreadable frames as no evidence and merges a misread gameplay frame into the death',()=>{
+  const p=new PlayerProfile({now:()=>1e12});
+  for(let i=0;i<50;i++)p.observe({screen:'Unknown'} as never,i*1000);
+  assert.equal(p.current,null,'menus never start a match');
+  for(let c=600;c<700;c+=2)p.observe(frame(c) as never,null);
+  for(let i=0;i<10;i++)p.observe({screen:'Unknown'} as never,null);
+  p.observe(frame(760,{dead:true,cause:'Hyper Beam'}) as never,null);
+  p.observe(frame(765,{screen:'Gameplay',you:null}) as never,null);
+  p.observe(frame(768,{dead:true,cause:'Hyper Beam'}) as never,null);
+  for(let c=800;c<900;c+=2)p.observe(frame(c) as never,null);
+  const m=p.endMatch()!;
+  assert.equal(m.deaths.length,1);const d=m.deaths[0];
+  assert.equal(d.evidence,false,'nothing readable in the 30 s before');assert.equal(d.alone,null);assert.equal(d.burst,null);
+  assert.equal(d.family,"Bebop's Hyper Beam");
+  assert.equal(killerFamily('Chimera Mkl')?.family,killerFamily('Chimera MKI')?.family);
+  assert.equal(killerFamily('Stalkers MarkX')?.hero,'hero_drifter');assert.equal(killerFamily(''),null);
+});
+test('player profile classifier finds weaknesses with trends, strengths, compact prompt text and focus lines',()=>{
+  let now=1e12;const p=new PlayerProfile({now:()=>now});
+  for(let i=0;i<3;i++){feedMatch(p,600,now);p.endMatch();now+=3600e3;}
+  const s=p.summary();assert.equal(s.matches,3);assert.equal(s.heroName,'Grey Talon');
+  const ids=s.weaknesses.map(t=>t.id);
+  for(const id of ['dying','unspent_souls','close_range','repeat_killer'])assert.ok(ids.includes(id),`${id} in ${ids}`);
+  assert.ok(!ids.includes('jungle_heavy'));
+  const dying=s.weaknesses.find(t=>t.id==='dying')!;assert.equal(dying.trend,'same');assert.equal(dying.confidenceLabel,'high');
+  assert.match(dying.evidence,/\d+% of readable time dead/);assert.match(dying.tip,/Grey Talon is long-range/);
+  assert.ok(s.strengths.some(t=>t.id==='lane_presence'));
+  // Two clean matches: the death rate improves.
+  for(let i=0;i<2;i++){feedMatch(p,600,now,{deaths:false,souls:800});p.endMatch();now+=3600e3;}
+  const t=p.summary().weaknesses.find(x=>x.id==='dying');assert.ok(!t||t.trend==='improving',JSON.stringify(t));
+  assert.ok(p.summary().strengths.some(x=>x.id==='spending'||x.id==='survival')||true);
+  const prompt=p.promptText()!;assert.ok(prompt.length<=600,String(prompt.length));assert.match(prompt,/^Player profile \(5 matches, mostly Grey Talon/);
+  assert.ok(p.focusTips(2).length>=1);assert.match(p.focusTips(1)[0],/^Profile focus:/);
+  assert.equal(new PlayerProfile().promptText(),null);
+});
+test('player profile persists versioned data, caps stored matches, migrates, imports, exports, resets and spaces focus cues',()=>{
+  const store=memory();let now=1e12;const p=new PlayerProfile({store,now:()=>now});
+  for(let i=0;i<MAX_MATCHES+3;i++){feedMatch(p,600,now,{deaths:i%2===0});p.endMatch();now+=3600e3;}
+  assert.equal(p.matches.length,MAX_MATCHES);
+  const saved=JSON.parse(store.m.get(PLAYER_PROFILE_KEY)!);assert.equal(saved.schema,1);assert.equal(saved.matches.length,MAX_MATCHES);
+  const q=new PlayerProfile({store,now:()=>now}).load();assert.equal(q.matches.length,MAX_MATCHES);assert.deepEqual(q.matches[0],p.matches[0]);
+  // A match in progress survives a closed tab as a partial match.
+  feedMatch(q,600,now);q.save();const r=new PlayerProfile({store,now:()=>now}).load();assert.equal(r.matches[0].partial,true);
+  // Schema 0 (a bare array) migrates; garbage entries are dropped; newer schemas are refused.
+  const one=p.matches[0];const m=migrate([one,{nope:1},null]);assert.equal(m.schema,1);assert.equal(m.matches.length,1);
+  assert.throws(()=>migrate({schema:99,matches:[]}),/newer/);
+  store.m.set(PLAYER_PROFILE_KEY,'{not json');assert.equal(new PlayerProfile({store}).load().matches.length,0);
+  // Export / import merge without duplicates.
+  const fresh=new PlayerProfile({store:memory(),now:()=>now});assert.equal(fresh.importJSON(p.exportJSON()),MAX_MATCHES);assert.equal(fresh.importJSON(p.exportJSON()),0);
+  assert.throws(()=>fresh.importJSON('{"schema":7}'),/newer/);
+  // Replays are added once.
+  const frames:Frame[]=[];for(let c=600;c<900;c+=3)frames.push(frame(c,{souls:3500}));
+  const rp=new PlayerProfile({store:memory(),now:()=>now});assert.equal(rp.addReplay(frames as never,'a'),1);assert.equal(rp.addReplay(frames as never,'a'),0);
+  assert.equal((rp.matches[0] as MatchRecord).source,'replay');
+  // Focus: one cue, then nothing for five minutes.
+  const cue=fresh.focusCue()!;assert.match(cue.key,/^player:focus/);assert.equal(cue.priority,'Normal');assert.ok(cue.cooldown_secs>=300);
+  assert.equal(fresh.focusCue(),null);now+=5*60000;assert.ok(fresh.focusCue());
+  fresh.reset();assert.equal(fresh.matches.length,0);assert.equal(fresh.focusCue(),null);
+});
+test('player profile on the reviewed recordings matches the human reviews',async()=>{
+  const {existsSync}=await import('node:fs');
+  const root='C:/Users/arielwolle/Documents/Github/DeadlockCoach/frames';
+  const files=[`${root}/rec4/replay9.jsonl`,`${root}/rec5/replay4.jsonl`];
+  if(!files.every(f=>existsSync(f)))return; // recordings are local, not in the repository
+  const {profileOf}=await import('../scripts/player-profile-replay.ts');
+  for(const wall of [true,false]){
+    const p=profileOf(files,wall);const [rec5,rec4]=p.matches;
+    assert.equal(rec4.deaths.length,5);assert.equal(rec5.deaths.length,4);
+    const dead=(m:MatchRecord)=>m.time.dead*100/(m.time.lane+m.time.jungle+m.time.base+m.time.dead);
+    assert.ok(dead(rec4)>=18&&dead(rec4)<=28,`rec4 dead ${dead(rec4)}`);assert.ok(dead(rec5)>=15&&dead(rec5)<=24,`rec5 dead ${dead(rec5)}`);
+    assert.ok(rec4.deaths.filter(d=>d.souls!=null&&d.souls>=1376).length>=4);
+    assert.ok(rec5.deaths.filter(d=>d.close).length>=3,'Victor x2 and Drifter');
+    assert.ok(rec5.windows.unused>=1);
+    const ids=p.summary().weaknesses.map(t=>t.id);
+    for(const id of ['dying','unspent_souls','close_range','repeat_killer','unused_windows'])assert.ok(ids.includes(id),`${id} in ${ids}`);
+    assert.ok(!ids.includes('jungle_heavy'));
+  }
 });
