@@ -93,8 +93,30 @@ fn dead_menu_and_courier_states_do_not_get_lane_farming_orders() {
 #[test]
 fn low_health_can_interrupt_the_normal_gap_but_repeated_advice_is_deduplicated() {
     let mut e=Engine::new(vec![Box::new(LaneCoach::default())]);let mut s=state();
-    assert!(!e.step(&s).is_empty());s.game_clock_secs=Some(403);s.hp=Some(200);
-    assert!(e.step(&s).iter().any(|c|c.key=="lane:back_off"));s.game_clock_secs=Some(407);assert!(e.step(&s).is_empty());
+    // 8 s apart: a slow fall, not a burst (a burst is the critical call, below).
+    assert!(!e.step(&s).is_empty());s.game_clock_secs=Some(408);s.hp=Some(200);
+    assert!(e.step(&s).iter().any(|c|c.key=="lane:back_off"));s.game_clock_secs=Some(412);assert!(e.step(&s).is_empty());
+}
+#[test]fn health_warnings_are_said_once_per_low_episode_and_a_fast_fall_is_critical(){
+    // rec8 44:02-44:50: "Health critical" three times at the same low.
+    let mut e=Engine::new(vec![Box::new(LaneCoach::default())]);e.min_gap_secs=0;let mut s=state();
+    let mut at=|t:u32,hp:u32,s:&mut GameSnapshot|{s.game_clock_secs=Some(t);s.hp=Some(hp);e.step(s).into_iter().map(|c|c.key).collect::<Vec<_>>()};
+    at(400,800,&mut s);
+    // 80% -> 45% in 3 s: 35% of max health lost, critical before the health itself is.
+    assert_eq!(at(403,450,&mut s),["lane:critical"]);
+    let mut later=vec![];for t in (406..460).step_by(4){later.extend(at(t,100+(t-406),&mut s));}
+    assert!(!later.iter().any(|k|k=="lane:critical"||k=="lane:back_off"),"{later:?}");
+    // Healed to 70%: a new episode can warn again.
+    at(470,700,&mut s);at(480,700,&mut s);
+    assert_eq!(at(490,100,&mut s),["lane:critical"]);
+}
+#[test]fn an_implausible_health_read_is_not_critical(){
+    let mut s=state();s.hero=Some("hero_orion".into());
+    s.hero_status=vec![coach_core::HeroStatus{ally:true,hero:Some("hero_orion".into()),health_ratio:Some(0.85),health_observations:5,..Default::default()}];
+    // rec6 30:42: 14 / 2488 HP read while the own top-bar bar showed 85%.
+    s.hp=Some(14);assert_ne!(LaneCoach::default().decide(&s).unwrap().cue_key,"lane:critical");
+    s.hp=Some(0);s.hero_status.clear();assert_ne!(LaneCoach::default().decide(&s).unwrap().cue_key,"lane:critical","0 HP while alive");
+    s.hp=Some(60);assert_eq!(LaneCoach::default().decide(&s).unwrap().cue_key,"lane:critical");
 }
 #[test]
 fn shopping_reminders_do_not_send_the_player_away_from_an_uncleared_lane() {
@@ -122,7 +144,7 @@ fn visible_ui_values_do_not_authorize_coaching_when_game_state_is_unknown(){let 
 }
 #[test]fn health_warning_interrupts_immediately_and_starts_before_critical_hp(){
     let mut e=Engine::new(vec![Box::new(LaneCoach::default())]);let mut s=state();assert!(!e.step(&s).is_empty());
-    s.game_clock_secs=Some(401);s.hp=Some(440);assert_eq!(e.step(&s)[0].key,"lane:back_off");
+    s.game_clock_secs=Some(408);s.hp=Some(440);assert_eq!(e.step(&s)[0].key,"lane:back_off");
 }
 #[test]fn critical_health_is_called_on_one_reading_and_preempts_the_gap(){
     let mut e=Engine::new(vec![Box::new(LaneCoach::default())]);let mut s=state();assert!(!e.step(&s).is_empty());

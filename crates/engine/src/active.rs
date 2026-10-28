@@ -28,6 +28,10 @@ pub struct Thresholds {
     pub unsecured_min: u32, pub unsecured_low_hp: f32,
     pub killer_share: f32, pub killer_margin: f32, pub close_share: f32, pub repeat_deaths: usize, pub lesson_delay_secs: u32,
     pub fight_allies: usize, pub fight_enemies: usize, pub fight_radius: f32, pub fight_far: f32, pub fight_hold_secs: u32,
+    pub loss_deaths: usize, pub loss_window_secs: u32, pub loss_far: f32, pub loss_radius: f32,
+    pub hold_dead: usize, pub hold_min_secs: u32, pub hold_soon_secs: u32, pub hold_exit_secs: u32, pub hold_exit_y: f32,
+    pub raid_enemies: usize, pub raid_y: f32, pub raid_far: f32, pub raid_min_clock: u32,
+    pub urn_dead: usize, pub urn_enemy_radius: f32,
 }
 #[derive(Clone, Deserialize)]
 pub struct Debuff { pub status: String, pub hero: String, pub card: String }
@@ -94,6 +98,54 @@ struct State {
     /// Clock of the last detected purchase (souls dropped while alive) or base exit.
     left_shop: Option<u32>,
     fight_since: Option<u32>,
+    /// Allied top-bar slots, and the deaths seen on them: (clock, slot).
+    allies: [Slot; 6], ally_deaths: Vec<(u32, usize)>,
+    /// Newest ally death already named in a "losing a fight" call.
+    loss_said: u32,
+    /// Last in-base reading, the clock you walked out of base, and the hold-in-base calls of
+    /// this wipe (1 = said in base, 2 = said after walking out).
+    in_base: Option<bool>, left_base: Option<u32>, hold_said: u8,
+    /// What the calls offered on this step would commit when spoken: hold-in-base bits and the
+    /// newest ally death of a losing-fight call.
+    hold_offer: u8, loss_offer: u32,
+    /// The enemy-dead window named so far (shared with the positioning coach's call).
+    window: crate::positioning::WindowMemo,
+}
+
+/// One allied top-bar slot across frames: whether it is dead, the last read respawn timer
+/// (seconds, clock read), and since when it shows dead.
+#[derive(Default, Clone, Copy)]
+struct Slot { known: bool, dead: bool, timer: Option<(u32, u32)>, dead_since: u32, counted: bool }
+/// Respawn timer cap (wiki: "cap 90s"); a timer read lower than this after the slot has shown
+/// dead for longer is a new death.
+const MAX_RESPAWN: u32 = 90;
+
+/// New ally deaths from the top bar, counted once a respawn timer confirms them (rec8 41:29: a
+/// slot flickered dead for one frame without a timer). A slot turning dead while its previous
+/// timer still runs is the same death (a misread alive frame); a timer jumping up, or a first
+/// timer lower than the time the slot has already shown dead allows, is a new death.
+fn track_ally_deaths(st: &mut State, s: &GameSnapshot, clock: u32) {
+    if s.hero_status.len() != 12 { return; }
+    for h in s.hero_status.iter().filter(|h| h.ally) {
+        let (Some(slot), Some(dead)) = (st.allies.get_mut(h.slot), h.dead) else { continue };
+        let left = slot.timer.map(|(t, at)| t.saturating_sub(clock.saturating_sub(at)));
+        if dead {
+            if !slot.dead {
+                let same = left.is_some_and(|l| l > 3);
+                if !same { slot.dead_since = clock; slot.timer = None; slot.counted = !slot.known; }
+            } else if let Some(t) = h.respawn_secs {
+                let again = match left { Some(l) => t > l + 10, None => clock.saturating_sub(slot.dead_since) > MAX_RESPAWN.saturating_sub(t) + 10 };
+                if again { slot.dead_since = clock; slot.counted = false; }
+            }
+            if let Some(t) = h.respawn_secs {
+                if !slot.counted { st.ally_deaths.push((slot.dead_since, h.slot)); slot.counted = true; }
+                slot.timer = Some((t, clock));
+            }
+            slot.dead = true;
+        } else { slot.dead = false; }
+        slot.known = true;
+    }
+    st.ally_deaths.retain(|e| e.0 + 60 >= clock);
 }
 
 /// The active coach. One instance per engine; it keeps a short history.
@@ -199,6 +251,10 @@ fn in_base(s: &GameSnapshot, t: &Thresholds) -> Option<bool> {
     let m = s.minimap.as_ref()?;
     match (m.zone_area, m.you) {
         (Some(ZoneArea::OwnBase), _) => Some(true),
+        // A base label of unknown owner: yours when your marker is on your half (rec8 48:11:
+        // "Base" at y 0.81 right after respawning).
+        (Some(ZoneArea::Base), Some(p)) => Some(p.y > 0.5),
+        (Some(ZoneArea::Base), None) => None,
         (_, Some(p)) => Some(p.y > t.base_y),
         (Some(_), None) => Some(false),
         _ => None,
@@ -212,15 +268,17 @@ fn shared() -> &'static ActiveCoachCards {
 struct ActiveCoachCards(Catalog);
 
 /// The in-base shopping call, for the souls reminder ([`crate::UnspentSoulsRule`]): alive in your
-/// own base holding at least the cost of a useful upgrade for the game time (coach heuristic:
-/// 1,600 before 20:00, 3,200 after). `Some(None)` means "in base, nothing to say" so the generic
+/// own base holding at least the cost of a useful upgrade for the game time (the death-screen
+/// tier, [`crate::economy::death_spend`]). `Some(None)` means "in base, nothing to say" so the generic
 /// field reminder stays quiet there; `None` means not known to be in base.
 pub fn base_spend(s: &GameSnapshot) -> Option<Option<Cue>> {
     let c = &shared().0; let t = &c.thresholds;
-    if s.dead || s.screen.as_deref() != Some("Gameplay") || in_base(s, t) != Some(true) { return None; }
+    // The scoreboard is read in base too (rec8 21:39: Tab open in base with 4,522 souls).
+    if s.dead || !matches!(s.screen.as_deref(), Some("Gameplay" | "Scoreboard")) || in_base(s, t) != Some(true) { return None; }
     if s.minimap.as_ref().is_some_and(|m| m.urn == Some(coach_core::UrnState::CarriedByYou)) { return Some(None); }
-    // The same clock-scaled tier as the field reminder: below it you are saving, not hoarding.
-    let need = crate::economy::spend_target(s.game_clock_secs.unwrap_or(0));
+    // In the shop a purchase is one click away: the tier below the usual buy (as on the death
+    // screen) is worth spending before walking out; less is saving.
+    let need = crate::economy::death_spend(s.game_clock_secs.unwrap_or(0));
     let _ = (t.spend_early, t.spend_late, t.spend_late_clock);
     let Some(v) = s.souls.filter(|v| *v >= need) else { return Some(None) };
     let card = c.cards.iter().find(|c| c.id == "base_spend").expect("base_spend card");
@@ -245,6 +303,10 @@ impl Rule for ActiveCoach {
         if !s.enemy_heroes.is_empty() { st.enemies = s.enemy_heroes.clone(); }
         let dead = s.dead || s.screen.as_deref() == Some("Dead");
         let mut out = vec![];
+        st.hold_offer = 0;
+        if self.full { track_ally_deaths(&mut st, s, clock); }
+        // A respawn is a new walk out of base.
+        if dead { st.in_base = None; st.left_base = None; st.hold_said = 0; }
 
         // --- Death panels (full scan only): remember them and, after the review had its turn,
         //     name a repeat killer or a pattern of close-range deaths.
@@ -293,7 +355,10 @@ impl Rule for ActiveCoach {
                 if let Some(c) = card { out.push(self.cue(c, "active:cc".into(), &[])); }
             }
             // --- Enemy-dead window from your own half.
-            if let (Some(p), Some(me), Some(m)) = (TeamPicture::from(s), me, map) {
+            // Said once per window (rec8 repeated the call 11 times); the key is shared with the
+            // positioning coach's generic window call, which commits the same way.
+            let new_window = st.window.observe(crate::positioning::dead_set(s, false), clock, 2);
+            if let (Some(p), Some(me), Some(m), true) = (TeamPicture::from(s), me, map, new_window) {
                 let mut timers: Vec<u32> = p.enemies_dead.iter().flatten().copied().collect();
                 timers.sort_unstable_by(|a, b| b.cmp(a));
                 let window = timers.get(1).copied().unwrap_or(0);
@@ -314,7 +379,11 @@ impl Rule for ActiveCoach {
             }
             if let (Some(at), Some(h)) = (st.left_shop, hp) {
                 if clock.saturating_sub(at) <= t.purchase_window_secs && h < t.heal_below && confirmed && in_base == Some(false) {
-                    out.push(self.cue("heal_first", "active:heal".into(), &[("pct", format!("{:.0}", h * 100.0))]));
+                    let mut c = self.cue("heal_first", "active:heal".into(), &[("pct", format!("{:.0}", h.max(0.01) * 100.0))]);
+                    // Walking out of a shop nearly dead is a safety call: under 30% health the
+                    // engine keeps only high-priority cues (rec8 44:24 left a shop at 3% unwarned).
+                    if h < 0.3 { c.priority = Priority::High; }
+                    out.push(c);
                 }
             }
             // --- Unsecured souls carried into danger.
@@ -323,6 +392,65 @@ impl Rule for ActiveCoach {
                 let why = if let Some(h) = low { Some(format!("at {:.0}% health", h * 100.0)) } else if enemy_near { Some("with an enemy close".into()) } else { None };
                 if let Some(why) = why.filter(|_| in_base != Some(true)) {
                     out.push(self.cue("unsecured", "active:unsecured".into(), &[("souls", thousands(u)), ("why", why)]));
+                }
+            }
+            let team = TeamPicture::from(s);
+            // --- Walking out of base while the team is dead (rec8 41:50: three teammates on
+            //     61-86 s timers, dead 15 s later) or about to respawn (48:07: two back in 8 s).
+            if st.in_base == Some(true) && in_base == Some(false) { st.left_base = Some(clock); }
+            if in_base.is_some() { st.in_base = in_base; }
+            if let Some(p) = &team {
+                if p.allies_dead.len() < 2 { st.hold_said = 0; }
+                // Dead on a long or unread timer (a teammate back in a few seconds is not missing).
+                let long: Vec<Option<u32>> = p.allies_dead.iter().copied().filter(|r| r.is_none_or(|r| r >= t.hold_min_secs)).collect();
+                let walked_out = in_base == Some(false) && st.left_base.is_some_and(|c| clock <= c + t.hold_exit_secs) && me.is_some_and(|p| p.y > t.hold_exit_y && p.y < t.base_y - 0.1); // clearly out: the base label reaches y 0.78 (rec5 23:09)
+                let next = long.iter().flatten().min().map(|n| format!(", the next back in {n} seconds")).unwrap_or_default();
+                if long.len() >= t.hold_dead && (in_base == Some(true) && st.hold_said & 1 == 0 || walked_out && st.hold_said & 2 == 0) {
+                    st.hold_offer = if in_base == Some(true) { 1 } else { 3 };
+                    let (action, key) = if in_base == Some(true) { ("Hold in base", "active:hold_base") } else { ("Go back to base", "active:hold_base:out") };
+                    out.push(self.cue("hold_base", key.into(), &[("count", count_word(long.len())), ("next", next), ("action", action.into())]));
+                } else if in_base == Some(true) && st.hold_said == 0 && p.allies_dead.len() >= 2
+                    && p.allies_dead.iter().all(|r| r.is_some_and(|r| (3..=t.hold_soon_secs).contains(&r))) {
+                    st.hold_offer = 1;
+                    let max = p.allies_dead.iter().flatten().max().copied().unwrap_or(0);
+                    out.push(self.cue("wait_respawn", "active:hold_base".into(), &[("count", count_word(p.allies_dead.len())), ("secs", max.to_string())]));
+                }
+            }
+            // --- Teammates dying in a fight away from you (rec8 34:46-34:52: two died at the
+            //     Yellow side while you farmed the Green side jungle).
+            let recent: Vec<(u32, usize)> = st.ally_deaths.iter().copied().filter(|e| e.0 + t.loss_window_secs >= clock).collect();
+            if recent.len() >= t.loss_deaths && recent.iter().any(|e| e.0 > st.loss_said) {
+                if let (Some(me), Some(m)) = (me, map) {
+                    // Where the fight is: the enemy marker closest to an allied one.
+                    let tracks: Vec<&HeroTrack> = m.heroes.iter().filter(|h| live(h)).collect();
+                    let spot = tracks.iter().filter(|e| !e.ally).filter_map(|e| tracks.iter().filter(|a| a.ally).map(|a| a.distance(e.pos))
+                        .min_by(f32::total_cmp).filter(|d| *d <= t.loss_radius).map(|d| (*e, d))).min_by(|a, b| a.1.total_cmp(&b.1)).map(|x| x.0);
+                    if let Some(e) = spot.filter(|e| e.distance(me) > t.loss_far) {
+                        st.loss_offer = recent.iter().map(|e| e.0).max().unwrap_or(clock);
+                        let first = recent.iter().map(|e| e.0).min().unwrap_or(clock);
+                        out.push(self.cue("team_losing", "active:team_losing".into(), &[("area", crate::positioning::area(e.pos, e.lane)),
+                            ("count", count_word(recent.len()).to_lowercase()), ("secs", clock.saturating_sub(first).max(1).to_string())]));
+                    }
+                }
+            }
+            // --- Your base under attack while you are away: the structure banner, else enemy
+            //     heroes on the minimap inside your base.
+            if in_base != Some(true) && clock >= t.raid_min_clock {
+                if let Some(b) = s.objective_banner.as_ref().filter(|b| b.own && !b.name.trim().is_empty()) {
+                    out.push(self.cue("base_banner", "active:base_attack".into(), &[("structure", b.name.trim().to_string())]));
+                } else if let (Some(me), Some(m)) = (me, map) {
+                    let raiders: Vec<&HeroTrack> = m.heroes.iter().filter(|h| !h.ally && live(h) && h.pos.y >= t.raid_y && (0.3..=0.7).contains(&h.pos.x)).collect();
+                    if raiders.len() >= t.raid_enemies && raiders.iter().all(|h| h.distance(me) > t.raid_far) {
+                        out.push(self.cue("base_attack", "active:base_attack".into(), &[("count", count_word(raiders.len()).to_lowercase())]));
+                    }
+                }
+            }
+            // --- Carrying the urn with teammates dead and an enemy close (rec8 27:12-27:39:
+            //     two teammates dead, an enemy beside you; you died 18 s later).
+            let carrying = map.is_some_and(|m| m.urn == Some(coach_core::UrnState::CarriedByYou)) || effects.iter().any(|e| e == "carrying_urn");
+            if let (true, Some(p), Some(me), Some(m)) = (carrying, &team, me, map) {
+                if p.allies_dead.len() >= t.urn_dead && m.heroes.iter().any(|h| !h.ally && live(h) && h.distance(me) <= t.urn_enemy_radius) {
+                    out.push(self.cue("urn_hold", "active:urn_hold".into(), &[("count", count_word(p.allies_dead.len()).to_lowercase())]));
                 }
             }
         }
@@ -349,5 +477,14 @@ impl Rule for ActiveCoach {
             None => st.fight_since = None,
         }
         out
+    }
+    fn spoken(&self, cue: &Cue) {
+        let mut st = self.state.borrow_mut();
+        match cue.key.as_str() {
+            "active:hold_base" | "active:hold_base:out" => { let o = st.hold_offer; st.hold_said |= o; }
+            "active:team_losing" => { st.loss_said = st.loss_said.max(st.loss_offer); }
+            "pos:enemies_down" => st.window.said(),
+            _ => {}
+        }
     }
 }

@@ -3,7 +3,9 @@
   "threshold_note": "Thresholds are tunable coach heuristics from reviewed recordings, not game rules. Every reason is stated only when the screenshots showed it. souls_at_death 1200: rec5 died twice with 1,229 and 3,467 unspent, both called out by the human review.",
   "thresholds": { "death_window_secs": 15, "alone_distance": 0.25, "unseen_enemies": 3, "souls_at_death": 1200, "pattern_window_secs": 300, "fight_radius": 0.13, "missed_fight_distance": 0.3, "hoard_souls": 3000, "respawn_window_secs": 40 },
   "roles_note": "Small hand-kept table for hero-specific lessons; heroes not listed get the generic lesson. Ranged = long-range weapon heroes whose job is to shoot from behind the front line.",
-  "roles": { "ranged": ["hero_orion", "hero_hornet"] },
+  "roles": { "ranged": ["hero_orion", "hero_hornet"],
+    "melee_items_note": "Items whose description (data/items.json) starts with a melee attack: no use to a long-range hero (rec8 offered Lifestrike to Grey Talon).",
+    "melee_items": ["upgrade_lifestrike_gauntlets", "upgrade_boxing_glove", "upgrade_acolytes_glove", "upgrade_spirit_snatch", "upgrade_melee_charge", "upgrade_crushing_fists", "upgrade_runed_gauntlets"] },
   "threats_note": "Abilities with their own death reason and lesson, matched by the damage-panel source or by the debuff badge on you. close = melee range (8 m or less, or teleports behind you). counter = need in 'counters'. replaces = lesson ids that are wrong against this threat.",
   "threats": [
     { "source": "Aura of Suffering", "hero": "hero_frank", "close": true, "counter": "spirit",
@@ -28,6 +30,10 @@
       "sources": [{ "path": "strategy/hero-threats.md", "section": "Drifter: Stalker's Mark, Rend, Bloodscent", "basis": "WIKI", "excerpt": "You deal amplified damage against isolated heroes" }] },
     { "source": "Rend", "hero": "hero_drifter", "close": true, "counter": "", "reason": "", "lesson": "", "lesson_ranged": "", "rank": 9, "replaces": [],
       "sources": [{ "path": "strategy/hero-threats.md", "section": "Drifter: Stalker's Mark, Rend, Bloodscent", "basis": "WIKI", "excerpt": "Silences enemies for 2s if close range" }] },
+    { "source": "Affliction", "hero": "hero_synth", "close": false, "counter": "spirit", "reason": "", "lesson": "", "lesson_ranged": "", "rank": 9, "replaces": [],
+      "sources": [{ "path": "strategy/hero-threats.md", "section": "Pocket: Affliction", "basis": "WIKI", "excerpt": "Applies damage over time to enemies nearby." }] },
+    { "source": "Bullet Dance", "hero": "hero_haze", "close": false, "counter": "bullet", "reason": "", "lesson": "", "lesson_ranged": "", "rank": 9, "replaces": [],
+      "sources": [{ "path": "strategy/hero-threats.md", "section": "Haze: Bullet Dance", "basis": "WIKI", "excerpt": "Enter a flurry, firing your weapon at nearby enemies with perfect accuracy and added Bullet Damage." }] },
     { "source": "Melee", "hero": "", "close": true, "counter": "", "reason": "", "lesson": "", "lesson_ranged": "", "rank": 9, "replaces": [],
       "sources": [{ "path": "strategy/teamfighting.md", "section": "2. Parry and melee (fight-relevant)", "basis": "WIKI", "excerpt": "Heavy melee has a wind-up and forward lunge" }] }
   ],

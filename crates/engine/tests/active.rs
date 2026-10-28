@@ -39,7 +39,7 @@ fn speakable(c: &Cue) {
 fn active_cards_quote_real_document_guidance() {
     let catalog = ActiveCoach::shipped();
     assert_eq!(catalog.schema_version, 1);
-    assert_eq!(catalog.cards.len(), 12);
+    assert_eq!(catalog.cards.len(), 18);
     let check = |id: &str, source: &coach_engine::laning::Source| {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs").join(&source.path);
         let text = std::fs::read_to_string(path).unwrap();
@@ -186,6 +186,31 @@ fn spend_reminders_scale_with_the_clock_and_are_said_once_per_buy_episode() {
     assert_eq!(keys(&early.evaluate(&field(450, 1700))), ["unspent"]);
 }
 #[test]
+fn in_base_the_spend_bar_is_the_tier_below_and_a_new_life_is_a_new_shop_visit() {
+    // rec8 21:39: Tab open in base at 21:39 with 4,522 souls (a 3,200 item), said nothing.
+    let rule = UnspentSoulsRule::new(RulesConfig::default());
+    let mut s = alive(); s.game_clock_secs = Some(1068); s.souls = Some(2623);
+    s.minimap.as_mut().unwrap().zone_area = Some(ZoneArea::OwnBase); s.minimap.as_mut().unwrap().you = Some(Pt { x: 0.43, y: 0.9 });
+    assert_eq!(keys(&rule.evaluate(&s)), ["unspent:base"]);
+    let mut d = GameSnapshot { game_clock_secs: Some(1240), dead: true, screen: Some("Dead".into()), souls: Some(4497), respawn_secs: Some(29), ..Default::default() };
+    rule.evaluate(&d); d.game_clock_secs = Some(1260); rule.evaluate(&d);
+    let mut tab = s.clone(); tab.screen = Some("Scoreboard".into()); tab.game_clock_secs = Some(1299); tab.souls = Some(4522); tab.hp = None;
+    let c = rule.evaluate(&tab);
+    assert_eq!(c[0].text, "You're in base holding 4,522 souls. Spend them before you walk out.");
+}
+#[test]
+fn a_revive_is_not_a_shop_window() {
+    // rec8 39:17: one death-screen frame without a timer, health back 5 s later.
+    let rule = UnspentSoulsRule::new(RulesConfig::default());
+    let d = |t: u32, respawn: Option<u32>| GameSnapshot { game_clock_secs: Some(t), dead: true, screen: Some("Dead".into()), souls: Some(5861), respawn_secs: respawn, ..Default::default() };
+    assert!(rule.evaluate(&d(2357, None)).is_empty(), "no timer yet: wait");
+    let mut back = at(alive(), 2362); back.souls = Some(6116); rule.evaluate(&back);
+    assert!(rule.evaluate(&d(2700, None)).is_empty());
+    assert_eq!(keys(&rule.evaluate(&d(2705, None))), ["unspent-dead"], "5 s into a real death");
+    let rule = UnspentSoulsRule::new(RulesConfig::default());
+    assert_eq!(keys(&rule.evaluate(&d(2800, Some(70)))), ["unspent-dead"], "a read timer is a real death");
+}
+#[test]
 fn shopping_at_low_health_then_walking_out_gets_a_heal_call_once() {
     let mut e = Engine::new(vec![Box::new(ActiveCoach::default())]);
     let mut s = at(alive(), 2288); s.souls = Some(6585); s.hp = Some(1350);
@@ -322,6 +347,149 @@ fn a_team_fight_far_away_held_for_eight_seconds_says_rotate() {
     // Within the positioning coach's help range: its help/join call owns that fight.
     let mut e = Engine::new(vec![Box::new(ActiveCoach::fast())]);
     for t in 1500..1520 { assert!(e.step(&fight(t, Pt { x: 0.5, y: 0.5 })).is_empty()); }
+}
+
+// ---- Walking out into a lost map, fights lost away, base raids, the urn --------------------
+
+/// Top bar with allied slots 1.. dead on the given timers (slot 0 is you), enemies alive.
+fn allies_dead(timers: &[Option<u32>]) -> Vec<HeroStatus> {
+    (0..12).map(|i| {
+        let ally = i < 6; let slot = i % 6;
+        let dead = ally && slot >= 1 && slot <= timers.len();
+        HeroStatus { ally, slot, dead: Some(dead), respawn_secs: if dead { timers[slot - 1] } else { None },
+            bar_visible: Some(!dead), health_ratio: (!dead).then_some(0.9), ..Default::default() }
+    }).collect()
+}
+fn in_base(mut s: GameSnapshot) -> GameSnapshot {
+    let m = s.minimap.as_mut().unwrap(); m.zone_area = Some(ZoneArea::OwnBase); m.you = Some(Pt { x: 0.44, y: 0.92 }); m.your_lane = None; s
+}
+fn walked_out(mut s: GameSnapshot) -> GameSnapshot {
+    let m = s.minimap.as_mut().unwrap(); m.zone_area = Some(ZoneArea::Lane); m.you = Some(Pt { x: 0.66, y: 0.70 }); s
+}
+
+#[test]
+fn three_teammates_dead_says_hold_in_base_and_again_when_you_walk_out() {
+    // rec8 41:34-41:50: three teammates on 61-86 s timers, out of base at 41:44, dead at 42:05.
+    let mut e = Engine::new(vec![Box::new(ActiveCoach::default())]);
+    let mut s = in_base(at(alive(), 2494)); s.hero_status = allies_dead(&[Some(11), Some(79), Some(77)]);
+    let c = e.step(&s);
+    assert_eq!(keys(&c), ["active:hold_base"]);
+    assert_eq!(c[0].text, "Three teammates are dead, the next back in 11 seconds. Hold in base; don't walk out alone.");
+    assert_eq!(c[0].priority, Priority::High); speakable(&c[0]);
+    let mut s2 = in_base(at(alive(), 2500)); s2.hero_status = allies_dead(&[Some(5), Some(73), Some(71)]);
+    assert!(e.step(&s2).is_empty(), "said once while in base");
+    let mut out = walked_out(at(alive(), 2506)); out.hero_status = allies_dead(&[Some(86), Some(63), Some(61)]);
+    let c = e.step(&out);
+    assert_eq!(c[0].text, "Three teammates are dead, the next back in 61 seconds. Go back to base; don't walk out alone.");
+    let mut later = walked_out(at(alive(), 2540)); later.hero_status = allies_dead(&[Some(52), Some(29), Some(27)]);
+    assert!(e.step(&later).is_empty(), "once per walk out");
+    // Two dead, or the third back in a few seconds: no hold call.
+    let mut two = in_base(at(alive(), 2494)); two.hero_status = allies_dead(&[Some(2), Some(69), Some(67)]);
+    assert!(eval(&ActiveCoach::default(), &two).is_empty());
+}
+#[test]
+fn teammates_about_to_respawn_say_wait_for_them() {
+    // rec8 48:11: respawned in base, two teammates back in 4 and 5 s; walked out alone, died 95 s later.
+    let mut s = in_base(at(alive(), 2891)); s.hero_status = allies_dead(&[Some(4), Some(5)]);
+    let c = eval(&ActiveCoach::default(), &s);
+    assert_eq!(keys(&c), ["active:hold_base"]);
+    assert_eq!(c[0].text, "Two teammates respawn within 5 seconds. Wait for them and walk out together."); speakable(&c[0]);
+    // An unread timer is not "about to respawn".
+    s.hero_status = allies_dead(&[Some(4), None]);
+    assert!(eval(&ActiveCoach::default(), &s).is_empty());
+}
+#[test]
+fn two_teammates_dying_far_away_is_a_lost_fight_not_a_rotation() {
+    // rec8 34:46-34:52: two deaths 4 s apart at the Yellow side while you farmed the Green side.
+    let mut e = Engine::new(vec![Box::new(ActiveCoach::default())]);
+    let farm = |t: u32, timers: &[Option<u32>]| {
+        let mut s = at(alive(), t); s.hero_status = allies_dead(timers);
+        let m = s.minimap.as_mut().unwrap(); m.you = Some(Pt { x: 0.25, y: 0.52 }); m.your_lane = None; m.zone_area = Some(ZoneArea::Jungle);
+        m.heroes = vec![track(true, 0.72, 0.6), track(true, 0.79, 0.65), track(false, 0.8, 0.57)]; s
+    };
+    assert!(e.step(&farm(2080, &[])).is_empty());
+    assert!(e.step(&farm(2086, &[Some(67)])).is_empty(), "one death is not a lost fight");
+    let c = e.step(&farm(2090, &[Some(63), Some(73)]));
+    assert_eq!(keys(&c), ["active:team_losing"]);
+    assert_eq!(c[0].text, "Your team is losing a fight at the Yellow side jungle: two teammates died in 4 seconds. Don't go in alone: regroup or back off.");
+    speakable(&c[0]);
+    assert!(e.step(&farm(2094, &[Some(59), Some(69)])).is_empty(), "said once");
+    // Next to the fight: the review's fight-lost call owns it.
+    let mut e = Engine::new(vec![Box::new(ActiveCoach::default())]);
+    let near = |t: u32, timers: &[Option<u32>]| { let mut s = farm(t, timers); s.minimap.as_mut().unwrap().you = Some(Pt { x: 0.75, y: 0.62 }); s };
+    e.step(&near(2080, &[])); e.step(&near(2086, &[Some(67)]));
+    assert!(e.step(&near(2090, &[Some(63), Some(73)])).is_empty());
+}
+#[test]
+fn a_one_frame_dead_flicker_is_not_a_death() {
+    // rec8 41:29: a slot read dead for one frame with no timer, right after respawning.
+    let mut e = Engine::new(vec![Box::new(ActiveCoach::default())]);
+    let farm = |t: u32, timers: &[Option<u32>]| {
+        let mut s = at(alive(), t); s.hero_status = allies_dead(timers);
+        let m = s.minimap.as_mut().unwrap(); m.you = Some(Pt { x: 0.25, y: 0.52 });
+        m.heroes = vec![track(true, 0.72, 0.6), track(false, 0.8, 0.57)]; s
+    };
+    e.step(&farm(2470, &[]));
+    e.step(&farm(2476, &[None]));
+    e.step(&farm(2480, &[]));
+    assert!(e.step(&farm(2484, &[None, Some(80)])).is_empty(), "one confirmed death only");
+}
+#[test]
+fn your_base_under_attack_says_go_defend() {
+    // rec5 43:47: two enemies inside your base while you were at theirs.
+    let mut s = at(alive(), 2627);
+    let m = s.minimap.as_mut().unwrap(); m.you = Some(Pt { x: 0.69, y: 0.26 }); m.heroes = vec![track(false, 0.47, 0.82), track(false, 0.5, 0.8)];
+    let c = eval(&ActiveCoach::default(), &s);
+    assert_eq!(keys(&c), ["active:base_attack"]);
+    assert_eq!(c[0].text, "Your base is under attack: two enemies are inside it. Go defend now."); speakable(&c[0]);
+    // The structure banner, when the screen reader provides it.
+    let mut b = at(alive(), 2900); b.objective_banner = Some(coach_core::ObjectiveBanner { name: "Patron".into(), own: true, health_ratio: Some(0.6) });
+    assert_eq!(eval(&ActiveCoach::default(), &b)[0].text, "Your Patron is under attack. Go defend it now.");
+    b.objective_banner.as_mut().unwrap().own = false;
+    assert!(eval(&ActiveCoach::default(), &b).is_empty(), "their structure");
+    // You are defending already, or one enemy only: nothing.
+    let mut home = in_base(s.clone()); home.minimap.as_mut().unwrap().heroes = vec![track(false, 0.47, 0.82), track(false, 0.5, 0.8)];
+    assert!(eval(&ActiveCoach::default(), &home).is_empty());
+    s.minimap.as_mut().unwrap().heroes.pop(); assert!(eval(&ActiveCoach::default(), &s).is_empty());
+}
+#[test]
+fn carrying_the_urn_with_two_teammates_dead_and_an_enemy_close_says_hold_it() {
+    // rec8 27:33: the urn, two teammates dead, an enemy 0.04 map away; dead 24 s later.
+    let mut s = at(alive(), 1653); s.hero_status = allies_dead(&[Some(36), Some(53)]);
+    let m = s.minimap.as_mut().unwrap(); m.urn = Some(coach_core::UrnState::CarriedByYou); m.you = Some(Pt { x: 0.57, y: 0.36 }); m.heroes = vec![track(false, 0.54, 0.32)];
+    let c = eval(&ActiveCoach::default(), &s);
+    assert_eq!(keys(&c), ["active:urn_hold"]); speakable(&c[0]);
+    assert!(c[0].text.starts_with("Hold the urn: two teammates are dead"), "{}", c[0].text);
+    // The status token works without the minimap urn state.
+    let mut t = s.clone(); t.minimap.as_mut().unwrap().urn = None; t.status_effects = vec!["carrying_urn".into()];
+    assert_eq!(keys(&eval(&ActiveCoach::default(), &t)), ["active:urn_hold"]);
+    let mut safe = s.clone(); safe.hero_status = allies_dead(&[Some(36)]);
+    assert!(eval(&ActiveCoach::default(), &safe).is_empty(), "one teammate dead");
+    let mut alone = s.clone(); alone.minimap.as_mut().unwrap().heroes.clear();
+    assert!(eval(&ActiveCoach::default(), &alone).is_empty(), "no enemy near");
+}
+#[test]
+fn leaving_a_shop_nearly_dead_is_a_high_priority_heal_call() {
+    // rec8 44:19 -> 44:24: shopped at 2% health and walked into the jungle; the engine keeps only
+    // high-priority calls under 30% health, so a normal heal call was never said.
+    let mut e = Engine::new(default_rules(RulesConfig::default()));
+    let mut s = at(alive(), 2659); s.souls = Some(1650); s.hp = Some(60); s.max_hp = Some(2845); s.minimap.as_mut().unwrap().zone_area = Some(ZoneArea::Jungle);
+    e.step(&s);
+    let mut out = at(s.clone(), 2664); out.souls = Some(54); out.hp = Some(92); out.max_hp = Some(2917);
+    let c = e.step(&out);
+    assert!(c.iter().any(|c| c.key == "active:heal" && c.priority == Priority::High && c.text.contains("at 3% health")), "{c:?}");
+}
+#[test]
+fn an_enemy_window_is_said_once_per_set_of_dead_enemies() {
+    let mut e = Engine::new(default_rules(RulesConfig::default())); e.min_gap_secs = 0;
+    let mut said = 0;
+    for t in (1500..1560).step_by(3) {
+        let mut s = at(alive(), t); s.hero_status = team(&[Some(80 - (t - 1500)), Some(70 - (t - 1500))], 0);
+        // A slot flickering alive for one frame does not open a new window.
+        if t == 1530 { s.hero_status = team(&[Some(50)], 0); }
+        said += e.step(&s).iter().filter(|c| c.key == "pos:enemies_down").count();
+    }
+    assert_eq!(said, 1);
 }
 
 // ---- Fast path -----------------------------------------------------------------------------

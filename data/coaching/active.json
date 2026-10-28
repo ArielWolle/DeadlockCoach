@@ -5,11 +5,16 @@
     "cc_drop": 0.1, "cc_low": 0.6,
     "window_min_secs": 15, "healthy": 0.6, "near_radius": 0.12,
     "base_y": 0.86, "spend_early": 1600, "spend_late": 3200, "spend_late_clock": 1200,
-    "heal_below": 0.5, "purchase_drop": 800, "purchase_window_secs": 25,
+    "heal_below": 0.6, "purchase_drop": 800, "purchase_window_secs": 25,
     "unsecured_min": 500, "unsecured_low_hp": 0.5,
     "killer_share": 0.25, "killer_margin": 1.2, "close_share": 0.35, "repeat_deaths": 2, "lesson_delay_secs": 12,
-    "fight_allies": 3, "fight_enemies": 2, "fight_radius": 0.15, "fight_far": 0.45, "fight_hold_secs": 8
+    "fight_allies": 3, "fight_enemies": 2, "fight_radius": 0.15, "fight_far": 0.45, "fight_hold_secs": 8,
+    "loss_deaths": 2, "loss_window_secs": 15, "loss_far": 0.3, "loss_radius": 0.15,
+    "hold_dead": 3, "hold_min_secs": 8, "hold_soon_secs": 15, "hold_exit_secs": 20, "hold_exit_y": 0.55,
+    "raid_enemies": 2, "raid_y": 0.76, "raid_far": 0.3, "raid_min_clock": 900,
+    "urn_dead": 2, "urn_enemy_radius": 0.2
   },
+  "new_calls_note": "loss_*: two ally deaths on the top bar within 15 s, with the fight (an enemy marker within 0.15 of an allied one) more than 0.3 map away from you (rec8 34:46-34:52). hold_*: walking out of base, or still in it, while three teammates are dead on timers of 8 s or more or unread (rec8 41:50), or two teammates respawn within 15 s (rec8 48:07). raid_*: two enemy heroes inside the bottom-centre base region of the minimap, or your structure's health banner, while you are not in base. urn_*: carrying the urn with two teammates dead and an enemy within 0.2 (rec8 27:12-27:39).",
   "debuffs": [
     { "status": "aura of suffering", "hero": "hero_frank", "card": "aura" },
     { "status": "stalkers mark", "hero": "hero_drifter", "card": "stalkers_mark" }
@@ -86,6 +91,35 @@
       "rationale": "A team fight on the minimap far from you is fought a hero short.",
       "sources": [
         { "path": "strategy/lategame-and-closing.md", "section": "## 6. Throw prevention", "basis": "COMMUNITY", "excerpt": "A fight entered with team split or a teammate still walking from base is usually lost (metabot)." },
-        { "path": "strategy/common-mistakes.md", "section": "## 16. Fighting split / piecemeal", "basis": "COMMUNITY", "excerpt": "Fall back and regroup. Don't fight split." } ] }
+        { "path": "strategy/common-mistakes.md", "section": "## 16. Fighting split / piecemeal", "basis": "COMMUNITY", "excerpt": "Fall back and regroup. Don't fight split." } ] },
+    { "id": "hold_base", "speech": "{count} teammates are dead{next}. {action}; don't walk out alone.", "priority": "high", "cooldown_secs": 60,
+      "rationale": "With three teammates on respawn timers the map is lost for that time; walking out alone is a free kill and a longer timer.",
+      "sources": [
+        { "path": "strategy/lategame-and-closing.md", "section": "## 6. Throw prevention", "basis": "COMMUNITY", "excerpt": "A fight entered with team split or a teammate still walking from base is usually lost (metabot)." },
+        { "path": "strategy/common-mistakes.md", "section": "## 24. Late-game solo splitting while the team is dead", "basis": "COMMUNITY", "excerpt": "Your team is dead. Don't push in alone." } ] },
+    { "id": "wait_respawn", "speech": "{count} teammates respawn within {secs} seconds. Wait for them and walk out together.", "priority": "high", "cooldown_secs": 60,
+      "rationale": "Teammates a few seconds from respawning are worth waiting for: the next fight is fought together instead of alone.",
+      "sources": [
+        { "path": "strategy/lategame-and-closing.md", "section": "## 6. Throw prevention", "basis": "COMMUNITY", "excerpt": "A fight entered with team split or a teammate still walking from base is usually lost (metabot)." } ] },
+    { "id": "team_losing", "speech": "Your team is losing a fight at {area}: {count} teammates died in {secs} seconds. Don't go in alone: regroup or back off.", "priority": "high", "cooldown_secs": 60,
+      "rationale": "Two teammates falling within seconds of each other far from you is a lost fight; arriving alone adds a third death.",
+      "sources": [
+        { "path": "strategy/common-mistakes.md", "section": "## 19. Engaging without an advantage / continuing after opener whiffs", "basis": "COMMUNITY", "excerpt": "Fight is lost. Retreat together." },
+        { "path": "strategy/common-mistakes.md", "section": "## 16. Fighting split / piecemeal", "basis": "COMMUNITY", "excerpt": "Fall back and regroup. Don't fight split." } ] },
+    { "id": "base_banner", "speech": "Your {structure} is under attack. Go defend it now.", "priority": "high", "cooldown_secs": 45,
+      "rationale": "Your structure's health banner is shown: losing base structures late ends the game.",
+      "sources": [
+        { "path": "strategy/lategame-and-closing.md", "section": "## 6. Throw prevention", "basis": "WIKI", "excerpt": "Dying late is expensive: long respawns, and an enemy Patron kill ends the game." },
+        { "path": "strategy/moba-fundamentals.md", "section": "### When behind", "basis": "GENERAL", "excerpt": "Farm safe camps and defend structures" } ] },
+    { "id": "base_attack", "speech": "Your base is under attack: {count} enemies are inside it. Go defend now.", "priority": "high", "cooldown_secs": 45,
+      "rationale": "Enemy heroes on the minimap inside your base while you farm elsewhere are sieging structures your team cannot lose.",
+      "sources": [
+        { "path": "strategy/lategame-and-closing.md", "section": "## 6. Throw prevention", "basis": "WIKI", "excerpt": "Dying late is expensive: long respawns, and an enemy Patron kill ends the game." },
+        { "path": "strategy/moba-fundamentals.md", "section": "### When behind", "basis": "GENERAL", "excerpt": "Farm safe camps and defend structures" } ] },
+    { "id": "urn_hold", "speech": "Hold the urn: {count} teammates are dead and an enemy is close. Back off and wait for them: a melee hit or stun drops it.", "priority": "high", "cooldown_secs": 45,
+      "rationale": "The courier cannot parry or zipline and drops the urn to a melee hit or stun; without teammates to escort, an enemy beside you takes it.",
+      "sources": [
+        { "path": "strategy/midgame-macro.md", "section": "## 7. Soul Urn decisions", "basis": "WIKI", "excerpt": "Courier cannot use ziplines, teleporters, parry. Melee hits and stuns force a drop." },
+        { "path": "strategy/common-mistakes.md", "section": "## 15. Carrying the Urn into danger / not escorting", "basis": "WIKI", "excerpt": "courier cannot parry/zipline; melee/stun drops the urn" } ] }
   ]
 }

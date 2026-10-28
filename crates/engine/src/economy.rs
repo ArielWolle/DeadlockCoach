@@ -42,7 +42,7 @@ impl PaceRule{
 }
 /// Lane-by-lane wave summary. A recorded match repeated "contested near the middle" 12 times:
 /// a report is spoken only when some lane needs action (pushed out or coming toward you), and
-/// the same report is not repeated for 5 minutes; a changed report waits at least 45 s.
+/// the same report is not repeated for 5 minutes; a changed report waits at least 90 s.
 #[derive(Default)]
 pub struct WaveReportRule{last:std::cell::RefCell<Option<(String,u32)>>}
 impl Rule for WaveReportRule{
@@ -63,7 +63,8 @@ impl Rule for WaveReportRule{
         let mut last=self.last.borrow_mut();
         if let Some((prev,at))=last.as_ref(){
             let since=clock.saturating_sub(*at);
-            if clock>=*at&&(since<45||*prev==summary&&since<300){return vec![];}
+            // rec8 still spoke 11-17 overviews in 38 minutes at 45 s: a changed report waits 90 s.
+            if clock>=*at&&(since<90||*prev==summary&&since<300){return vec![];}
         }
         *last=Some((summary.clone(),clock));
         vec![Cue{key:"wave:overview".into(),text:format!("Wave check: {summary}. Catch incoming farm before roaming."),priority:Priority::Low,cooldown_secs:45}]

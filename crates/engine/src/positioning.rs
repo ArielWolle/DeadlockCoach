@@ -23,7 +23,9 @@ pub struct Catalog { pub schema_version: u32, pub thresholds: Thresholds, pub ca
 
 /// A positional recommendation with its observed basis, for display next to the spoken cue.
 #[derive(Debug, Clone, serde::Serialize)]
-pub struct Advice { pub id: String, pub text: String, pub priority: Priority, pub cooldown_secs: u32, pub evidence: Vec<String>, pub sources: Vec<Source> }
+pub struct Advice { pub id: String, pub text: String, pub priority: Priority, pub cooldown_secs: u32, pub evidence: Vec<String>, pub sources: Vec<Source>,
+    /// Minimap track ids the advice is about (missing enemies), for repeat suppression.
+    #[serde(skip)] pub tracks: Vec<u32> }
 
 /// What the top bar says about both teams (all twelve slots are required).
 #[derive(Debug, Clone, Default, serde::Serialize)]
@@ -94,7 +96,7 @@ impl PositionCoach {
         let mut text = c.speech.clone();
         for (k, v) in vars { text = text.replace(&format!("{{{k}}}"), v); }
         let priority = match c.priority.as_str() { "high" => Priority::High, "low" => Priority::Low, _ => Priority::Normal };
-        Advice { id: id.into(), text, priority, cooldown_secs: c.cooldown_secs, evidence, sources: c.sources.clone() }
+        Advice { id: id.into(), text, priority, cooldown_secs: c.cooldown_secs, evidence, sources: c.sources.clone(), tracks: vec![] }
     }
 
     pub fn assess(&self, s: &GameSnapshot) -> Option<Advice> {
@@ -115,11 +117,16 @@ impl PositionCoach {
         let p = team.as_ref()?;
         let near_enemy = positional.is_some_and(|(map, me)| map.heroes.iter().any(|h| !h.ally && h.confirmed() && h.visible() && h.distance(me) <= t.near_radius));
         let ev = vec![team_note.clone().unwrap_or_default(), hp_note.clone()];
-        if p.enemies_dead.len() >= t.team_down && p.enemies_dead.len() > p.allies_dead.len() && !near_enemy && health.is_some_and(|h| h >= 0.5) {
-            return Some(self.advice("enemies_down", &[("count", count(p.enemies_dead.len(), "enemy")), ("respawn", respawn_note(&p.enemies_dead))], ev));
+        // A window is only worth calling with time left: rec8 said "the first back in about 1
+        // seconds" twice. Enemies count with a read timer of WINDOW_MIN_SECS or more (an unread
+        // timer is not a window); teammates count unless their timer is nearly done.
+        let window: Vec<Option<u32>> = p.enemies_dead.iter().copied().filter(|r| r.is_some_and(|r| r >= WINDOW_MIN_SECS)).collect();
+        if window.len() >= t.team_down && p.enemies_dead.len() > p.allies_dead.len() && !near_enemy && health.is_some_and(|h| h >= 0.5) {
+            return Some(self.advice("enemies_down", &[("count", count(window.len(), "enemy")), ("respawn", respawn_note(&window))], ev));
         }
-        if p.allies_dead.len() >= t.team_down && p.allies_dead.len() > p.enemies_dead.len() {
-            return Some(self.advice("allies_down", &[("count", count(p.allies_dead.len(), "teammate")), ("respawn", respawn_note(&p.allies_dead))], ev));
+        let down: Vec<Option<u32>> = p.allies_dead.iter().copied().filter(|r| r.is_none_or(|r| r >= 8)).collect();
+        if down.len() >= t.team_down && p.allies_dead.len() > p.enemies_dead.len() {
+            return Some(self.advice("allies_down", &[("count", count(down.len(), "teammate")), ("respawn", respawn_note(&down))], ev));
         }
         None
     }
@@ -202,7 +209,9 @@ impl PositionCoach {
             let secs = missing.iter().map(|h| h.unseen_ms).min().unwrap_or(0) / 1000;
             let mut ev: Vec<String> = missing.iter().map(|h| format!("Enemy last seen {:.2} map away, {} s ago", h.distance(me), h.unseen_ms / 1000)).collect();
             ev.extend(ev_base.clone());
-            return Some(self.advice("missing", &[("count", count(missing.len(), "enemy")), ("seconds", secs.to_string())], ev));
+            let mut a = self.advice("missing", &[("count", count(missing.len(), "enemy")), ("seconds", secs.to_string())], ev);
+            a.tracks = missing.iter().map(|h| h.id).collect();
+            return Some(a);
         }
         // 5. Unseen: several alive enemies have no health bar while you are pushed up.
         if let Some(p) = team { if p.enemies_unseen >= t.unseen_forward && near_e.is_empty() && map.your_progress.is_some_and(|v| v >= t.forward_progress) {
@@ -242,6 +251,34 @@ impl PositionCoach {
     }
 }
 
+/// Seconds an enemy-dead window must still last to be worth a call.
+pub const WINDOW_MIN_SECS: u32 = 15;
+/// One team-wide window (two or more heroes of a team dead) as named so far. A window is said
+/// once: again only when none of the heroes named is still dead (a new window), and it ends when
+/// fewer than two are dead for WINDOW_GAP_SECS (top-bar flicker does not end it).
+#[derive(Clone, Default, Debug)]
+pub struct WindowMemo { said: Vec<usize>, current: Vec<usize>, open_at: u32 }
+pub const WINDOW_GAP_SECS: u32 = 8;
+impl WindowMemo {
+    /// This frame's dead slots (`None` = top bar not read); true when a call would be new.
+    pub fn observe(&mut self, dead: Option<Vec<usize>>, clock: u32, min: usize) -> bool {
+        if let Some(d) = dead {
+            if d.len() >= min { self.open_at = clock; } else if clock > self.open_at + WINDOW_GAP_SECS || clock < self.open_at { self.said.clear(); }
+            self.current = d;
+        }
+        self.said.is_empty() || !self.current.iter().any(|d| self.said.contains(d))
+    }
+    /// The window was spoken.
+    pub fn said(&mut self) { for d in &self.current { if !self.said.contains(d) { self.said.push(*d); } } }
+}
+/// Dead slots of one team when the top bar was read.
+pub fn dead_set(s: &GameSnapshot, ally: bool) -> Option<Vec<usize>> { (s.hero_status.len() == 12).then(|| dead_slots(s, ally)) }
+/// Top-bar slots (0-5) of one team shown dead.
+pub fn dead_slots(s: &GameSnapshot, ally: bool) -> Vec<usize> {
+    if s.hero_status.len() != 12 { return vec![]; }
+    s.hero_status.iter().filter(|h| h.ally == ally && h.dead == Some(true)).map(|h| h.slot).collect()
+}
+
 /// A track unseen this long still counts as present (one-frame dropouts).
 pub const RECENT_MS: u64 = 3_000;
 /// A track last seen this close to you, this recently, is assumed hidden under your portrait.
@@ -255,8 +292,15 @@ pub const HIDDEN_ALLY_MS: u64 = 15_000;
 /// spoken when the same advice holds on two consecutive assessments (gank warnings, which are
 /// about motion, excepted), and a "commit" call never follows a "back off" call within 30 s or
 /// vice versa (rec3 said "outnumbered" then "go in" 3 s apart as a teammate's ring flickered).
+///
+/// Team-wide calls are said once per situation (rec8 repeated enemies-down 11 times, allies-down 8
+/// and missing 11): enemies / allies down once per window ([`WindowMemo`]; the active coach's
+/// lane-specific window call shares the key), missing once per set of missing tracks for 90 s.
+/// Each is committed when the engine speaks it ([`Rule::spoken`]).
 #[derive(Clone, Default)]
-pub struct Spoken { last: std::cell::RefCell<(Option<(String, u32)>, Option<(String, u32)>)> }
+pub struct Spoken { last: std::cell::RefCell<(Option<(String, u32)>, Option<(String, u32)>)>, memo: std::cell::RefCell<Memo> }
+#[derive(Clone, Default)]
+struct Memo { missing_said: Vec<(u32, u32)>, missing_now: Vec<u32>, last_clock: u32, enemies: WindowMemo, allies: WindowMemo, new_enemies: bool, new_allies: bool }
 fn aggressive(id: &str) -> bool { matches!(id, "go_in" | "join" | "kill_window" | "enemies_down") }
 fn defensive(id: &str) -> bool { matches!(id, "outnumbered" | "gank" | "allies_down") }
 
@@ -264,6 +308,14 @@ impl Rule for PositionCoach {
     fn evaluate(&self, s: &GameSnapshot) -> Vec<Cue> {
         let Some(clock) = s.game_clock_secs else { return vec![] };
         let advice = self.assess(s);
+        let mut memo = self.spoken.memo.borrow_mut();
+        if clock + 120 < memo.last_clock { *memo = Memo::default(); }
+        memo.last_clock = clock;
+        memo.missing_said.retain(|(_, t)| clock >= *t && clock - t < 90);
+        let down = self.catalog.thresholds.team_down;
+        memo.new_enemies = memo.enemies.observe(dead_set(s, false), clock, down);
+        memo.new_allies = memo.allies.observe(dead_set(s, true), clock, down);
+        memo.missing_now.clear();
         let mut st = self.spoken.last.borrow_mut();
         let (prev, said) = (st.0.clone(), st.1.clone());
         st.0 = advice.as_ref().map(|a| (a.id.clone(), clock));
@@ -271,7 +323,24 @@ impl Rule for PositionCoach {
         let stable = a.id == "gank" || prev.is_some_and(|(id, t)| id == a.id && clock >= t && clock - t <= 6);
         let contradicts = said.is_some_and(|(id, t)| clock >= t && clock - t < 30 && (aggressive(&a.id) && defensive(&id) || defensive(&a.id) && aggressive(&id) && a.id != "gank"));
         if !stable || contradicts { return vec![]; }
+        let repeat = match a.id.as_str() {
+            "missing" => !a.tracks.is_empty() && a.tracks.iter().all(|id| memo.missing_said.iter().any(|m| m.0 == *id)),
+            "enemies_down" => !memo.new_enemies,
+            "allies_down" => !memo.new_allies,
+            _ => false,
+        };
+        if repeat { return vec![]; }
+        if a.id == "missing" { memo.missing_now = a.tracks.clone(); }
         st.1 = Some((a.id.clone(), clock));
         vec![Cue { key: format!("pos:{}", a.id), text: a.text, priority: a.priority, cooldown_secs: a.cooldown_secs }]
+    }
+    fn spoken(&self, cue: &Cue) {
+        let mut memo = self.spoken.memo.borrow_mut();
+        match cue.key.as_str() {
+            "pos:enemies_down" => memo.enemies.said(),
+            "pos:allies_down" => memo.allies.said(),
+            "pos:missing" => { let at = memo.last_clock; let ids = std::mem::take(&mut memo.missing_now); memo.missing_said.extend(ids.into_iter().map(|id| (id, at))); }
+            _ => {}
+        }
     }
 }

@@ -31,7 +31,7 @@ impl JungleCoach {
         let mut text = c.speech.clone();
         for (k, v) in vars { text = text.replace(&format!("{{{k}}}"), v); }
         let priority = match c.priority.as_str() { "high" => Priority::High, "low" => Priority::Low, _ => Priority::Normal };
-        Advice { id: id.into(), text, priority, cooldown_secs: c.cooldown_secs, evidence, sources: c.sources.clone() }
+        Advice { id: id.into(), text, priority, cooldown_secs: c.cooldown_secs, evidence, sources: c.sources.clone(), tracks: vec![] }
     }
 
     /// Camp spawn warning when a tier is about to appear for the first time.

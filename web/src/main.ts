@@ -331,7 +331,9 @@ function logCue(cue:Cue,s:Snapshot,fast:boolean,aiCue=false){
 // Active coach: debuffs / CC / death panels / top-bar timers / unsecured souls are only read by the
 // full scan. 'pos:enemies_down' is shared: the full scan's version names the lane to push.
 const FULL_ONLY=['counter','death','review','lead','behind','unspent-dead','player',
-  'active:debuff','active:cc','active:heal','active:unsecured','active:repeat','active:close','pos:enemies_down'];
+  'active:debuff','active:cc','active:heal','active:unsecured','active:repeat','active:close','pos:enemies_down',
+  // Top-bar deaths, structure banners and the urn carrier (full scan only).
+  'active:hold_base','active:team_losing','active:base_attack','active:urn_hold'];
 function deliver(analysis:Analysis,timestamp:number,fast=false){
   const now=Date.now(),age=Math.max(0,now-timestamp);const delivered:Cue[]=[];
   for(const original of analysis.cues){

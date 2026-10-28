@@ -102,6 +102,20 @@ pub struct GameSnapshot {
     /// none read on this frame (not proof of none).
     #[serde(default)]
     pub status_effects: Vec<String>,
+    /// Structure health banner at the top of the screen while a structure is under attack
+    /// (e.g. "Patron", "Shrine"); None when no banner was read.
+    #[serde(default)]
+    pub objective_banner: Option<ObjectiveBanner>,
+}
+
+/// A structure-under-attack banner: which structure, whose it is, and its health when read.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ObjectiveBanner {
+    pub name: String,
+    /// True when the structure belongs to your team.
+    pub own: bool,
+    pub health_ratio: Option<f32>,
 }
 
 /// One source row of the incoming-damage panel.

@@ -28,7 +28,9 @@ pub struct Threat { pub source: String, pub hero: String, pub close: bool, pub c
 #[derive(Clone, Deserialize)]
 pub struct Counter { pub need: String, pub items: Vec<String>, pub keyword: String, pub why: String, pub sources: Vec<Source> }
 #[derive(Clone, Default, Deserialize)]
-pub struct Roles { #[serde(default)] pub ranged: Vec<String> }
+pub struct Roles { #[serde(default)] pub ranged: Vec<String>,
+    /// Items whose effect is a melee attack (class names): never suggested to a ranged hero.
+    #[serde(default)] pub melee_items: Vec<String> }
 #[derive(Clone, Deserialize)]
 pub struct Catalog { pub schema_version: u32, pub thresholds: Thresholds, pub cards: Vec<Card>,
     #[serde(default)] pub threats: Vec<Threat>, #[serde(default)] pub counters: Vec<Counter>, #[serde(default)] pub roles: Roles }
@@ -57,6 +59,13 @@ impl GameData {
         self.heroes.get(class).cloned().unwrap_or_else(|| class.trim_start_matches("hero_").replace('_', " "))
     }
     pub fn item(&self, name: &str) -> Option<&ItemRow> { self.items.iter().find(|i| i.name.eq_ignore_ascii_case(name)) }
+    /// The one enemy hero an ability belongs to (None for items, shared abilities, or heroes not
+    /// on the enemy team; an empty team list accepts any single owner).
+    pub fn ability_hero(&self, ability: &str, enemies: &[String]) -> Option<String> {
+        let a = self.abilities.get(&ability.to_lowercase()).filter(|a| a.kind == "ability")?;
+        let c: Vec<&String> = a.heroes.iter().filter(|h| enemies.is_empty() || enemies.contains(h)).collect();
+        match c.as_slice() { [h] if a.heroes.len() <= 3 => Some((*h).clone()), _ => None }
+    }
 }
 
 /// Where you were on one sample.
@@ -73,6 +82,9 @@ struct Sample {
     fight_at: Option<f32>, deep_wave: bool,
     /// Status effects and debuff badges on you (normalised: lower case, no apostrophes).
     effects: Vec<String>,
+    /// A live gameplay frame (alive even when your position was not read), and the respawn
+    /// timer on a death screen.
+    alive: bool, respawn: Option<u32>,
 }
 
 /// What one death came down to, kept for repeat killers and pattern summaries.
@@ -235,7 +247,8 @@ impl ReviewCoach {
         let effects = if area == Area::Dead { vec![] } else { s.status_effects.iter().map(|e| norm(e)).collect() };
         Sample { clock, area, hp: s.hp.zip(s.max_hp).filter(|(h, m)| *m >= 100 && h <= m).map(|(h, m)| h as f32 / m as f32), you, nearest_ally,
             unseen: team.as_ref().map(|p| p.enemies_unseen), allies_dead: team.as_ref().map(|p| p.allies_dead.len()),
-            enemies_dead: team.as_ref().map(|p| p.enemies_dead.len()), souls: s.souls, fight_at, deep_wave, effects }
+            enemies_dead: team.as_ref().map(|p| p.enemies_dead.len()), souls: s.souls, fight_at, deep_wave, effects,
+            alive: area != Area::Dead && s.screen.as_deref() == Some("Gameplay"), respawn: if area == Area::Dead { s.respawn_secs } else { None } }
     }
 
     /// Why the last death happened, from the samples before it and the damage panel.
@@ -456,15 +469,31 @@ impl ReviewCoach {
         let w: Vec<&Sample> = st.samples.iter().filter(|x| x.clock + t.pattern_window_secs >= now).collect();
         let span = w.last()?.clock.saturating_sub(w.first()?.clock);
         if span < t.pattern_window_secs * 4 / 5 { return None; }
-        // Time per area: each sample stands for the gap to the next one (capped at 10 s).
+        // Where you were per sample. A menu frame (shop, scoreboard) between death screens is
+        // still dead: rec8 said "dead for 29 seconds" of an 83 s respawn spent partly in the shop.
+        let known = |x: &Sample| x.area != Area::Unknown || x.alive;
+        let eff: Vec<Area> = (0..w.len()).map(|i| {
+            if known(w[i]) { return w[i].area; }
+            let prev = w[..i].iter().rev().find(|x| known(x)).map(|x| x.area);
+            let next = w[i + 1..].iter().find(|x| known(x)).map(|x| x.area);
+            if prev == Some(Area::Dead) && next.is_none_or(|n| n == Area::Dead) { Area::Dead } else { Area::Unknown }
+        }).collect();
+        // Time per area: each sample stands for the gap to the next one (capped at 10 s, 30 s
+        // within a death: the death screen is sampled sparsely).
         let mut time = [0u32; 5]; let mut hoard = 0u32; let mut deep_away = 0u32; let mut peak = 0u32;
+        // The souls tier that applied while hoarding (the lowest one counted, so "held over N"
+        // and "up to M" agree: rec8 said "over 6,400 ... up to 5,130").
+        let mut hoard_tier = u32::MAX;
         // Enemy-dead windows: (start, length, most dead, ever in their half).
         let mut windows: Vec<(u32, u32, usize, bool)> = vec![]; let mut open: Option<(u32, u32, usize, bool)> = None;
         let mut fights_missed = 0u32; let mut fights_joined = 0u32; let mut in_fight: Option<bool> = None;
-        for (a, b) in w.iter().zip(w.iter().skip(1)) {
-            let dt = b.clock.saturating_sub(a.clock).min(10);
-            time[a.area as usize] += dt;
-            if a.area != Area::Dead && a.souls.is_some_and(|v| v >= t.hoard_souls.max(crate::economy::spend_target(a.clock))) { hoard += dt; peak = peak.max(a.souls.unwrap()); }
+        for (i, (a, b)) in w.iter().zip(w.iter().skip(1)).enumerate() {
+            let area = eff[i];
+            let cap = if area == Area::Dead && eff[i + 1] == Area::Dead { 30 } else { 10 };
+            let dt = b.clock.saturating_sub(a.clock).min(cap);
+            time[area as usize] += dt;
+            let tier = t.hoard_souls.max(crate::economy::spend_target(a.clock));
+            if area != Area::Dead && a.souls.is_some_and(|v| v >= tier) { hoard += dt; peak = peak.max(a.souls.unwrap()); hoard_tier = hoard_tier.min(tier); }
             // Defending in base is not being away from a deep wave; only farming camps is.
             if a.deep_wave && a.area == Area::Jungle { deep_away += dt; }
             let alive = matches!(a.area, Area::Lane | Area::Jungle | Area::Base);
@@ -482,10 +511,13 @@ impl ReviewCoach {
         }
         if let Some(w) = open.take() { windows.push(w); }
         let unused = windows.into_iter().filter(|w| w.1 >= 20 && !w.3).max_by_key(|w| w.1);
+        // Still dead now: the rest of the respawn timer is part of this death.
+        if eff.last() == Some(&Area::Dead) { time[Area::Dead as usize] += w.last().and_then(|x| x.respawn).unwrap_or(0); }
         // Deaths = death-screen runs inside the window (a death just before it still counts).
-        // (Unreadable frames between death screens do not split a death.)
-        let deaths = (0..w.len()).filter(|&i| w[i].area == Area::Dead
-            && w[..i].iter().rev().find(|x| x.area != Area::Unknown).is_none_or(|p| p.area != Area::Dead)).count();
+        // Menus between death screens do not split a death; a live gameplay frame does, even
+        // without your marker (rec8 counted 1 death of 2: 48:07-49:34 had no minimap).
+        let deaths = (0..w.len()).filter(|&i| eff[i] == Area::Dead
+            && (0..i).rev().find(|&j| eff[j] != Area::Unknown || w[j].alive).is_none_or(|j| eff[j] != Area::Dead)).count();
         let known = (time[Area::Lane as usize] + time[Area::Jungle as usize] + time[Area::Base as usize]).max(1);
         let pct = |a: Area| time[a as usize] * 100 / known;
         let min = (span + 30) / 60;
@@ -533,7 +565,7 @@ impl ReviewCoach {
         if fights_missed >= 2 { out.push(self.fill("pattern_missed", &[("fights", plural(fights_missed as usize, "time", "times"))])); }
         if pct(Area::Jungle) >= 50 && known >= 120 { out.push(self.fill("pattern_jungle", &[("jungle", pct(Area::Jungle).to_string()), ("min", min.to_string())])); }
         if deep_away >= 30 { out.push(self.fill("pattern_waves", &[("secs", deep_away.to_string())])); }
-        if hoard >= 60 { out.push(self.fill("pattern_hoard", &[("hoard", num(t.hoard_souls.max(crate::economy::spend_target(now)))), ("secs", hoard.to_string()), ("peak", num(peak))])); }
+        if hoard >= 60 { out.push(self.fill("pattern_hoard", &[("hoard", num(hoard_tier)), ("secs", hoard.to_string()), ("peak", num(peak))])); }
         if out.is_empty() {
             if deaths > 0 || known < 120 { return None; }
             out.push(self.fill("pattern_good", &[("min", min.to_string()), ("lane", pct(Area::Lane).to_string()), ("jungle", pct(Area::Jungle).to_string()), ("joined", if fights_joined > 0 { format!(", with your team for {}", plural(fights_joined as usize, "fight", "fights")) } else { String::new() })]));
