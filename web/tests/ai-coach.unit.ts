@@ -65,12 +65,12 @@ test('state summary is deterministic, cites history and stays within budget', ()
 test('death history records the death panel and the souls held before dying', () => {
   const h = new AiHistory();
   h.push(snap(700, { souls: 2400, unsecured_souls: 600, hp: 150 }), [], 0);
-  h.push(snap(702, { dead: true, screen: 'Dead', respawn_secs: 18, death_cause: 'Graves', death_damage: [{ source: 'Graves', damage: 620 }, { source: 'Shiv', damage: 300 }], death_killing_blow: { source: 'Graves', damage: 140 } }), [], 2000);
+  h.push(snap(702, { dead: true, screen: 'Dead', respawn_secs: 18, death_cause: 'Graves', death_damage: [{ source: 'Graves', damage: 620 }, { source: 'Shiv', damage: 300 }], death_killing_blow: 'Graves' }), [], 2000);
   h.push(snap(704, { dead: true, screen: 'Dead', respawn_secs: 16 }), [], 4000);
   assert.equal(h.deathCount, 1);
   const s = buildSummary({ snapshot: snap(704, { dead: true, screen: 'Dead' }), history: h, now: 4000, trigger: 'death' });
   assert.match(s, /YOU ARE DEAD/);
-  assert.match(s, /Death at 11:42: cause Graves · damage taken: Graves 620, Shiv 300 · killing blow Graves \(140\) · last alive HP 15% · unspent before death 2,400 \(unsecured 600\) · respawn 16s/);
+  assert.match(s, /Death at 11:42: cause Graves · damage taken: Graves 620, Shiv 300 · killing blow Graves · last alive HP 15% · unspent before death 2,400 \(unsecured 600\) · respawn 16s/);
 });
 
 test('objective timer helper lists only near events in order', () => {
