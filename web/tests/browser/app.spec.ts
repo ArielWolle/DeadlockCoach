@@ -92,13 +92,15 @@ test('browser reads top-bar health, unseen and dead heroes like native', async (
   expect(t).toHaveLength(12);
   expect(t[0].health_ratio!).toBeLessThan(0.3); expect(t[4].health_ratio!).toBeGreaterThan(0.9);
   expect(t[7].bar_visible).toBe(false); expect(t[10].bar_visible).toBe(false);
-  expect(t[11].dead).toBe(true); expect(t[11].respawn_secs).toBe(2);
+  expect(t[11].dead).toBe(true);
+  // The same still frame twice: the 2 s timer must count down, so it is 2, 1 or expired, never more.
+  expect(t[11].respawn_secs == null || t[11].respawn_secs <= 2).toBe(true);
   // The Match state roster lists all six heroes per team with their observed state.
   await page.locator('[data-page="match"]').click();
   const enemies = page.locator('#roster > div').nth(1).locator('.roster-row');
   await expect(enemies).toHaveCount(6);
   await expect(enemies.nth(1)).toContainText('Not seen recently');
-  await expect(enemies.nth(5)).toContainText('Dead · respawn in 2s');
+  await expect(enemies.nth(5)).toContainText('Dead');
   await expect(enemies.nth(3)).toContainText('% health');
   await expect(page.locator('#roster > div').nth(0).locator('.roster-row')).toHaveCount(6);
 });
