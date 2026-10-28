@@ -157,35 +157,55 @@ impl Default for RulesConfig {
     fn default() -> Self { RulesConfig { unspent_souls: 1500, lead_pct: 15.0, lead_min_clock_secs: 300, lead_min_abs: 3000 } }
 }
 
-pub struct UnspentSoulsRule(pub RulesConfig);
+/// Spend reminders, scaled to the game clock ([`economy::spend_target`]) and said per "buy
+/// episode": once when you can afford the tier normally bought now, at most one reminder 3
+/// minutes later, then nothing until you buy (souls drop) or die. A recorded match said "You are
+/// holding N souls" 11 times, including 1,633 at 32:18 and while saving for a 6,400 item.
+pub struct UnspentSoulsRule(pub RulesConfig, std::cell::Cell<SoulsEpisode>);
+impl UnspentSoulsRule { pub fn new(cfg: RulesConfig) -> Self { Self(cfg, Default::default()) } }
+#[derive(Default, Clone, Copy)]
+pub struct SoulsEpisode { peak: u32, said: u8, said_at: u32, dead_said: bool }
+fn thousands_souls(v: u32) -> String { if v >= 1000 { format!("{},{:03}", v / 1000, v % 1000) } else { v.to_string() } }
 impl Rule for UnspentSoulsRule {
     fn evaluate(&self, snap: &GameSnapshot) -> Vec<Cue> {
         if snap.minimap.as_ref().is_some_and(|m| m.urn == Some(coach_core::UrnState::CarriedByYou)) { return vec![]; }
-        let Some(s) = snap.souls else { return vec![] };
-        if s < self.0.unspent_souls { return vec![]; }
-        if snap.dead {
-            // Dead players can still open the shop: best time to spend.
-            let wait = snap.respawn_secs.map(|r| format!(" You respawn in {r} seconds.")).unwrap_or_default();
-            return vec![Cue {
-                key: "unspent-dead".into(),
-                text: format!("You are dead with {s} souls. Buy items now.{wait}"),
-                priority: Priority::High,
-                cooldown_secs: 90,
-            }];
-        }
-        // In your own base the call is specific ("spend them before you walk out") and only for
-        // an amount that buys a useful upgrade; the generic field reminder stays quiet there.
-        if let Some(base) = active::base_spend(snap) { return base.into_iter().collect(); }
-        if let Some(lane)=laning::focus(snap) {
-            if snap.game_clock_secs.is_some_and(|t|t<900) && snap.minimap.as_ref().is_some_and(|m|
-                m.lane(lane).push.is_none_or(|p|p<0.7)) {return vec![];}
-        }
-        vec![Cue {
-            key: "unspent".into(),
-            text: format!("You are holding {} souls. Shop when the wave and route are safe.", s),
-            priority: Priority::Normal,
-            cooldown_secs: 120,
-        }]
+        let (Some(s), Some(clock)) = (snap.souls, snap.game_clock_secs) else { return vec![] };
+        let mut cur = self.1.get();
+        let out = (|| { let ep = &mut cur;
+            // A purchase (souls fall well below the episode's peak) or a new match starts over.
+            if s + 400 < ep.peak || clock + 120 < ep.said_at { *ep = SoulsEpisode::default(); }
+            ep.peak = ep.peak.max(s);
+            let target = economy::spend_target(clock).max(self.0.unspent_souls);
+            if snap.dead {
+                // The death screen is a shop window: named once per death when the souls buy at
+                // least the tier below what you would normally buy now.
+                let need = economy::death_spend(clock);
+                if s < need || ep.dead_said { return vec![]; }
+                ep.dead_said = true;
+                let wait = snap.respawn_secs.map(|r| format!(" You respawn in {r} seconds.")).unwrap_or_default();
+                return vec![Cue { key: "unspent-dead".into(), text: format!("You are dead with {} souls. Buy items now.{wait}", thousands_souls(s)), priority: Priority::High, cooldown_secs: 90 }];
+            }
+            ep.dead_said = false;
+            if s < target { return vec![]; } // saving for the next item
+            if ep.said >= 2 || ep.said == 1 && clock < ep.said_at + 180 { return vec![]; }
+            // In your own base the call is specific ("spend them before you walk out").
+            if let Some(base) = active::base_spend(snap) {
+                let Some(c) = base else { return vec![] };
+                ep.said += 1; ep.said_at = clock; return vec![c];
+            }
+            if let Some(lane)=laning::focus(snap) {
+                if clock<900 && snap.minimap.as_ref().is_some_and(|m| m.lane(lane).push.is_none_or(|p|p<0.7)) {return vec![];}
+            }
+            let text = if ep.said == 0 {
+                format!("You can afford a {}-soul item: you have {} souls. Shop when the wave and route are safe.", thousands_souls(target), thousands_souls(s))
+            } else {
+                format!("Still holding {} souls. Buy on your next safe moment: unspent souls do nothing in a fight.", thousands_souls(s))
+            };
+            ep.said += 1; ep.said_at = clock;
+            vec![Cue { key: "unspent".into(), text, priority: Priority::Normal, cooldown_secs: 150 }]
+        })();
+        self.1.set(cur);
+        out
     }
 }
 
@@ -248,7 +268,7 @@ pub fn default_rules(cfg: RulesConfig) -> Vec<Box<dyn Rule>> {
     // The active coach goes first: among equal priorities its specific call (the debuff on you,
     // the lane to push in an enemy-dead window, souls to spend in base) wins the step over the
     // generic one, and the shared keys keep the generic one quiet for its cooldown.
-    vec![Box::new(active::ActiveCoach::default()), Box::new(positioning::PositionCoach::default()), Box::new(jungle::JungleCoach::default()), Box::new(laning::LaneCoach::default()), Box::new(map_rules::MapRule), Box::new(UnspentSoulsRule(cfg.clone())), Box::new(review::ReviewCoach::default()), Box::new(NetworthLeadRule::new(cfg)),Box::new(economy::PaceRule),Box::new(economy::WaveReportRule::default())]
+    vec![Box::new(active::ActiveCoach::default()), Box::new(positioning::PositionCoach::default()), Box::new(jungle::JungleCoach::default()), Box::new(laning::LaneCoach::default()), Box::new(map_rules::MapRule), Box::new(UnspentSoulsRule::new(cfg.clone())), Box::new(review::ReviewCoach::default()), Box::new(NetworthLeadRule::new(cfg)),Box::new(economy::PaceRule::default()),Box::new(economy::WaveReportRule::default())]
 }
 
 pub struct Engine {
@@ -360,7 +380,7 @@ mod tests {
         e.min_gap_secs = 0;
         let mut texts: Vec<String> = vec![];
         for t in [400, 405, 410, 415] { let mut s2 = s.clone(); s2.game_clock_secs = Some(t); texts.extend(e.step(&s2).into_iter().map(|c| c.text)); }
-        assert!(texts.iter().any(|t| t.contains("2000 souls")));
+        assert!(texts.iter().any(|t| t.contains("2,000 souls")), "{texts:?}");
         assert!(texts.iter().any(|t| t.contains("ahead")), "needs 3 consistent reads: {texts:?}");
         assert_eq!(texts.iter().filter(|t| t.contains("ahead")).count(), 1);
     }
@@ -372,7 +392,7 @@ mod tests {
         let mut s = at(850);
         s.dead = true; s.souls = Some(2000); s.respawn_secs = Some(20); s.death_cause = Some("Temple Guardia".into());
         let mut t: Vec<String> = e.step(&s).into_iter().map(|c| c.text).collect();
-        assert!(t.iter().any(|x| x.contains("dead with 2000 souls") && x.contains("20 seconds")), "{t:?}");
+        assert!(t.iter().any(|x| x.contains("dead with 2,000 souls") && x.contains("20 seconds")), "{t:?}");
         // The death review waits ~5 s for the damage panel to fill in.
         s.game_clock_secs = Some(856); s.respawn_secs = Some(14);
         t.extend(e.step(&s).into_iter().map(|c| c.text));

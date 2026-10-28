@@ -148,7 +148,7 @@ fn the_specific_window_call_wins_over_the_generic_one_and_silences_it() {
 
 #[test]
 fn in_base_with_souls_for_an_upgrade_says_spend_before_walking_out() {
-    let rule = UnspentSoulsRule(RulesConfig::default());
+    let rule = UnspentSoulsRule::new(RulesConfig::default());
     let mut s = alive(); s.game_clock_secs = Some(506); s.souls = Some(2187);
     s.minimap.as_mut().unwrap().zone_area = Some(ZoneArea::OwnBase); s.minimap.as_mut().unwrap().you = Some(Pt { x: 0.43, y: 0.87 });
     let cues = rule.evaluate(&s);
@@ -158,9 +158,32 @@ fn in_base_with_souls_for_an_upgrade_says_spend_before_walking_out() {
     // Late game a 1,600 item is not the bar: 2,900 at 44:00 in base says nothing (not even the generic call).
     s.game_clock_secs = Some(2640); s.souls = Some(2900);
     assert!(rule.evaluate(&s).is_empty());
-    // Out of base the generic field reminder is unchanged.
+    // Out of base too: 2,900 late is saving for a 6,400 item, not hoarding.
     s.minimap.as_mut().unwrap().zone_area = Some(ZoneArea::Lane); s.minimap.as_mut().unwrap().you = Some(Pt { x: 0.43, y: 0.6 });
-    assert_eq!(keys(&rule.evaluate(&s)), ["unspent"]);
+    assert!(rule.evaluate(&s).is_empty());
+}
+
+#[test]
+fn spend_reminders_scale_with_the_clock_and_are_said_once_per_buy_episode() {
+    let rule = UnspentSoulsRule::new(RulesConfig::default());
+    let field = |clock: u32, souls: u32| { let mut s = alive(); s.game_clock_secs = Some(clock); s.souls = Some(souls);
+        s.minimap.as_mut().unwrap().zone_area = Some(ZoneArea::Lane); s.minimap.as_mut().unwrap().you = Some(Pt { x: 0.43, y: 0.6 });
+        s.coaching_context.focus_lane = None; s.minimap.as_mut().unwrap().your_lane = None; s };
+    // Saving toward a 6,400 item late: silent all the way up.
+    for (t, v) in [(1900, 1633), (2000, 3500), (2100, 4734), (2200, 6000)] { assert!(rule.evaluate(&field(t, v)).is_empty(), "{v} at {t}"); }
+    // Affordable: said once, with the tier.
+    let c = rule.evaluate(&field(2210, 6629)); assert_eq!(keys(&c), ["unspent"]);
+    assert!(c[0].text.contains("6,400-soul item") && c[0].text.contains("6,629"), "{}", c[0].text);
+    // Still holding: nothing for 3 minutes, then one reminder, then silence.
+    assert!(rule.evaluate(&field(2300, 7000)).is_empty());
+    assert!(rule.evaluate(&field(2400, 7100))[0].text.starts_with("Still holding 7,100"));
+    assert!(rule.evaluate(&field(2700, 7400)).is_empty());
+    // A purchase starts a new episode.
+    assert!(rule.evaluate(&field(2710, 900)).is_empty());
+    assert_eq!(keys(&rule.evaluate(&field(2900, 6500))), ["unspent"]);
+    // Early game the bar is lower.
+    let early = UnspentSoulsRule::new(RulesConfig::default());
+    assert_eq!(keys(&early.evaluate(&field(450, 1700))), ["unspent"]);
 }
 #[test]
 fn shopping_at_low_health_then_walking_out_gets_a_heal_call_once() {

@@ -284,7 +284,9 @@ test('player profile on the reviewed recordings matches the human reviews',async
     assert.ok(rec5.deaths.filter(d=>d.close).length>=3,'Victor x2 and Drifter');
     assert.ok(rec5.windows.unused>=1);
     const ids=p.summary().weaknesses.map(t=>t.id);
-    for(const id of ['dying','unspent_souls','close_range','repeat_killer','unused_windows'])assert.ok(ids.includes(id),`${id} in ${ids}`);
+    // Unspent souls are judged against the tier bought at that time: these late-game 1.4k-6.3k
+    // amounts were saving for 3,200 / 6,400 items, so they are no longer a weakness.
+    for(const id of ['dying','close_range','repeat_killer','unused_windows'])assert.ok(ids.includes(id),`${id} in ${ids}`);
     assert.ok(!ids.includes('jungle_heavy'));
   }
 });

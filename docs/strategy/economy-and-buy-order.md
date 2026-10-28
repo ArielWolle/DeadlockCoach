@@ -56,6 +56,10 @@ First blood: +125.
 - [COMMUNITY] Crash wave, shop, return (games.gg). Do not shop on a neutral wave (you pay a wave tax).
 - [COMMUNITY] Shop after major value spikes so a fragile lead does not enter a fight unspent (games.gg).
 - UNVERIFIED: ideal soul amounts for each purchase, exact first-buy timing.
+- [COACH HEURISTIC] Spend reminders follow the item tier normally bought at that point (shop costs from
+  `data/items.json`: 800 / 1,600 / 3,200 / 6,400): 1,600 before 10:00, 3,200 until 20:00, 6,400 after.
+  Holding less than that is saving for the next item and is not called out; a death holding at least
+  the tier below it (3,200 late) is named, since the death screen is a shop window.
 
 ## 5. Selling / refunds
 - UNVERIFIED: no fetched page covered selling or refunding items. The coach should not claim sell values or timings.

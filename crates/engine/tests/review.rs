@@ -191,7 +191,7 @@ fn a_death_is_explained_once_from_the_seconds_before_it() {
 
 #[test]
 fn the_engine_speaks_one_review_per_death_even_with_the_dead_screen_flickering() {
-    let mut e = coach_engine::Engine::new(vec![Box::new(ReviewCoach::default()), Box::new(coach_engine::UnspentSoulsRule(Default::default()))]);
+    let mut e = coach_engine::Engine::new(vec![Box::new(ReviewCoach::default()), Box::new(coach_engine::UnspentSoulsRule::new(Default::default()))]);
     e.min_gap_secs = 0;
     let p = Pt { x: 0.2, y: 0.3 };
     for (t, hp) in [(1000, 2400), (1004, 2200), (1008, 400)] { e.step(&alive(t, hp, p, Some(Lane::Green), vec![], team(0, 4), 3019)); }

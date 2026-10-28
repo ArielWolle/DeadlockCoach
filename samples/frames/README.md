@@ -22,3 +22,4 @@ Local capture/debug output belongs in the repository-root `frames/` or `sessions
 
 Only the explicit fixture allow-list in `web/scripts/assets.mjs` is included in the static
 website artifact. This directory is not a recording destination.
+| `00530`-`00531` | rec6: death screen whose spectator minimap is ~2% smaller, then gameplay; the latched smaller box made every later frame Unknown (`crates/vision/tests/automatic.rs`) |

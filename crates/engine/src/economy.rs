@@ -1,9 +1,32 @@
 //! Relative earned-souls pace; unspent balance is never used as earned net worth.
 use coach_core::GameSnapshot;
 use crate::{Cue,Rule,Priority};
-pub struct PaceRule;
+
+/// The item tier normally bought at `clock` (shop costs 800 / 1,600 / 3,200 / 6,400): spend
+/// reminders start only once you can afford it. Holding less is saving for the next item, not
+/// hoarding: a recorded match nagged about 1,633 souls at 32:18 and while saving for a 6,400
+/// item. Coach heuristic, see docs/strategy/economy-and-buy-order.md section 4.
+pub fn spend_target(clock: u32) -> u32 { if clock < 600 { 1600 } else if clock < 1200 { 3200 } else { 6400 } }
+/// Souls worth naming at a death (the death screen is a shop window): the tier below the target.
+pub fn death_spend(clock: u32) -> u32 { (spend_target(clock) / 2).max(1200) }
+/// Farm pace against the observed lobby. Spoken when the band changes (behind / on track /
+/// ahead), or as a reminder after 5 minutes in the same band (rec6 said "Good farming" 16 times).
+#[derive(Default)]
+pub struct PaceRule{last:std::cell::Cell<Option<(&'static str,u32)>>}
 impl Rule for PaceRule{
     fn evaluate(&self,s:&GameSnapshot)->Vec<Cue>{
+        let Some((band,cue))=self.pace(s) else{return vec![]};
+        let clock=s.game_clock_secs.unwrap_or(0);
+        if self.last.get().is_some_and(|(b,t)|b==band&&clock>=t&&clock<t+300){return vec![];}
+        self.last.set(Some((band,clock)));
+        vec![cue]
+    }
+}
+impl PaceRule{
+    fn pace(&self,s:&GameSnapshot)->Option<(&'static str,Cue)>{
+        self.pace_cues(s).into_iter().next()
+    }
+    fn pace_cues(&self,s:&GameSnapshot)->Vec<(&'static str,Cue)>{
         let Some(clock)=s.game_clock_secs.filter(|t|*t>=180)else{return vec![]};
         if s.dead||s.screen.as_deref()!=Some("Gameplay"){return vec![];}
         let Some(own)=s.own_networth else{return vec![]};
@@ -14,7 +37,7 @@ impl Rule for PaceRule{
         let (band,text)=if ratio<0.8 {("behind",format!("Your earned souls are behind the observed lobby at {} minutes. Prioritize a safe wave, then a nearby camp instead of a speculative gank.",clock/60))}
             else if ratio>=1.2 {("ahead","Good farm pace. Your earned souls are ahead of the observed lobby; protect that lead and convert wave priority into objectives.".into())}
             else {("on-track","Good farming. Your earned souls are keeping pace with the observed lobby. Keep catching waves between rotations.".into())};
-        vec![Cue{key:format!("pace:{band}"),text,priority:Priority::Low,cooldown_secs:120}]
+        vec![(band,Cue{key:format!("pace:{band}"),text,priority:Priority::Low,cooldown_secs:120})]
     }
 }
 /// Lane-by-lane wave summary. A recorded match repeated "contested near the middle" 12 times:

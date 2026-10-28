@@ -219,7 +219,9 @@ pub fn base_spend(s: &GameSnapshot) -> Option<Option<Cue>> {
     let c = &shared().0; let t = &c.thresholds;
     if s.dead || s.screen.as_deref() != Some("Gameplay") || in_base(s, t) != Some(true) { return None; }
     if s.minimap.as_ref().is_some_and(|m| m.urn == Some(coach_core::UrnState::CarriedByYou)) { return Some(None); }
-    let need = if s.game_clock_secs.unwrap_or(0) < t.spend_late_clock { t.spend_early } else { t.spend_late };
+    // The same clock-scaled tier as the field reminder: below it you are saving, not hoarding.
+    let need = crate::economy::spend_target(s.game_clock_secs.unwrap_or(0));
+    let _ = (t.spend_early, t.spend_late, t.spend_late_clock);
     let Some(v) = s.souls.filter(|v| *v >= need) else { return Some(None) };
     let card = c.cards.iter().find(|c| c.id == "base_spend").expect("base_spend card");
     Some(Some(Cue { key: "unspent:base".into(), text: card.speech.replace("{souls}", &thousands(v)), priority: Priority::Normal, cooldown_secs: card.cooldown_secs }))

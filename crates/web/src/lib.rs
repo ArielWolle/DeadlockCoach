@@ -104,9 +104,9 @@ impl Coach {
         if self.options.map { rules.push(Box::new(coach_engine::map_rules::MapRule)); }
         if self.options.map { rules.push(Box::new(coach_engine::economy::WaveReportRule::default())); }
         if self.options.economy {
-            rules.push(Box::new(coach_engine::UnspentSoulsRule(self.rules.clone())));
+            rules.push(Box::new(coach_engine::UnspentSoulsRule::new(self.rules.clone())));
             rules.push(Box::new(coach_engine::NetworthLeadRule::new(self.rules.clone())));
-            rules.push(Box::new(coach_engine::economy::PaceRule));
+            rules.push(Box::new(coach_engine::economy::PaceRule::default()));
         }
         // Death review (why you died, from the minutes before), play-pattern summaries and the
         // fight-lost / walking-out-alone warnings. Replaces the single death-cause sentence.
@@ -185,7 +185,7 @@ impl QuickCoach {
         if self.options.timers{rules.extend(coach_engine::rules_from_timings(include_str!("../../../data/timings.json")).map_err(js_error)?);}
         if self.options.laning{rules.push(Box::new(coach_engine::positioning::PositionCoach::default()));rules.push(Box::new(coach_engine::jungle::JungleCoach::default()));rules.push(Box::new(self.lane.clone()));}
         if self.options.map{rules.push(Box::new(coach_engine::economy::WaveReportRule::default()));rules.push(Box::new(coach_engine::map_rules::MapRule));}
-        if self.options.economy{rules.push(Box::new(coach_engine::economy::PaceRule));rules.push(Box::new(coach_engine::UnspentSoulsRule(RulesConfig::default())));}
+        if self.options.economy{rules.push(Box::new(coach_engine::economy::PaceRule::default()));rules.push(Box::new(coach_engine::UnspentSoulsRule::new(RulesConfig::default())));}
         // Fast path: only the position-based active call (missed team fight). Status effects, top-bar
         // respawn timers and death panels are copied from the last full scan here, so those calls
         // stay in the full engine (listed in FULL_ONLY in web/src/main.ts).

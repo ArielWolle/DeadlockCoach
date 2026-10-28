@@ -45,7 +45,9 @@ pub struct AutoScanner {legacy:Scanner,reader:Reader,map:MapLocator,clock:crate:
     verified_map:Option<(Bounds,(u32,u32))>,
     /// Last game-context rectangle and the frame size it was formed in. Frames without a located
     /// minimap (shop, menus, effects over the map) are classified in it.
-    last_context:Option<(Bounds,(u32,u32))>}
+    last_context:Option<(Bounds,(u32,u32))>,
+    /// When the tracked minimap box is next re-checked by a fresh search (ms).
+    relocate_at:u64}
 
 /// Canonical 1600x900 image of a context rectangle (pixel-exact when within 2% of 1:1; a ~0.1%
 /// resample blurred the small HUD digits enough to read 5:13 as 6:13 on a letterboxed shot).
@@ -63,9 +65,13 @@ fn canonical_of(frame:&DynamicImage,left:u32,top:u32,w:u32,h:u32)->(image::RgbaI
 /// Template similarity needed to keep the verified map box without landmarks (normal frames
 /// measured 0.52-0.61, late-game base fights 0.26-0.37, the end screen 0.0).
 const MAP_HOLD_SCORE:f32=0.2;
+/// How often a tracked minimap box is re-checked by a fresh search, and by how much a fresh box
+/// must out-score it to replace it.
+const MAP_RECHECK_MS:u64=5_000;
+const MAP_SWITCH_MARGIN:f32=0.02;
 impl AutoScanner {
     pub fn new(legacy:Scanner,reader:Reader)->Self{Self{legacy,reader,map:MapLocator::default(),clock:Default::default(),regions:vec![],previous_map:None,
-        clock_box:Tracked::default(),currency_box:Tracked::default(),map_tracker:Default::default(),laps:Default::default(),had_context:false,verified_map:None,last_context:None}}
+        clock_box:Tracked::default(),currency_box:Tracked::default(),map_tracker:Default::default(),laps:Default::default(),had_context:false,verified_map:None,relocate_at:0,last_context:None}}
     pub fn reset(&mut self){self.legacy.reset();self.clock=Default::default();self.regions.clear();self.previous_map=None;self.clock_box.reset();self.currency_box.reset();self.map_tracker=Default::default();self.had_context=false;self.verified_map=None;self.last_context=None;}
     /// A frame without a located minimap is scanned in the last context rectangle of this frame
     /// size (the HUD does not move within a match), or the whole frame when it is 16:9. The
@@ -89,6 +95,15 @@ impl AutoScanner {
         let dims=(frame.width(),frame.height());
         let verified=self.verified_map.filter(|(_,d)|*d==dims).map(|(b,_)|b);
         let tracked=self.previous_map.and_then(|b|self.map.track(frame,b));
+        // A tracked or held box is re-checked against a fresh search every few seconds and replaced
+        // when the fresh one matches the minimap clearly better. rec6 latched the slightly smaller
+        // spectator minimap of a death screen (396x414 for 404x422); tracking kept it, the scene
+        // context sat 2% off and every later frame of the match read as Unknown.
+        let due=now>=self.relocate_at||now+60_000<self.relocate_at;
+        if due{self.relocate_at=now+MAP_RECHECK_MS;}
+        let better=|f:&coach_perception::localization::Located,score:f32|f.score>score+MAP_SWITCH_MARGIN;
+        let rechecked=tracked.and_then(|t|due.then(||self.map.locate(frame)).flatten().filter(|f|better(f,t.score)));
+        let tracked=rechecked.or(tracked);
         let map=tracked.or_else(||{
             let found=self.map.locate(frame);
             let same=|a:Bounds,b:Bounds|(a.w as f32/b.w.max(1) as f32-1.).abs()<=0.05&&(a.h as f32/b.h.max(1) as f32-1.).abs()<=0.05;
@@ -98,7 +113,11 @@ impl AutoScanner {
             // slid and ally slot 2 read Bookworm instead of Bebop for the rest of the match.
             let jitter=|a:Bounds,b:Bounds|{let t=(b.w as f32*0.03).max(3.);(a.x as f32-b.x as f32).abs()<=t&&(a.y as f32-b.y as f32).abs()<=t&&(a.w as f32-b.w as f32).abs()<=t&&(a.h as f32-b.h as f32).abs()<=t};
             match (found,verified) {
-                (Some(f),Some(v)) if jitter(f.bounds,v) => Some(coach_perception::localization::Located{bounds:v,score:f.score}),
+                // ...unless the find matches clearly better than the verified box (a wrong box latched).
+                (Some(f),Some(v)) if jitter(f.bounds,v) => match self.map.hold(frame,v,0.0) {
+                    Some(h) if !better(&f,h.score) => Some(coach_perception::localization::Located{bounds:v,score:h.score}),
+                    _ => Some(f),
+                },
                 // The minimap does not move within a match: a differently sized box is a false find
                 // while the verified one still matches (rec4 frame 500 found a 340-px box).
                 (Some(f),Some(v)) if !same(f.bounds,v) => self.map.hold(frame,v,MAP_HOLD_SCORE).or(Some(f)),

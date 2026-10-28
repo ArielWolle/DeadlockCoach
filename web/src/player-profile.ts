@@ -24,6 +24,11 @@ export const REVIEW = {
   death_window_secs: 15, alone_distance: 0.25, unseen_enemies: 3, souls_at_death: 1200,
   fight_radius: 0.13, missed_fight_distance: 0.3, hoard_souls: 3000, respawn_window_secs: 40,
 } as const;
+/** Item tier normally bought at a game clock (crates/engine/src/economy.rs spend_target): holding
+ *  less is saving for the next item, not hoarding. */
+export const spendTarget = (clock: number | null) => clock == null ? REVIEW.hoard_souls : clock < 600 ? 1600 : clock < 1200 ? 3200 : 6400;
+/** Souls worth naming at a death: the tier below (economy.rs death_spend). */
+export const deathSpend = (clock: number | null) => Math.max(REVIEW.souls_at_death, Math.floor(spendTarget(clock) / 2));
 /** Profile-only constants. */
 export const LIMITS = {
   /** review.rs: each sample stands for the gap to the next one, capped at 10 s. */
@@ -266,7 +271,7 @@ export class MatchAggregator {
     if (!dt) return;
     this.time[a.area] += dt;
     const alive = a.area === 'lane' || a.area === 'jungle' || a.area === 'base';
-    if (alive && a.souls != null) { this.souls.knownSecs += dt; if (a.souls >= REVIEW.hoard_souls) { this.souls.hoardSecs += dt; this.souls.peak = Math.max(this.souls.peak, a.souls); } }
+    if (alive && a.souls != null) { this.souls.knownSecs += dt; if (a.souls >= Math.max(REVIEW.hoard_souls, spendTarget(a.t ?? null))) { this.souls.hoardSecs += dt; this.souls.peak = Math.max(this.souls.peak, a.souls); } }
     if (a.deepWave && a.area === 'jungle') this.deepAwaySecs += dt;
     if (alive && a.hp != null) {
       this.lowHp.knownSecs += dt;
@@ -457,7 +462,7 @@ export class PlayerProfileModel {
 
     // 2. Unspent souls (common-mistakes.md #6; review.json souls_at_death 1200, hoard_souls 3000,
     //    pattern_hoard = >= 60 s of a 5-minute window, i.e. 20%).
-    const atDeathF = (m: MatchRecord): Ratio | null => { const d = m.deaths.filter(x => x.souls != null); return d.length ? { num: d.filter(x => x.souls! >= REVIEW.souls_at_death).length, den: d.length } : null; };
+    const atDeathF = (m: MatchRecord): Ratio | null => { const d = m.deaths.filter(x => x.souls != null); return d.length ? { num: d.filter(x => x.souls! >= deathSpend(x.clock)).length, den: d.length } : null; };
     const hoardF = (m: MatchRecord): Ratio | null => m.souls.knownSecs >= 120 ? { num: m.souls.hoardSecs, den: m.souls.knownSecs } : null;
     const atDeath = ratio(ms, atDeathF), hoard = ratio(ms, hoardF);
     const soulsAt = deathsAll.map(d => d.souls).filter(finite);
@@ -608,7 +613,7 @@ export class PlayerProfileModel {
     const killer = fam ? (() => { const h = m.deaths.find(d => d.family === fam)?.killer; const n = m.deaths.filter(d => d.family === fam).length; return `${h ? this.heroName(h) : fam} x${n}`; })() : null;
     return { id: m.id, date: m.startedAt, hero: m.hero, heroName: this.heroName(m.hero), source: m.source, result: m.result, minutes: Math.round(m.observedSecs / 6) / 10,
       deaths: m.deaths.length, deadPct: known(m) >= 60 ? pct(m.time.dead, known(m)) : null, fightsJoined: m.fights.joined, fightsMissed: m.fights.missed,
-      unspentAtDeath: withSouls.length ? `${withSouls.filter(d => d.souls! >= REVIEW.souls_at_death).length}/${withSouls.length} · avg ${k(sum(withSouls.map(d => d.souls!)) / withSouls.length)}` : '—',
+      unspentAtDeath: withSouls.length ? `${withSouls.filter(d => d.souls! >= deathSpend(d.clock)).length}/${withSouls.length} · avg ${k(sum(withSouls.map(d => d.souls!)) / withSouls.length)}` : '—',
       topKiller: killer, partial: m.partial === true };
   }
 

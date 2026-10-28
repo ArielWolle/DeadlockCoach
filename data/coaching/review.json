@@ -129,7 +129,7 @@
       "sources": [{ "path": "strategy/common-mistakes.md", "section": "1. Lane-hopping / leaving lane for nothing (early)", "basis": "COMMUNITY", "excerpt": "Your lane is getting pushed in. Get back and clear the wave." }] },
     { "id": "pattern_hoard", "speech": "You held over {hoard} souls for {secs} seconds, up to {peak}.", "lesson": "Shop when the wave is safe.",
       "sources": [{ "path": "strategy/common-mistakes.md", "section": "6. Hoarding souls (unspent)", "basis": "COMMUNITY", "excerpt": "You have unspent souls. Go shop when the wave is safe." }] },
-    { "id": "pattern_good", "speech": "Last {min} minutes: no deaths, {lane}% in lanes, {jungle}% jungle, with your team for {joined} fights.", "lesson": "Good balance. Keep catching waves between fights.",
+    { "id": "pattern_good", "speech": "Last {min} minutes: no deaths, {lane}% in lanes, {jungle}% jungle{joined}.", "lesson": "Good balance. Keep catching waves between fights.",
       "sources": [{ "path": "jungle/jungle-tactics.md", "section": "Verified quotes for coaching cards (retrieved 2026-10-27)", "basis": "WIKI", "excerpt": "it's recommended to clear camps in between trooper waves." }] },
 
     { "id": "live_fight_lost", "speech": "{count} just died near you. The fight is lost: back off now.", "lesson": "",

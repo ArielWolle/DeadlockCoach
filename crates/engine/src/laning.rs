@@ -139,7 +139,7 @@ impl LaneCoach {
             missing.push("Team intent and actual objective contest state are not detected".into());
             return Some(self.plan("rotate",Action::PrepareObjective,s,Priority::Normal,evidence,missing,true));
         }
-        if crashed && healthy && in_lane && s.souls.is_some_and(|v| v>=1500) {
+        if crashed && healthy && in_lane && s.souls.is_some_and(|v| v>=crate::economy::spend_target(clock)) {
             return Some(self.plan("shop",Action::Shop,s,Priority::Normal,evidence,missing,true));
         }
         if crashed&&healthy&&in_lane&&!endangered&&!objective_soon {

@@ -92,6 +92,8 @@ struct State {
     last_respawn: Option<u32>, last_dead_clock: Option<u32>,
     /// The last spoken pattern text (the same summary is never said twice in a row).
     last_pattern: Option<(String, String)>,
+    /// The summary offered under the previous key.
+    prev_pattern: Option<String>,
     /// Your hero, the enemy team, enemy item owners (item name lower -> hero classes), your items.
     me: Option<String>, enemies: Vec<String>, owners: HashMap<String, Vec<String>>, own_items: Vec<String>,
 }
@@ -414,7 +416,7 @@ impl ReviewCoach {
                 add(&mut reasons, &mut lessons, 3, 3, "forward_missing", &[("count", plural(x.unseen.unwrap(), "enemy", "enemies"))]);
             }
         }
-        let souls_reason = souls_at.filter(|v| *v >= t.souls_at_death).map(|souls| self.fill("souls", &[("souls", num(souls))]));
+        let souls_reason = souls_at.filter(|v| *v >= t.souls_at_death.max(crate::economy::death_spend(death.clock))).map(|souls| self.fill("souls", &[("souls", num(souls))]));
         // Non-hero killers (Midboss, Walker, structures, troopers) have their own advice when the
         // panel rows were not read.
         if attr.is_none() {
@@ -462,7 +464,7 @@ impl ReviewCoach {
         for (a, b) in w.iter().zip(w.iter().skip(1)) {
             let dt = b.clock.saturating_sub(a.clock).min(10);
             time[a.area as usize] += dt;
-            if a.area != Area::Dead && a.souls.is_some_and(|v| v >= t.hoard_souls) { hoard += dt; peak = peak.max(a.souls.unwrap()); }
+            if a.area != Area::Dead && a.souls.is_some_and(|v| v >= t.hoard_souls.max(crate::economy::spend_target(a.clock))) { hoard += dt; peak = peak.max(a.souls.unwrap()); }
             // Defending in base is not being away from a deep wave; only farming camps is.
             if a.deep_wave && a.area == Area::Jungle { deep_away += dt; }
             let alive = matches!(a.area, Area::Lane | Area::Jungle | Area::Base);
@@ -517,16 +519,24 @@ impl ReviewCoach {
         if deaths >= 2 || time[Area::Dead as usize] >= 60 {
             out.push(self.fill("pattern_deaths", &[("min", min.to_string()), ("deaths", plural(deaths, "time", "times")), ("dead", minutes(time[Area::Dead as usize]))]));
         }
+        // A summary never repeats an item the previous summary already said (rec6 said "held over
+        // 6,400 souls" in two summaries in a row; rec5 repeated the same 38:21 window).
+        // The previous summary: the last one offered for an earlier 5-minute block, else the one before.
+        let block = format!(":{}", now / t.pattern_window_secs);
+        let previous = st.last_pattern.as_ref().filter(|(k, _)| !k.ends_with(&block)).map(|(_, text)| text).or(st.prev_pattern.as_ref());
+        let said_before = |needle: &str| previous.is_some_and(|text| text.contains(needle));
+        let unused = unused.filter(|(start, ..)| !said_before(&format!("At {}:{:02},", start / 60, start % 60)));
+        let hoard = if said_before("souls for") { 0 } else { hoard };
         if let Some((start, secs, n, _)) = unused {
             out.push(self.fill("pattern_window", &[("time", format!("{}:{:02}", start / 60, start % 60)), ("count", plural(n, "enemy", "enemies")), ("secs", secs.to_string())]));
         }
         if fights_missed >= 2 { out.push(self.fill("pattern_missed", &[("fights", plural(fights_missed as usize, "time", "times"))])); }
         if pct(Area::Jungle) >= 50 && known >= 120 { out.push(self.fill("pattern_jungle", &[("jungle", pct(Area::Jungle).to_string()), ("min", min.to_string())])); }
         if deep_away >= 30 { out.push(self.fill("pattern_waves", &[("secs", deep_away.to_string())])); }
-        if hoard >= 60 { out.push(self.fill("pattern_hoard", &[("hoard", num(t.hoard_souls)), ("secs", hoard.to_string()), ("peak", num(peak))])); }
+        if hoard >= 60 { out.push(self.fill("pattern_hoard", &[("hoard", num(t.hoard_souls.max(crate::economy::spend_target(now)))), ("secs", hoard.to_string()), ("peak", num(peak))])); }
         if out.is_empty() {
             if deaths > 0 || known < 120 { return None; }
-            out.push(self.fill("pattern_good", &[("min", min.to_string()), ("lane", pct(Area::Lane).to_string()), ("jungle", pct(Area::Jungle).to_string()), ("joined", fights_joined.to_string())]));
+            out.push(self.fill("pattern_good", &[("min", min.to_string()), ("lane", pct(Area::Lane).to_string()), ("jungle", pct(Area::Jungle).to_string()), ("joined", if fights_joined > 0 { format!(", with your team for {}", plural(fights_joined as usize, "fight", "fights")) } else { String::new() })]));
         }
         let picked: Vec<_> = out.into_iter().take(3).collect();
         let text = picked.iter().map(|(a, b)| format!("{a} {b}")).collect::<Vec<_>>().join(" ");
@@ -540,6 +550,8 @@ impl ReviewCoach {
     /// the frame's slot).
     fn offer_pattern(st: &mut State, key: String, text: String, priority: Priority) -> Option<Cue> {
         if st.last_pattern.as_ref().is_some_and(|(k, t)| *t == text && *k != key) { return None; }
+        // The previous block's summary (not this one, which may be re-offered) gates repeats.
+        if let Some((k, t)) = st.last_pattern.take() { if k != key { st.prev_pattern = Some(t); } }
         st.last_pattern = Some((key.clone(), text.clone()));
         Some(Cue { key, text, priority, cooldown_secs: 600 })
     }

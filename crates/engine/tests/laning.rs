@@ -99,7 +99,7 @@ fn low_health_can_interrupt_the_normal_gap_but_repeated_advice_is_deduplicated()
 #[test]
 fn shopping_reminders_do_not_send_the_player_away_from_an_uncleared_lane() {
     let mut s=state();s.souls=Some(3000);
-    assert!(coach_engine::UnspentSoulsRule(RulesConfig::default()).evaluate(&s).is_empty());
+    assert!(coach_engine::UnspentSoulsRule::new(RulesConfig::default()).evaluate(&s).is_empty());
 }
 #[test]
 fn unlock_timers_are_one_shot_and_camps_are_not_a_fixed_respawn_clock() {

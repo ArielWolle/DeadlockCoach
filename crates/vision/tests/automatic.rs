@@ -70,3 +70,16 @@ fn moving_the_map_does_not_require_moving_currency_or_the_clock(){
     assert!(matches!(s.game_clock_secs,Some(313|314)),"{:?}",s.game_clock_secs);assert_eq!(s.souls,Some(1732));
     let r=auto.regions().into_iter().find(|r|r.id=="minimap").unwrap();assert!(r.bounds.x.abs_diff(930)<10&&r.bounds.y.abs_diff(300)<10,"{r:?}");
 }
+
+#[test]
+fn a_smaller_spectator_minimap_on_a_death_screen_is_not_kept_for_the_rest_of_the_match(){
+    // rec6: the death screen's minimap is ~2% smaller; tracking kept that box and every later
+    // frame read as Unknown. A fresh search that matches clearly better replaces it.
+    let open=|n:&str|image::open(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("../../samples/frames/{n}.jpg"))).unwrap();
+    let (dead,live)=(open("00530_rec6-dead-spectator-minimap"),open("00531_rec6-gameplay-after-death"));
+    let mut auto=scanner();auto.scan(&dead,0);auto.scan(&dead,1000);
+    let mut screens=vec![];for t in [6000u64,9000,12000]{screens.push(auto.scan(&live,t).screen);}
+    assert!(screens.iter().any(|s|s.as_deref()==Some("Gameplay")),"{screens:?}");
+    let map=auto.regions().into_iter().find(|r|r.id=="minimap").unwrap();assert!(map.bounds.w>=400,"{:?}",map.bounds);
+}
+
