@@ -41,6 +41,8 @@ pub struct Scanner {
     hero_names: Vec<(String, String)>,
     match_id: Option<u64>,
     pending_match: Option<u64>,
+    /// Highest verified match clock this match (a new match restarts the clock).
+    clock_max: Option<u32>,
     virt_ms: u64,
     last_board: Vec<coach_core::PlayerRow>,
     board_history: Vec<Vec<coach_core::PlayerRow>>,
@@ -76,6 +78,8 @@ pub struct Scanner {
     own_slot: [(f32, u32); 6],
     /// Per slot: identity votes this match (portrait samples, scoreboard names).
     hero_votes: Vec<HashMap<String, f32>>,
+    /// Per slot: identity latched for the match (see HeroLatches).
+    hero_latch: HeroLatches,
     /// Your latched slot and how many checks in a row another slot has won.
     own_latched: Option<(usize, u32)>,
     /// Per ally slot: frames on which only that slot showed the own-portrait backdrop.
@@ -147,6 +151,101 @@ pub fn latched_heroes(votes: &[HashMap<String, f32>], fresh: &[Option<String>]) 
     }
     for (slot, f) in fresh.iter().enumerate() {
         if out[slot].is_none() { if let Some(h) = f { if !used.contains(h) { out[slot] = Some(h.clone()); used.insert(h.clone()); } } }
+    }
+    out
+}
+
+/// Margin over the runner-up that makes a portrait sample "strong". Only strong samples can
+/// overturn a latched identity: rec8's Grey Talon carrying the urn (mint backdrop, other art)
+/// read Silver at 0.62 vs 0.57 for five minutes and took the slot (and your hero) over.
+pub const STRONG_MARGIN: f32 = 0.08;
+/// Contrary strong evidence that switches a latched identity (a sample counts 1, a scoreboard
+/// name 3); every sample of the latched hero halves it, so it has to be sustained.
+pub const SWITCH_EVIDENCE: f32 = 6.0;
+/// Votes (and lead: twice the runner-up) a slot needs before its identity latches.
+pub const LATCH_VOTES: f32 = 3.0;
+
+/// Latched identity of one top-bar slot and the contrary evidence against it.
+#[derive(Debug, Clone, Default)]
+pub struct HeroLatch { pub hero: Option<String>, challenge: HashMap<String, f32> }
+
+/// Per-slot hero identities latched for the match (0-5 ally, 6-11 enemy). A hero is in one slot
+/// only: a slot does not latch (or switch to) a hero another slot holds, except by a name read.
+#[derive(Debug, Clone)]
+pub struct HeroLatches { pub slots: Vec<HeroLatch> }
+
+impl Default for HeroLatches { fn default() -> Self { HeroLatches { slots: vec![HeroLatch::default(); 12] } } }
+
+impl HeroLatches {
+    pub fn heroes(&self) -> Vec<Option<String>> { self.slots.iter().map(|l| l.hero.clone()).collect() }
+    fn holder(&self, slot: usize, hero: &str) -> Option<usize> {
+        self.slots.iter().enumerate().position(|(j, l)| j != slot && l.hero.as_deref() == Some(hero))
+    }
+    /// Whether `slot` may take `hero`: nobody else holds it, or this slot's votes for it are at
+    /// least twice the holder's (the holder then lets go).
+    fn may_take(&self, slot: usize, hero: &str, votes: &[HashMap<String, f32>]) -> bool {
+        let v = |i: usize| votes.get(i).and_then(|m| m.get(hero)).copied().unwrap_or(0.0);
+        self.holder(slot, hero).is_none_or(|j| v(slot) >= LATCH_VOTES && v(slot) >= 2.0 * v(j))
+    }
+    fn take(&mut self, slot: usize, hero: String) {
+        for (j, o) in self.slots.iter_mut().enumerate() { if j != slot && o.hero.as_ref() == Some(&hero) { o.hero = None; o.challenge.clear(); } }
+        let l = &mut self.slots[slot];
+        l.hero = Some(hero); l.challenge.clear();
+    }
+    /// One portrait sample of a live slot: its confident winner (if any) and margin over the
+    /// runner-up; `votes` are all slots' identity votes.
+    pub fn sample(&mut self, slot: usize, winner: Option<(&str, f32)>, votes: &[HashMap<String, f32>]) {
+        if slot >= self.slots.len() { return; }
+        if let Some((h, margin)) = winner {
+            let l = &mut self.slots[slot];
+            match l.hero.as_deref() {
+                Some(cur) if cur == h => { for v in l.challenge.values_mut() { *v *= 0.5; } }
+                Some(_) if margin >= STRONG_MARGIN => { *l.challenge.entry(h.to_string()).or_default() += 1.0; }
+                _ => {}
+            }
+        }
+        self.settle(slot, votes);
+        // A slot that lost its hero to another slot latches again from its own votes.
+        for j in 0..self.slots.len() { if j != slot && self.slots[j].hero.is_none() { self.settle(j, votes); } }
+    }
+    /// A scoreboard name read for a slot: strong evidence. It latches an unlatched slot at once;
+    /// two reads switch a latched identity (taking the hero from another slot that held it).
+    pub fn board(&mut self, slot: usize, hero: &str, votes: &[HashMap<String, f32>]) {
+        if slot >= self.slots.len() { return; }
+        let l = &mut self.slots[slot];
+        let take = match l.hero.as_deref() {
+            Some(cur) if cur == hero => { for v in l.challenge.values_mut() { *v *= 0.5; } false }
+            Some(_) => { let c = l.challenge.entry(hero.to_string()).or_default(); *c += 3.0; *c >= SWITCH_EVIDENCE }
+            None => true,
+        };
+        if take { self.take(slot, hero.to_string()); }
+        for j in 0..self.slots.len() { if self.slots[j].hero.is_none() { self.settle(j, votes); } }
+    }
+    fn settle(&mut self, slot: usize, votes: &[HashMap<String, f32>]) {
+        let switch = self.slots[slot].challenge.iter().filter(|(_, v)| **v >= SWITCH_EVIDENCE)
+            .max_by(|a, b| a.1.total_cmp(b.1)).map(|(h, _)| h.clone());
+        if let Some(h) = switch.filter(|h| self.may_take(slot, h, votes)) { self.take(slot, h); }
+        if self.slots[slot].hero.is_none() {
+            let Some(mine) = votes.get(slot) else { return };
+            let mut ranked: Vec<(&String, f32)> = mine.iter().filter(|(h, _)| self.may_take(slot, h, votes)).map(|(h, v)| (h, *v)).collect();
+            ranked.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(b.0)));
+            let second = ranked.get(1).map_or(0.0, |r| r.1);
+            if let Some(h) = ranked.first().filter(|r| r.1 >= LATCH_VOTES && r.1 >= 2.0 * second).map(|r| r.0.clone()) {
+                self.take(slot, h);
+            }
+        }
+    }
+}
+
+/// Slot identities: latched heroes first, then the vote / fresh assignment for unlatched slots,
+/// unique across slots.
+pub fn latched_assignment(latched: &[Option<String>], votes: &[HashMap<String, f32>], fresh: &[Option<String>]) -> Vec<Option<String>> {
+    let mut used = std::collections::HashSet::new();
+    let mut out: Vec<Option<String>> = latched.iter().map(|h| h.clone().filter(|h| used.insert(h.clone()))).collect();
+    out.resize(fresh.len(), None);
+    let rest = latched_heroes(votes, fresh);
+    for (slot, r) in rest.into_iter().enumerate() {
+        if out[slot].is_none() { if let Some(h) = r { if used.insert(h.clone()) { out[slot] = Some(h); } } }
     }
     out
 }
@@ -249,6 +348,17 @@ fn digit_diff(a: u64, b: u64) -> usize {
     a.chars().zip(b.chars()).filter(|(x, y)| x != y).count()
 }
 
+/// Whether the verified match clock went back from the highest value seen this match (a new
+/// match restarts it). Without a current value it counts only when the match never had one.
+/// Raw reads are not used: the frames that misread the match id also misread the clock's
+/// minutes (rec8: 17:34 as 7:34), which the verified extrapolation ignores.
+pub fn clock_restarted(now: Option<u32>, max: Option<u32>) -> bool {
+    match now {
+        Some(c) => max.is_none_or(|m| c + 90 < m),
+        None => max.is_none(),
+    }
+}
+
 /// "T2 Walker Killing Blow x30" -> "T2 Walker".
 fn clean_cause(s: &str) -> Option<String> {
     let first = s.lines().next()?;
@@ -314,6 +424,7 @@ impl Scanner {
             hero_names,
             match_id: None,
             pending_match: None,
+            clock_max: None,
             virt_ms: 0,
             last_board: vec![],
             board_history: vec![],
@@ -337,6 +448,7 @@ impl Scanner {
             totals_flip: false,
             own_slot: Default::default(),
             hero_votes: vec![HashMap::new(); 12],
+            hero_latch: HeroLatches::default(),
             own_latched: None,
             own_backdrop: [0; 6],
             item_latch: Default::default(),
@@ -368,12 +480,14 @@ impl Scanner {
         self.own_slot = Default::default();
         self.own_hero = None;
         self.hero_votes = vec![HashMap::new(); 12];
+        self.hero_latch = HeroLatches::default();
         self.own_latched = None;
         self.own_backdrop = [0; 6];
         self.item_latch = Default::default();
         self.cadence.reset();
         self.name_rects = vec![None; 12];
         self.clock_value.reset();
+        self.clock_max = None;
     }
 
     fn text(&self, img: &image::DynamicImage, r: crate::Region) -> Option<String> {
@@ -474,6 +588,8 @@ impl Scanner {
         use crate::death;
         self.shop_seen = Some(now_ms);
         let mut snap = GameSnapshot { match_id: self.match_id, screen: Some("Shop".into()), ..Default::default() };
+        // Your hero stays known in the shop (rec8 lost it on all 46 shop frames).
+        snap.hero = self.own_latched.and_then(|(s, _)| self.hero_latch.slots[s].hero.clone()).or_else(|| self.own_hero.clone());
         // The clock is not drawn in the shop: report the extrapolated clock only while recently confirmed.
         if self.clock_value.confirmed_age_ms(now_ms).is_some_and(|a| a <= 60_000) { snap.game_clock_secs = self.clock_value.value(now_ms); }
         let banner = { let b = death::SHOP_RESPAWN_LABEL; let rgb = img.crop_imm(b.x, b.y, b.w, b.h).to_rgb8();
@@ -633,11 +749,16 @@ impl Scanner {
 
         // New match? Reset all per-match memory. The id needs detector OCR, so it is sampled.
         let mid = if self.cadence.due("match_id", now_ms, 60_000) { self.text(&img, screen::match_id_region()).and_then(|s| parse::parse_match_id(&s)) } else { None };
-        // OCR of the id is noisy, so a different id must be seen twice in a row to count.
+        // OCR of the id is noisy, so a different id must be seen twice in a row to count. A new
+        // match also restarts the clock: while the verified clock continues the current match's,
+        // a different id is a misread (rec8's 126566052 read 6566052 and 176566052 twice in a row
+        // and reset hero identities and your slot four times mid-match).
+        let clock_now = self.clock_value.value(now_ms);
+        let restarted = clock_restarted(clock_now, self.clock_max);
         match (self.match_id, mid) {
             (None, Some(n)) => self.match_id = Some(n),
             (Some(old), Some(n)) if digit_diff(old, n) >= 3 => {
-                if self.pending_match == Some(n) {
+                if self.pending_match == Some(n) && restarted {
                     self.reset();
                     self.match_id = Some(n);
                     self.pending_match = None;
@@ -646,6 +767,7 @@ impl Scanner {
             (Some(_), Some(_)) => self.pending_match = None, // same id, or single-digit OCR noise
             _ => {}
         }
+        if let Some(c) = clock_now { self.clock_max = Some(self.clock_max.map_or(c, |m| m.max(c))); }
 
         laps.lap("match id");
         let mut snap = GameSnapshot { match_id: self.match_id, screen: Some(format!("{scr:?}")), ..Default::default() };
@@ -820,7 +942,11 @@ impl Scanner {
                 ranked.sort_by(|a, b| b.1.total_cmp(&a.1));
                 if !dead { for v in self.hero_votes[i].values_mut() { *v *= HERO_VOTE_DECAY; } }
                 if let (false, [(n, s1), (_, s2), ..]) = (dead, ranked.as_slice()) {
-                    if *s1 >= 0.5 && s1 - s2 >= 0.03 { *self.hero_votes[i].entry((*n).clone()).or_default() += 1.0; }
+                    let winner = (*s1 >= 0.5 && s1 - s2 >= 0.03).then(|| (n.as_str(), s1 - s2));
+                    if let Some((n, _)) = winner { *self.hero_votes[i].entry(n.to_string()).or_default() += 1.0; }
+                    // The latch keeps a confident identity against a stream of weak contrary
+                    // winners; only sustained strong ones (or name reads) switch it.
+                    self.hero_latch.sample(i, winner, &self.hero_votes);
                 }
                 for (n, s) in best {
                     let v = self.sums[i].entry(n).or_default();
@@ -835,7 +961,7 @@ impl Scanner {
         // assignment only fills slots without enough votes. Votes decay (x0.95 per 2 s sample,
         // half-life ~30 s) so a few early misreads stop holding a slot.
         let fresh = self.assign_heroes();
-        let mut assign = latched_heroes(&self.hero_votes, &fresh);
+        let mut assign = latched_assignment(&self.hero_latch.heroes(), &self.hero_votes, &fresh);
         laps.lap("portraits");
 
         // Scoreboard: names are far more reliable than portraits, so they win.
@@ -858,6 +984,7 @@ impl Scanner {
                 assign[i] = Some(h.clone());
                 // A name read outweighs several portrait samples in the identity vote.
                 if let Some(v) = self.hero_votes.get_mut(i) { *v.entry(h.clone()).or_default() += 3.0; }
+                self.hero_latch.board(i, h, &self.hero_votes);
             } }
             self.board_history.push(rows.clone());
             if self.board_history.len() > 5 { self.board_history.remove(0); }
@@ -922,8 +1049,11 @@ impl Scanner {
                 }
             }
         }
-        // Your hero does not change while dead or on the scoreboard either.
-        if let Some((slot, _)) = self.own_latched { snap.hero = assign[slot].clone(); }
+        // Your hero does not change while dead or on the scoreboard either: the identity of your
+        // latched slot, else the last one named (the minimap marker follows the spectated hero).
+        if let Some((slot, _)) = self.own_latched { if assign[slot].is_some() { snap.hero = assign[slot].clone(); } }
+        if snap.hero.is_none() && scr != Screen::Gameplay { snap.hero = self.own_hero.clone(); }
+        if snap.hero.is_some() && (scr == Screen::Gameplay || self.own_latched.is_some()) { self.own_hero = snap.hero.clone(); }
         // Enemy items seen on the most recent scoreboard.
         for r in self.last_board.iter().filter(|r| !r.ally) {
             for it in &r.items { if !snap.enemy_items.contains(it) { snap.enemy_items.push(it.clone()); } }
