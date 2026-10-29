@@ -7,7 +7,8 @@ import path from 'node:path';
 import { AiCoach, AiHistory, MAX_INPUT_CHARS, SUMMARY_MAX_CHARS, SYSTEM_PROMPT, COACH_BRIEF, buildPrompt, buildRequest, buildSummary, callGateway, cleanSpeech,
   endpoint, extractText, heroMatchup, parseAdvice, retrieve, sections, situationTerms, testConnection, upcomingObjectives, setProfileProvider, profileText,
   checkAdvice, coachingAngles, overlap, soulsView, topicOf, TASKS, aiExchanges, clearAiExchanges, onAiExchange,
-  type Advice, type AiConfig, type AiSnapshot } from '../src/ai-coach.ts';
+  configFrom, effectiveMaxTokens, isOpenRouter, liveTriggers, themesIn, usageOf, weaknessOf,
+  type Advice, type AiConfig, type AiSnapshot, type ItemInfo } from '../src/ai-coach.ts';
 import { defaults, normalize } from '../src/settings.ts';
 import type { Knowledge, Settings } from '../src/types.ts';
 
@@ -37,7 +38,9 @@ function snap(clock: number, extra: Partial<AiSnapshot> = {}): AiSnapshot {
 const settings = (patch: Partial<Settings> = {}): Settings => normalize({ ...defaults, aiEnabled: true, aiModel: 'test-model', aiKey: 'sk-test-SECRET-123456', ...patch });
 
 test('ai settings are top-level, off by default, normalized and never inside engine options', () => {
-  assert.equal(defaults.aiEnabled, false); assert.equal(defaults.aiInterval, 40);
+  assert.equal(defaults.aiEnabled, false); assert.equal(defaults.aiInterval, 90); assert.equal(defaults.aiReasoning, 'low');
+  assert.equal(normalize({ aiInterval: 40 }).aiInterval, 90, 'the old chatty default moves to 90 s'); assert.equal(normalize({ aiInterval: 60 }).aiInterval, 60);
+  assert.equal(normalize({ aiReasoning: 'off' }).aiReasoning, 'off'); assert.equal(normalize({ aiReasoning: 'max' }).aiReasoning, 'low');
   const s = normalize({ aiEnabled: true, aiProvider: 'evil', aiInterval: 2, aiMaxTokens: 1e9, aiKey: '  k  ', options: { aiKey: 'x' } });
   assert.equal(s.aiProvider, 'openai'); assert.equal(s.aiInterval, 15); assert.equal(s.aiMaxTokens, 8192); assert.equal(s.aiKey, 'k');
   assert.ok(!('aiKey' in s.options));
@@ -52,9 +55,9 @@ test('state summary is deterministic, cites history and stays within budget', ()
   const input = { snapshot: snap(690), history: h, now: 91000, trigger: 'periodic' as const, name: (id: string) => id === 'hero_graves' ? 'Graves' : id.replace(/^(hero_|upgrade_)/, '') };
   const a = buildSummary(input), b = buildSummary(input);
   assert.equal(a, b);
-  for (const part of ['clock 11:30 (midgame)', 'You: haze', 'HP 600/1,000 (60%)', '100→90→70→60', 'Unspent souls 3,400', 'held ≥2,550 for 90s', 'can afford the usual 3,200 buy for 11:30 · Souls advice: allowed',
+  for (const part of ['clock 11:30 (midgame, 8:00 to 20:00)', 'You: haze', 'HP 600/1,000 (60%)', '100→90→70→60', 'Unspent souls 3,400', 'held ≥2,550 for 90s', 'can afford the usual 3,200 buy for 11:30 · Souls advice: allowed',
     'Area: Blue lane, 45% up lane · zone Blue jungle', 'Enemies: 1 alive, dead: Graves (22s), not seen recently: 1', 'Team souls: yours 20,000 vs enemy 18,000 (+2,000)',
-    '1 enemies visible (1 near you', '1 missing (last seen 12s ago)', 'Midboss icon visible', 'rule: Back off to cover.']) assert.ok(a.includes(part), `${part}\n---\n${a}`);
+    '1 enemy hero visible (1 near you', '1 enemy hero missing (last seen 12s ago)', 'Midboss alive', 'rule: Back off to cover.']) assert.ok(a.includes(part), `${part}\n---\n${a}`);
   assert.ok(a.includes('Upcoming: Guardians reach minimum resist at 12:00 (in 0:30)'), a);
   // A huge state still respects the summary budget and keeps the trigger line.
   const big = snap(690, { items: Array.from({ length: 400 }, (_, i) => `upgrade_item_${i}_${'x'.repeat(30)}`), status_effects: Array.from({ length: 50 }, (_, i) => `effect ${i}`) });
@@ -192,14 +195,14 @@ test('controller: periodic cadence, one request in flight, stale drop, backoff a
   now += 500; coach.observe(snap(781, { dead: true, screen: 'Dead', death_cause: 'Graves' }), [], true); await flush();
   assert.equal(calls, atDeath, 'waits for the rule death review or 4 s after the panel');
   now += 500; coach.observe(snap(782, { dead: true, screen: 'Dead', death_cause: 'Graves' }), [{ key: 'death:review:780', text: 'Why you died: Graves did 620 damage at close range.', priority: 'Normal', cooldown_secs: 0 }], true); await flush(); await flush();
-  assert.equal(calls, atDeath + 1); assert.equal(delivered.at(-1)?.key, 'ai:death:death');
+  assert.equal(calls, atDeath + 1); assert.equal(delivered.at(-1)?.key, 'ai:death:positioning');
   assert.ok(bodies.at(-1)!.includes('Rule death review (already spoken): Why you died: Graves did 620'));
   assert.ok(bodies.at(-1)!.includes('just died') && bodies.at(-1)!.includes('cause Graves'));
   now += 3000; coach.observe(snap(784, { dead: true, screen: 'Dead', death_cause: 'Graves' }), [], true); await flush(); assert.equal(calls, atDeath + 1);
   // Not live (replay/paused): no automatic requests; generation change drops a manual answer.
   live = false; now += 60000; coach.observe(snap(900), [], false); await flush(); assert.equal(calls, atDeath + 1);
   gate = new Promise(r => { release = r; }); void coach.ask('manual'); await flush(); generation++; release(); await flush(); await flush();
-  assert.equal(delivered.at(-1)?.key, 'ai:death:death');
+  assert.equal(delivered.at(-1)?.key, 'ai:death:positioning');
   // Disabled: nothing is sent.
   st = settings({ aiEnabled: false }); gate = Promise.resolve(); await coach.ask('manual'); assert.equal(coach.status.state, 'off');
 });
@@ -236,7 +239,7 @@ test('repeat gate: same focus within 3 min, near-duplicate text and rule repeats
   const v = soulsView(snap(2100, { souls: 7200 }), h, 100000); assert.equal(v.allowed, true);
   const repeat = a('Spend your 7,200 souls at the Blue shop and get a 6,400 item.', 'items');
   const r1 = checkAdvice(repeat, 'periodic', v, h, 100000);
-  assert.ok(!r1.ok && /same focus \(economy\) as the AI call at 33:20/.test(r1.reason), JSON.stringify(r1));
+  assert.ok(!r1.ok && /near-duplicate of the AI call at 33:20|same theme \(economy\) as the AI call at 33:20/.test(r1.reason), JSON.stringify(r1));
   assert.ok(checkAdvice(repeat, 'manual', v, h, 100000).ok, 'the player asked: no gating');
   const r2 = checkAdvice(a('Yamato is alive: hold max range behind Abrams.', 'positioning'), 'periodic', v, h, 100000);
   assert.ok(r2.ok && r2.topic === 'positioning' && r2.speak === 'Yamato is alive: hold max range behind Abrams.');
@@ -246,12 +249,16 @@ test('repeat gate: same focus within 3 min, near-duplicate text and rule repeats
   h.push(snap(2200, { souls: 7200 }), [], 200000);
   const r4 = checkAdvice(a('Spend your 7,200 souls now at the nearest shop on a 6,400 item.', 'general'), 'periodic', soulsView(snap(2200, { souls: 7200 }), h, 200000), h, 200000);
   assert.ok(!r4.ok && /near-duplicate of the AI call at 33:20/.test(r4.reason), JSON.stringify(r4));
-  // Same focus again is allowed only when urgent (High, not souls).
+  // Same theme again within 5 min only with a NEW trigger (High priority alone is not new).
   h.noteAdvice({ t: 200000, clock: 2200, trigger: 'periodic', topic: 'positioning', text: 'Hold max range behind Abrams while Yamato is up.' });
   h.push(snap(2230), [], 230000);
   const v2 = soulsView(snap(2230), h, 230000);
   assert.equal(checkAdvice(a('Shiv is diving you now: dash back to Bebop.', 'range'), 'periodic', v2, h, 230000).ok, false);
-  assert.equal(checkAdvice(a('Shiv is diving you now: dash back to Bebop.', 'range', 'High'), 'periodic', v2, h, 230000).ok, true);
+  assert.equal(checkAdvice(a('Shiv is diving you now: dash back to Bebop.', 'range', 'High'), 'periodic', v2, h, 230000).ok, false, 'High is not a new trigger');
+  // The enemy leaves and comes back near you: a new episode of the diver trigger.
+  const far = snap(2240); far.minimap = { ...far.minimap!, heroes: [{ id: 1, ally: false, pos: { x: .9, y: .9 }, unseen_ms: 0, hits: 3 }] };
+  h.push(far, [], 240000); h.push(snap(2250), [], 250000);
+  assert.equal(checkAdvice(a('Shiv is diving you now: dash back to Bebop.', 'range', 'High'), 'periodic', soulsView(snap(2250), h, 250000), h, 250000).ok, true);
   // Topics and overlap (the rec8 calls tagged "souls" and "items" are one topic).
   assert.equal(topicOf('items', "Spend your 2,834 souls now at the nearest shop on a 1,600 item - you're holding too long."), 'economy');
   assert.equal(topicOf('objective', 'Escort the Soul Urn to the delivery point.'), 'objective');
@@ -307,7 +314,7 @@ test('coaching angles tie the live situation to profile weaknesses; the death-sc
   assert.equal(angles.length, 3, angles.join('\n'));
   assert.match(angles[0], /^- Respawned 10s ago, 0 allies near you → walk out with a teammate .*\[profile: Dies soon after respawning\]$/);
   assert.match(angles[1], /^- Close-range divers alive: yamato \(1 enemy near you\); your last death was at close range → hold max range behind your front line .*\[profile: Killed at close range\]$/);
-  assert.match(angles[2], /^- 2 enemies dead \(first back in 22s\) → group up and hit a Guardian/);
+  assert.match(angles[2], /^- 2 enemies dead \(graves, shiv, first back in 22s\) → group up and hit the Guardian or Walker in Green lane \(front 60% up\)/);
   const summary = buildSummary({ snapshot: s, history: h, now: 80000, trigger: 'periodic', profile });
   assert.ok(summary.includes('Respawned 10s ago (last death at 16:40, cause Melee)') && summary.includes('COACHING ANGLES'), summary);
   assert.deepEqual(coachingAngles({ snapshot: snap(1080, { dead: true, screen: 'Dead' }), history: h, now: 90000, profile }), []);
@@ -328,7 +335,7 @@ test('controller: a model that always says "spend your souls" is gated, gets one
   assert.deepEqual(delivered, ['Spend your souls now, you are holding too long.']);
   now += 21000; coach.observe(snap(2421, { souls: 7443 }), [], true); await flush();
   assert.equal(delivered.length, 1, 'same focus within 3 minutes is not spoken');
-  assert.match(JSON.parse(bodies.at(-1)!).messages[1].content, /RECENT AI ADVICE \(yours; do not reuse a focus within 3 min\):\n- \[40:00\] economy: Spend your souls now/);
+  assert.match(JSON.parse(bodies.at(-1)!).messages[1].content, /RECENT AI ADVICE \(yours\):\n- \[40:00\] economy: Spend your souls now[\s\S]*THEMES COACHED[^\n]*\n- theme economy: 40:00 \(blocked\)/);
   assert.match(coach.diagnostic(), /4 repeats skipped/);
 });
 test('AI replies in the shapes real gateways send are understood, and failures say why', () => {
@@ -369,7 +376,7 @@ test('max reply tokens default to 1,024, an old 200 is raised, and a cut-off rep
   assert.equal(normalize({ ...defaults, aiMaxTokens: 2048 } as Settings).aiMaxTokens, 2048);
   const cfg: AiConfig = { provider: 'openai', baseUrl: 'https://openrouter.ai/api/v1', model: 'anthropic/claude-haiku-4.5', key: 'k', headers: '', maxTokens: 1024 };
   const cut = (async () => new Response(JSON.stringify({ choices: [{ message: { content: '{"speak":"Hold max range behind your' }, finish_reason: 'length' }] }), { status: 200 })) as typeof fetch;
-  await assert.rejects(callGateway(cfg, 's', 'u', { fetchImpl: cut }), (e: Error & { kind?: string }) => e.kind === 'truncated' && /1024-token limit/.test(e.message));
+  await assert.rejects(callGateway(cfg, 's', 'u', { fetchImpl: cut }), (e: Error & { kind?: string }) => e.kind === 'truncated' && /3072-token limit/.test(e.message), 'reply budget 1,024 + 2,048 reasoning headroom for an OpenRouter model at its default');
   const sent: number[] = [];
   const later = (async (_u: string, init: RequestInit) => { const body = JSON.parse(String(init.body)); sent.push(body.max_tokens);
     return new Response(JSON.stringify(sent.length === 1 ? { choices: [{ message: { content: '{"speak":"Hold' }, finish_reason: 'length' }] }
@@ -379,5 +386,188 @@ test('max reply tokens default to 1,024, an old 200 is raised, and a cut-off rep
   const coach = new AiCoach({ settings: () => settings, isLive: () => true, generation: () => 1, knowledge: async () => [], name: (x: string) => x,
     fetchImpl: later, pageProtocol: () => 'https:', onAdvice: (c: { text: string }) => spoken.push(c.text) } as never);
   await coach.ask('manual');
-  assert.deepEqual(sent, [1024, 2048]); assert.equal(spoken[0], 'Hold max range behind your front line.');
+  assert.deepEqual(sent, [], 'no match state read yet: the manual request is not sent');
+  assert.match(coach.status.message, /No match state read yet/);
+  coach.observe(snap(600), [], false);
+  await coach.ask('manual');
+  assert.deepEqual(sent, [2048, 3072], 'reasoning Low on OpenRouter adds 1,024 tokens of headroom'); assert.equal(spoken[0], 'Hold max range behind your front line.');
+});
+
+// ---------------------------------------------------------------------------------------
+// rec11 regressions: reasoning control, theme memory, adaptive cadence, summary wording
+// ---------------------------------------------------------------------------------------
+test('model reasoning: OpenRouter reasoning object, OpenAI reasoning_effort, nothing for Anthropic or local gateways', () => {
+  const body = (cfg: Partial<AiConfig>) => JSON.parse(buildRequest({ provider: 'openai', baseUrl: 'https://openrouter.ai/api/v1', model: 'anthropic/claude-haiku-5.5', key: 'k', headers: '', maxTokens: 1024, ...cfg }, 'S', 'U').init.body);
+  const low = body({ reasoning: 'low' });
+  assert.deepEqual(low.reasoning, { effort: 'low' }); assert.equal(low.max_tokens, 2048, 'Anthropic via OpenRouter thinks 1,024 tokens at low; max_tokens must stay above it'); assert.equal(low.temperature, 0.3);
+  assert.deepEqual(body({ reasoning: 'off' }).reasoning, { enabled: false }); assert.equal(body({ reasoning: 'off' }).max_tokens, 1024);
+  assert.ok(!('reasoning' in body({ reasoning: 'default' }))); assert.equal(body({ reasoning: 'default' }).max_tokens, 3072);
+  assert.deepEqual(body({ model: 'openrouter/free', reasoning: 'low' }).reasoning, { effort: 'low' }, 'the free router passes it on');
+  // OpenAI reasoning models on the OpenAI API.
+  const gpt5 = body({ baseUrl: 'https://api.openai.com/v1', model: 'gpt-5-mini', reasoning: 'off' });
+  assert.equal(gpt5.reasoning_effort, 'minimal'); assert.equal(gpt5.max_completion_tokens, 1280); assert.ok(!('max_tokens' in gpt5) && !('temperature' in gpt5) && !('reasoning' in gpt5));
+  assert.equal(body({ baseUrl: 'https://api.openai.com/v1', model: 'o4-mini', reasoning: 'low' }).reasoning_effort, 'low');
+  assert.equal(body({ baseUrl: 'https://api.openai.com/v1', model: 'o3', reasoning: 'off' }).reasoning_effort, 'low', 'o-series has no minimal');
+  const plain = body({ baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o-mini', reasoning: 'low' });
+  assert.ok(!('reasoning' in plain) && !('reasoning_effort' in plain)); assert.equal(plain.max_tokens, 1024);
+  assert.deepEqual(body({ baseUrl: 'http://localhost:11434/v1', model: 'llama3.1', reasoning: 'low' }), { model: 'llama3.1', messages: [{ role: 'system', content: 'S' }, { role: 'user', content: 'U' }], max_tokens: 1024, temperature: 0.3 });
+  const anth = body({ provider: 'anthropic', baseUrl: 'https://api.anthropic.com', model: 'claude-haiku-5-5', reasoning: 'default' });
+  assert.ok(!('thinking' in anth) && !('reasoning' in anth)); assert.equal(anth.max_tokens, 1024);
+  assert.equal(configFrom(settings({ aiReasoning: 'off' })).reasoning, 'off');
+  assert.ok(isOpenRouter({ baseUrl: 'https://openrouter.ai/api/v1' }) && !isOpenRouter({ baseUrl: 'https://my-openrouter.ai.example.com' }));
+  assert.equal(effectiveMaxTokens({ provider: 'openai', baseUrl: 'https://openrouter.ai/api/v1', model: 'x', key: '', headers: '', maxTokens: 1024, reasoning: 'low' }), 2048);
+  assert.deepEqual(usageOf({ usage: { prompt_tokens: 3400, completion_tokens: 900, completion_tokens_details: { reasoning_tokens: 840 } } }), { prompt: 3400, completion: 900, reasoning: 840 });
+  assert.deepEqual(usageOf({ usage: { input_tokens: 10, output_tokens: 5 } }), { prompt: 10, completion: 5, reasoning: null });
+});
+
+test('reasoning tokens reach the log and diagnostics; reasoning that eats the budget is retried; a rejected reasoning field is dropped once', async () => {
+  clearAiExchanges();
+  const replies: unknown[] = [
+    { model: 'nvidia/nemotron', choices: [{ message: { content: '', reasoning: 'thinking '.repeat(50) }, finish_reason: 'length' }], usage: { prompt_tokens: 3500, completion_tokens: 2048, completion_tokens_details: { reasoning_tokens: 2040 } } },
+    { model: 'nvidia/nemotron', choices: [{ message: { content: '{"speak":null,"priority":"Low","why":"quiet","focus":"map"}' }, finish_reason: 'stop' }], usage: { prompt_tokens: 3500, completion_tokens: 300, completion_tokens_details: { reasoning_tokens: 260 } } },
+  ];
+  const sent: Array<Record<string, unknown>> = [];
+  const fetchImpl = (async (_u: string, init: RequestInit) => { sent.push(JSON.parse(String(init.body))); return new Response(JSON.stringify(replies.shift()), { status: 200 }); }) as unknown as typeof fetch;
+  const st = settings({ aiBaseUrl: 'https://openrouter.ai/api/v1', aiModel: 'openrouter/free' });
+  const coach = new AiCoach({ settings: () => st, isLive: () => true, generation: () => 1, knowledge: async () => [], fetchImpl, onAdvice: () => {} });
+  coach.observe(snap(600), [], false);
+  await coach.ask('manual');
+  assert.deepEqual(sent.map(b => b.max_tokens), [2048, 3072], 'cut off by reasoning: one retry with double the reply budget');
+  assert.equal(coach.status.reasoningLast, 260);
+  const log = aiExchanges(); assert.match(log[0].error!, /spent 2040 of 2048 tokens on reasoning/); assert.equal(log[1].usage?.reasoning, 260); assert.equal(log[1].reasoning, 'OpenRouter reasoning effort low');
+  assert.match(coach.diagnostic(), /reasoning low \(OpenRouter reasoning effort low, max_tokens 2048\)/); assert.match(coach.diagnostic(), /reasoning tokens last 260, avg 260/);
+  // A model that rejects the reasoning field: sent again without it.
+  const bodies: Array<Record<string, unknown>> = [];
+  const strict = (async (_u: string, init: RequestInit) => { const b = JSON.parse(String(init.body)); bodies.push(b);
+    return 'reasoning' in b ? new Response('{"error":{"message":"Reasoning is mandatory for this endpoint and cannot be disabled."}}', { status: 400 })
+      : new Response(JSON.stringify({ choices: [{ message: { content: '{"speak":null}' } }] }), { status: 200 }); }) as unknown as typeof fetch;
+  const r = await callGateway(configFrom(settings({ aiBaseUrl: 'https://openrouter.ai/api/v1', aiReasoning: 'off' })), 's', 'u', { fetchImpl: strict });
+  assert.equal(r.text, '{"speak":null}'); assert.equal(bodies.length, 2); assert.ok(!('reasoning' in bodies[1]));
+  clearAiExchanges();
+});
+
+test('theme memory: a weakness restated within 5 min is dropped or gated unless a new trigger happened, and the prompt lists it', () => {
+  const profile = 'Player profile (6 matches, mostly Grey Talon, 70% dead). Weak: Killed at close range: 5 of 6 deaths came from melee range; Dies soon after respawning: 8 of 12. Strong: Uses enemy-dead windows.';
+  const a = (speak: string, focus: string, priority: Advice['priority'] = 'Normal'): Advice => ({ speak, focus, priority, why: '' });
+  const h = new AiHistory();
+  const noDiver = (clock: number) => { const s = snap(clock, { souls: 100 }); s.minimap = { ...s.minimap!, heroes: [{ id: 1, ally: false, pos: { x: .9, y: .9 }, unseen_ms: 0, hits: 3 }] }; return s; };
+  h.push(noDiver(1000), [], 0);
+  h.noteAdvice({ t: 0, clock: 1000, trigger: 'periodic', topic: 'positioning', text: 'Calico is alive, so hold max range behind your front line and save your escape for their dive.', weakness: 'Killed at close range' });
+  assert.deepEqual(h.advice[0].concepts, ['close']); assert.ok(h.advice[0].themes!.includes('positioning'));
+  h.push(noDiver(1060), [], 60000);
+  const v = soulsView(noDiver(1060), h, 60000);
+  // The rec11 pattern: a team call with the stock range line appended → the range sentence is dropped.
+  const mixed = checkAdvice(a('Silver and Apollo are down, so regroup with your four allies near the Yellow lane Guardian. Stay at max range behind your front line.', 'team'), 'periodic', v, h, 60000);
+  assert.ok(mixed.ok && mixed.speak === 'Silver and Apollo are down, so regroup with your four allies near the Yellow lane Guardian.' && /range against divers/.test(mixed.note!), JSON.stringify(mixed));
+  // Only the restated weakness → not spoken.
+  const only = checkAdvice(a('Graves is alive too, so keep max range and do not step into melee.', 'positioning', 'High'), 'periodic', v, h, 60000);
+  assert.ok(!only.ok && /"range against divers" was coached at 16:40 and nothing new triggered it/.test(only.reason), JSON.stringify(only));
+  // A sentence left without its context is not spoken alone.
+  assert.equal(checkAdvice(a('Calico dives melee. Take it together once your group is back.', 'objective'), 'periodic', v, h, 60000).ok, false);
+  // The prompt shows the memory.
+  const summary = buildSummary({ snapshot: noDiver(1060), history: h, now: 60000, trigger: 'periodic', profile, reason: 'enemy-dead window: 2 enemies dead' });
+  assert.match(summary, /WHY NOW: enemy-dead window: 2 enemies dead/);
+  assert.match(summary, /THEMES COACHED[^\n]*\n- theme positioning: 16:40 \(blocked\)\n- weakness "range against divers" \[Killed at close range\]: 16:40 \(blocked\)/);
+  // An enemy comes within reach (new diver-near episode): the range call is allowed again.
+  h.push(snap(1080, { souls: 100 }), [], 80000);
+  assert.ok(h.active.includes('diver-near'));
+  assert.ok(checkAdvice(a('Shiv is on you now: dash back to your team and fight at max range.', 'positioning'), 'periodic', soulsView(snap(1080, { souls: 100 }), h, 80000), h, 80000).ok);
+  assert.match(buildSummary({ snapshot: snap(1080, { souls: 100 }), history: h, now: 80000, trigger: 'periodic', profile }), /theme positioning: 16:40 \(NEW trigger now: (diver|enemy)-near\)/);
+  // After 5 minutes the theme is free again even without a trigger.
+  h.push(noDiver(1310), [], 310000);
+  assert.ok(checkAdvice(a('Calico is alive: hold max range behind your front line.', 'positioning'), 'periodic', soulsView(noDiver(1310), h, 310000), h, 310000).ok);
+  // The rule coach's "Profile focus" line counts as coached; death reviews and manual asks are not theme-gated.
+  const r = new AiHistory(); r.push(noDiver(500), [{ key: 'player:focus:dying', text: 'Profile focus: you spend 65% of the game dead. Stay at max range behind your front line.', priority: 'Normal', cooldown_secs: 300 }], 0);
+  r.push(noDiver(560), [], 60000);
+  const rv = soulsView(noDiver(560), r, 60000);
+  assert.ok(!checkAdvice(a('Graves is alive, keep max range from melee and do not step forward.', 'positioning'), 'periodic', rv, r, 60000).ok);
+  assert.ok(checkAdvice(a('Graves is alive, keep max range from melee and do not step forward.', 'positioning'), 'death', rv, r, 60000).ok);
+  assert.ok(checkAdvice(a('Graves is alive, keep max range from melee and do not step forward.', 'positioning'), 'manual', rv, r, 60000).ok);
+  // Themes from text when the tag is not a theme.
+  assert.equal(topicOf('death', 'Fall back to your Guardian and heal to full.'), 'healing');
+  assert.deepEqual(themesIn('Spend your 3,400 souls, then push Green lane with Silver.').slice(0, 2), ['economy', 'wave']);
+  assert.equal(weaknessOf('Hold max range behind your front line.', profile), 'Killed at close range');
+});
+
+test('adaptive cadence: events ask sooner (respawn, enemy-dead window, objective, phase, souls, team souls swing), a quiet game waits the 90 s interval', async () => {
+  let now = 100000; const bodies: string[] = [];
+  const fetchImpl = (async (_u: string, init: RequestInit) => { bodies.push(JSON.parse(String(init.body)).messages[1].content);
+    return new Response(JSON.stringify({ choices: [{ message: { content: '{"speak":null,"priority":"Low","why":"quiet","focus":"map"}' } }] })); }) as unknown as typeof fetch;
+  const coach = new AiCoach({ settings: () => settings(), isLive: () => true, generation: () => 1, knowledge: async () => [], now: () => now, fetchImpl, onAdvice: () => {} });
+  const flush = async () => { for (let i = 0; i < 6; i++) await new Promise(r => setTimeout(r, 0)); };
+  const quiet = (clock: number, extra: Partial<AiSnapshot> = {}) => { const s = snap(clock, { souls: 500, hero_status: [], ...extra }); s.minimap = { ...s.minimap!, heroes: [] }; return s; };
+  const step = async (secs: number, s: AiSnapshot) => { now += secs * 1000; coach.observe(s, [], true); await flush(); };
+  await step(0, quiet(1300)); // starts the clock
+  for (let c = 1310; c <= 1380; c += 10) await step(10, quiet(c));
+  assert.equal(bodies.length, 0, 'quiet game: nothing before 90 s');
+  await step(10, quiet(1390)); assert.equal(bodies.length, 1, 'the quiet interval');
+  assert.match(bodies[0], /WHY NOW: routine check, nothing new since 90 s ago: PASS unless/);
+  // Two enemies die: an event, but at least 45 s after the last request.
+  const window = (clock: number) => quiet(clock, { hero_status: [
+    { ally: false, slot: 0, hero: 'hero_nano', dead: true, respawn_secs: 20, networth_observations: 3, observations: 3, position_observations: 0 },
+    { ally: false, slot: 1, hero: 'hero_necro', dead: true, respawn_secs: 25, networth_observations: 3, observations: 3, position_observations: 0 }] });
+  await step(20, window(1410)); assert.equal(bodies.length, 1, 'events wait EVENT_GAP_SECS after the last request');
+  await step(26, window(1436)); assert.equal(bodies.length, 2);
+  assert.match(bodies[1], /WHY NOW: enemy-dead window: 2 enemies dead \(nano, necro\), first back in 20s/);
+  // A death and respawn: the respawn is an event (and the respawn shows in WHY NOW).
+  await step(30, quiet(1466, { dead: true, screen: 'Dead', hp: null, death_cause: 'Melee' })); await flush();
+  const deaths = bodies.length; assert.equal(deaths, 2, 'no death review yet (waits for the panel)');
+  now += 9000; coach.observe(quiet(1475, { dead: true, screen: 'Dead', hp: null, death_cause: 'Melee' }), [], true); await flush();
+  assert.equal(bodies.length, 3); assert.match(bodies[2], /^TASK: The player just died/);
+  // The death review passed (nothing spoken), so the respawn asks; the Soul Urn at 25:00 is 5 s away.
+  await step(20, quiet(1495)); assert.equal(bodies.length, 4);
+  assert.match(bodies[3], /WHY NOW: respawn: you respawned 0s ago; objective within 60 s: Soul Urn spawns at 25:00 \(in 5s\)/);
+  // Nothing new 50 s later: no request before the quiet interval.
+  await step(50, quiet(1545)); const n = bodies.length; assert.equal(n, 4);
+  await step(50, quiet(1595, { ally_networth: 20000, enemy_networth: 26000 }));
+  assert.equal(bodies.length, n + 1); assert.match(bodies.at(-1)!, /big team souls swing: team souls difference went from \+2,000 to -6,000/);
+  assert.equal(coach.status.quietRequests, 1); assert.equal(coach.status.eventRequests, 3);
+  assert.match(coach.diagnostic(), /on changes, or every 90s when quiet/);
+  // Phase change (laning → midgame at 8:00) is an event; the first phase seen is not.
+  const h = new AiHistory(); h.push(quiet(470), [], 0); h.push(quiet(485), [], 15000);
+  const phases = h.events.filter(e => e.kind === 'phase'); assert.equal(phases.length, 1); assert.match(phases[0].detail, /midgame phase started at 8:05/);
+  // Souls reaching the usual buy is an event.
+  const g = new AiHistory(); g.push(quiet(700, { souls: 2000 }), [], 0); g.push(quiet(710, { souls: 3300 }), [], 10000);
+  assert.ok(g.events.some(e => e.kind === 'souls-tier' && /3,300 souls reach the usual 3,200 buy/.test(e.detail)));
+  assert.deepEqual(liveTriggers(quiet(540), g, 20000).get('objective-soon:600'), 'Soul Urn spawns at 10:00 (in 60s)');
+});
+
+test('summary wording (rec11): lanes are places, roles and items are named, team souls trend, last death, Midboss only when it matters', () => {
+  const items: Record<string, ItemInfo> = { upgrade_headshot_booster: { name: 'Headshot Booster', cost: 800, slot: 'weapon' }, upgrade_extra_health: { name: 'Extra Health', cost: 800, slot: 'vitality' } };
+  const names: Record<string, string> = { hero_nano: 'Calico', hero_necro: 'Graves', hero_artist: 'Violet', hero_baba: 'Baba' };
+  const name = (id: string) => names[id] || items[id]?.name || id;
+  const h = new AiHistory(); h.name = name;
+  h.push(snap(900, { ally_networth: 50000, enemy_networth: 50000 }), [], 0);
+  h.push(snap(1000, { dead: true, screen: 'Dead', death_cause: 'Jar of Dead', death_damage: [{ source: 'Jar of Dead', damage: 879 }, { source: 'Melee', damage: 301 }] }),
+    [{ key: 'death:review:1000', text: 'Why you died: Graves did at least 1,607 damage with Jar of Dead. Stay away.', priority: 'Normal', cooldown_secs: 0 }], 100000);
+  h.push(snap(1040), [], 140000);
+  const s = snap(1100, { hero: 'hero_artist', enemy_heroes: ['hero_nano', 'hero_necro', 'hero_baba'], ally_networth: 60000, enemy_networth: 66000,
+    items: ['upgrade_headshot_booster', 'upgrade_extra_health'], hero_status: [] });
+  s.minimap = { ...s.minimap!, heroes: [{ id: 2, ally: false, pos: { x: .2, y: .2 }, unseen_ms: 3000, hits: 3, lane: 'Yellow' }] };
+  h.push(s, [], 200000);
+  const out = buildSummary({ snapshot: s, history: h, now: 200000, trigger: 'periodic', name, items: id => items[id] ?? null, profile: 'Player profile (6 matches, mostly Grey Talon). Weak: Killed at close range: x.' });
+  for (const part of ['You: Violet (role not in the coach table: do not guess the kit)', 'profile is mostly from Grey Talon games: check its weaknesses fit Violet',
+    '1 enemy hero missing (last seen 3s ago in Yellow lane)', 'Green lane front 60% up (troopers 3 yours v 2 theirs)',
+    'Enemy roles: Calico close-range diver; Graves ranged spirit caster with summons; others not in the coach table',
+    'Your items (2): Headshot Booster (800), Extra Health (800) · invested by slot: weapon 800, vitality 800, spirit 0',
+    'Team souls: yours 60,000 vs enemy 66,000 (-6,000) · at 15:00 it was +0: your team fell 6,000 further behind since',
+    'Last death at 16:40 (1:40 ago): Graves did at least 1,607 damage with Jar of Dead; cause Jar of Dead · most damage Jar of Dead 879',
+    'Objectives: Midboss alive (team target only after a won fight)']) assert.ok(out.includes(part), `${part}\n---\n${out}`);
+  assert.ok(!/ago Yellow\b|enemy yellow/i.test(out), out);
+  // No Midboss line in the laning phase; "a team take is possible" with 3+ enemies dead.
+  assert.ok(!/Midboss/.test(buildSummary({ snapshot: snap(300), history: new AiHistory(), now: 0, trigger: 'periodic' })));
+  const three = snap(1300, { hero_status: [0, 1, 2].map(slot => ({ ally: false, slot, hero: null, dead: true, networth_observations: 3, observations: 3, position_observations: 0 })) });
+  assert.match(buildSummary({ snapshot: three, history: new AiHistory(), now: 0, trigger: 'periodic' }), /Midboss alive and 3 enemies dead: a team take is possible/);
+  // The prompt forbids lane colours as heroes, asks for situation → action → why, and allows PASS.
+  assert.match(SYSTEM_PROMPT, /Green, Blue and Yellow are LANES, never heroes/); assert.match(SYSTEM_PROMPT, /situation → specific action → why/); assert.match(SYSTEM_PROMPT, /"weakness"/);
+  assert.ok(!/Do not die alone while it is up/.test(COACH_BRIEF));
+  // A low enemy is an opportunity angle, never a threat; the diver angle needs a live reason.
+  const low = snap(1100, { hero_status: [{ ally: false, slot: 0, hero: 'hero_nano', health_ratio: .18, networth_observations: 3, observations: 3, position_observations: 0 }], enemy_heroes: ['hero_nano'] });
+  low.minimap = { ...low.minimap!, heroes: [] };
+  const angles = coachingAngles({ snapshot: low, history: new AiHistory(), now: 0, name, profile: 'Weak: Killed at close range: 5 of 6.' });
+  assert.deepEqual(angles, ['- Calico at 18% HP and visible → a kill chance if they are in your range with an ally; a low enemy is a target, not a threat']);
+  // Over the word limit the action sentence is kept, not a bare situation.
+  assert.equal(cleanSpeech("Calico is at 18% and melee range is how you've died most. Stay at max range behind your front line until Paige and Apollo are back, then walk out.", 20, 2),
+    'Stay at max range behind your front line until Paige and Apollo are back, then walk out.');
+  assert.deepEqual(parseAdvice('{"speak":"Push Green lane.","priority":"Normal","why":"w","focus":"wave","weakness":"Dies alone"}'), { ok: true, advice: { speak: 'Push Green lane.', priority: 'Normal', why: 'w', focus: 'wave', weakness: 'Dies alone' } });
 });

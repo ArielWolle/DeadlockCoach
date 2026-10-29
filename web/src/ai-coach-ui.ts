@@ -1,7 +1,7 @@
 // DOM wiring for the optional AI coach: the Coach-page panel and the Settings fieldset.
 // All decisions live in ai-coach.ts; main.ts only calls the handle returned by mountAiCoach().
-import { AiCoach, PROVIDER_PRESETS, aiExchanges, onAiExchange, clockText, configFrom, parseExtraHeaders, testConnection, type Advice, type AdviceMeta, type AiSnapshot, type AiStatus } from './ai-coach';
-import type { Cue, Knowledge, Settings } from './types';
+import { AiCoach, PROVIDER_PRESETS, aiExchanges, onAiExchange, clockText, configFrom, parseExtraHeaders, testConnection, type Advice, type AdviceMeta, type AiSnapshot, type AiStatus, type ItemInfo } from './ai-coach';
+import type { Cue, GameItem, Knowledge, Settings } from './types';
 
 export interface AiUiDeps {
   settings: () => Settings; save: (s: Settings) => void;
@@ -26,7 +26,7 @@ export function mountAiCoach(deps: AiUiDeps): AiUi {
   const field = (id: string) => el<HTMLInputElement>(id);
   const setText = (id: string, value: string) => { el(id).textContent = value; };
   const states: Record<AiStatus['state'], string> = { off: 'OFF', idle: 'READY', thinking: 'THINKING…', error: 'ERROR' };
-  const describe = (m: AdviceMeta) => `${m.trigger === 'manual' ? 'On demand' : m.trigger === 'death' ? 'Death review' : 'Periodic'} · ${clockText(m.clock)} · ${m.ms} ms · ${m.model} · ~${m.tokens} input tokens`;
+  const describe = (m: AdviceMeta) => `${m.trigger === 'manual' ? 'On demand' : m.trigger === 'death' ? 'Death review' : 'Periodic'} · ${clockText(m.clock)} · ${m.ms} ms · ${m.model} · ~${m.tokens} input tokens${m.reasoningTokens ? ` · ${m.reasoningTokens} reasoning tokens` : ''}${m.reason ? ` · why now: ${m.reason.slice(0, 120)}` : ''}`;
   function render(s: AiStatus) {
     const tag = el('ai-state'); tag.textContent = states[s.state]; tag.classList.toggle('teal', s.state === 'idle' || s.state === 'thinking');
     if (s.last) {
@@ -45,7 +45,7 @@ export function mountAiCoach(deps: AiUiDeps): AiUi {
   // The last gateway exchange, raw, so a confusing reply can be diagnosed in the page.
   onAiExchange(x => {
     const box = el('ai-raw'); if (!box) return; box.hidden = false;
-    setText('ai-raw-meta', `${x.trigger} · ${clockText(x.clock)} · HTTP ${x.status ?? '—'} · ${x.ms} ms · ${x.model}${x.error ? ` · ${x.error.slice(0, 160)}` : ''}`);
+    setText('ai-raw-meta', `${x.trigger} · ${clockText(x.clock)} · HTTP ${x.status ?? '—'} · ${x.ms} ms · ${x.model}${x.usage?.completion != null ? ` · ${x.usage.completion} output tokens${x.usage.reasoning ? ` (${x.usage.reasoning} reasoning)` : ''} of ${x.max_tokens ?? '?'}` : ''}${x.error ? ` · ${x.error.slice(0, 160)}` : ''}`);
     let pretty = x.reply; try { pretty = JSON.stringify(JSON.parse(x.reply), null, 2); } catch { /* not JSON: show as is */ }
     setText('ai-raw-reply', pretty || '(empty body)');
   });
@@ -53,8 +53,14 @@ export function mountAiCoach(deps: AiUiDeps): AiUi {
     const blob = new Blob([JSON.stringify({ schema: 1, exported: new Date().toISOString(), exchanges: aiExchanges() }, null, 2)], { type: 'application/json' });
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'deadlock-ai-log.json'; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   });
+  // Item names, costs and slots for the AI summary (the same asset main.ts loads for names).
+  let itemInfo: Record<string, ItemInfo> = {};
+  void fetch(`${import.meta.env.BASE_URL}assets/items.json`).then(r => r.ok ? r.json() as Promise<Array<GameItem & { slot?: string }>> : []).then(list => {
+    itemInfo = Object.fromEntries(list.map(i => [i.class_name, { name: i.name, cost: i.cost, slot: i.slot ?? null }]));
+  }).catch(() => { /* names fall back to deps.name */ });
   const coach = new AiCoach({
     settings: deps.settings, isLive: deps.isLive, generation: deps.generation, knowledge: deps.knowledge, name: deps.name,
+    items: id => itemInfo[id] ?? null,
     pageProtocol: () => location.protocol, onStatus: render,
     onAdvice: (cue, _advice, meta) => deps.deliver(cue, meta.live),
   });
@@ -70,6 +76,7 @@ export function mountAiCoach(deps: AiUiDeps): AiUi {
     setText('ai-key-status', s.aiKey ? 'A key is saved only in this browser’s local storage. It is never logged or exported.' : 'Stored only in this browser’s local storage. Never logged or exported.');
     el<HTMLButtonElement>('ai-clear-key').disabled = !s.aiKey;
     field('ai-interval').value = String(s.aiInterval); field('ai-max-tokens').value = String(s.aiMaxTokens);
+    el<HTMLSelectElement>('ai-reasoning').value = s.aiReasoning;
     field('ai-speak').checked = s.aiSpeak; el<HTMLTextAreaElement>('ai-headers').value = s.aiHeaders;
     presetHints(s.aiProvider); coach.refresh();
   }
@@ -80,6 +87,7 @@ export function mountAiCoach(deps: AiUiDeps): AiUi {
     next.aiBaseUrl = field('ai-base-url').value.trim(); next.aiModel = field('ai-model').value.trim();
     const key = field('ai-key').value.trim(); if (key) next.aiKey = key;
     next.aiInterval = Number(field('ai-interval').value); next.aiMaxTokens = Number(field('ai-max-tokens').value);
+    const reasoning = el<HTMLSelectElement>('ai-reasoning').value; next.aiReasoning = reasoning === 'off' || reasoning === 'default' ? reasoning : 'low';
     next.aiSpeak = field('ai-speak').checked; next.aiHeaders = headers;
     if (next.aiEnabled && !next.aiModel) return 'AI coach: enter a model name, or turn the AI coach off.';
     return null;
