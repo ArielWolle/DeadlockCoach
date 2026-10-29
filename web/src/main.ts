@@ -14,6 +14,7 @@ import { mountAiCoach, type AiUi } from './ai-coach-ui';
 import { setProfileProvider, aiExchanges, clearAiExchanges, restoreAiExchanges, onAiExchange } from './ai-coach';
 import { PlayerProfile } from './player-profile';
 import { PlayerPage } from './player-page';
+import { mountMatchReviews, type ReviewUi } from './ai-review-ui'; // end-of-game AI review
 import { clearFrames, download, listFrames, recordFrame, snapshotLines } from './storage';
 import type { Analysis, Cue, GameItem, Knowledge, Options, Settings, Snapshot, WorkerReply, ProfileReply, PerceptionReport, TacticalDecision, PoolStatus, HeroStatus } from './types';
 
@@ -67,6 +68,8 @@ let pending: { id: number; resolve: (r: { analysis: Analysis; elapsed: number })
 // ---- Player profile hooks (logic: player-profile.ts, UI: player-page.ts) ----
 const playerProfile = new PlayerProfile({ store: (() => { try { return localStorage; } catch { return null; } })() }).load();
 let playerPage: PlayerPage | undefined;
+/** End-of-game AI review (ai-review-ui.ts): fed live and replay frames, reviews a match when it ends. */
+let reviews: ReviewUi | undefined;
 /** Snapshots analyzed by the replay in progress / the last completed replay (for "Add replay results"). */
 let replayCollect: Snapshot[] | null = null, lastReplay: { snapshots: Snapshot[]; label: string } | null = null;
 /** Feeds a live full-scan result to the profile; at a match start or a respawn it may append one
@@ -415,6 +418,7 @@ async function analyzeLiveFrame(pixels:Pixels,current:number){
     recoveryAttempts=0;
     if(result.analysis.perception)quick.seed(result.analysis.snapshot,result.analysis.perception);
     playerFrame(result.analysis,timestamp);
+    if(isDeadlock(activeProfile))reviews?.live(result.analysis.snapshot,timestamp,result.analysis.cues); // end-of-game review
     const delivered=deliver(result.analysis,timestamp);
     apply(delivered,result.elapsed);status('Coaching live');
     if(recording&&preview)try{await recordFrame({created:Date.now(),timestamp,snapshot:result.analysis.snapshot,cues:delivered.cues,image:preview,perception:result.analysis.perception,profile_id:activeProfile.id});}
@@ -478,6 +482,7 @@ function apply(analysis: Analysis, elapsed: number) {
   latest = analysis.snapshot; lastResultAt = Date.now(); lastElapsed = elapsed;
   ai?.observe(latest, analysis.cues, running && !paused && !replaying);
   if (replaying && replayCollect && replayCollect.length < 5000) replayCollect.push(analysis.snapshot);
+  if (replaying) reviews?.replayFrame(analysis.snapshot, analysis.cues); // end-of-game review: 'Review my last match' after a replay
   // The automatic adapter supplies a detected box, not a fixed browser-side map crop.
   // Use pixels from the matching analyzed frame for the game-specific map panel.
   const mapReading=analysis.perception?.fields['world.minimap'];
@@ -612,7 +617,7 @@ async function beginReplay() {
   button('start').disabled = true; text('feed-badge', 'REPLAY · SILENT'); status('Replay lab', 'Local playback · speech is disabled');
   await initialize(); if (!replaying) throw new Error('Replay canceled');
   resetEngine(); cues = []; renderCues(); $('replay-results').replaceChildren(); latestFrame = undefined; latestMap = undefined; drawPreview();
-  replayCollect = [];
+  replayCollect = []; reviews?.replayStart(); // end-of-game review
   return generation;
 }
 function resultRow(name: string, analysis: Analysis, elapsed: number) {
@@ -659,6 +664,7 @@ function endReplay() {
     const names = [...input('replay-files').files || []].map(f => f.name).join(', ');
     lastReplay = { snapshots: replayCollect, label: names.slice(0, 120) };
   }
+  reviews?.replayDone(!!replayCollect?.length && /complete/i.test($('replay-status').textContent || '')); // end-of-game review
   replayCollect = null; playerPage?.replayReady();
 }
 async function importFiles() {
@@ -773,7 +779,7 @@ function populateSettings() {
   for (const key of ['x', 'y', 'w', 'h'] as const) input(`crop-${key}`).value = String(Math.round(settings.crop[key] * 1000000) / 10000);
   text('rate-value', `${settings.rate.toFixed(1)}×`); text('volume-value', `${Math.round(settings.volume * 100)}%`);
   button('mute').textContent = settings.muted ? 'Unmute voice' : 'Mute voice'; button('mute').setAttribute('aria-pressed', String(settings.muted));
-  ai?.populate(settings);
+  ai?.populate(settings); reviews?.populate(settings); // end-of-game review setting
 }
 function syncVolume(){
   const level=Math.round(settings.volume*100),label=`${level}%`;
@@ -795,6 +801,7 @@ function saveForm() {
   for (const key of ['x', 'y', 'w', 'h'] as const) next.crop[key] = Number(input(`crop-${key}`).value) / 100;
   if(activeProfile.viewport.auto_crop===false)next.crop={x:0,y:0,w:1,h:1};
   const aiProblem = ai?.read(next); if (aiProblem) { notice(aiProblem, true); return; }
+  reviews?.read(next); // end-of-game review setting
   if (next.crop.x + next.crop.w > 1.001 || next.crop.y + next.crop.h > 1.001) { notice('Calibration extends beyond the captured source. Offset + size must be no more than 100%.', true); return; }
   if (JSON.stringify(next.crop) !== JSON.stringify(settings.crop)) { manualViewport = true; automaticViewport = false; }
   settings = normalize(next); saveSettings(settings); speaker.configure(settings); configureOptions();
@@ -1019,6 +1026,9 @@ ai = mountAiCoach({ settings: () => settings, save: s => { settings = normalize(
 profilePanel = new ProfilePanel({ current: () => activeProfile, apply: applyGameProfile, pick: pickFieldRegion,
   reference: loadReferenceImage, runReference });
 playerPage = new PlayerPage({ profile: playerProfile, notice, download, replay: () => lastReplay });
+// --- End-of-game AI review hooks (logic: ai-review.ts, UI: ai-review-ui.ts) ---
+reviews = mountMatchReviews({ settings: () => settings, save: s => { settings = normalize(s); saveSettings(settings); }, previous: () => playerProfile.matches,
+  knowledge: async () => { await loadKnowledge(); return knowledge; }, name: id => heroNames[id] || label(id, {}), notice, download, stopSpeech: () => speaker.cancel() });
 refreshGameLayout();
 populateSettings(); renderSnapshot(latest); renderTactics(null,latest); diagnostics(); route(); void loadNames();
 if (import.meta.env.PROD && 'serviceWorker' in navigator) {

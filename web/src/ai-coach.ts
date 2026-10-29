@@ -1161,7 +1161,8 @@ export interface Advice { speak: string | null; priority: Priority; why: string;
   /** The PLAYER PROFILE weakness the model says it coached (only set when it named one). */
   weakness?: string | null }
 export type ParseResult = { ok: true; advice: Advice } | { ok: false; error: string };
-function jsonCandidates(text: string): string[] {
+/** Balanced {...} substrings of a reply (exported for the end-of-game review parser, ai-review.ts). */
+export function jsonCandidates(text: string): string[] {
   const out: string[] = [];
   for (let start = text.indexOf('{'); start >= 0 && out.length < 8; start = text.indexOf('{', start + 1)) {
     let depth = 0, inString = false, escaped = false;

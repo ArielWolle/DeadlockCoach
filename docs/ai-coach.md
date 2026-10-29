@@ -402,3 +402,77 @@ enemy comes near) — or PASSes.
 - Optional snapshot fields are used when present: `status_effects`, `death_damage`,
   `death_killing_blow`, `level`, `unsecured_souls`, `kills` / `deaths` / `assists` and
   `minimap.zone`.
+
+## End-of-game review
+
+When a match ends, the AI coach (if enabled) writes one longer review of the whole match: a verdict,
+what went well, the top three improvements by impact (with timestamps, why it matters and how to
+practice), a next-game focus, hero tips, and a 180-300 word spoken version (about 1-2 minutes) that
+is read aloud and shown as text. Logic: `web/src/ai-review.ts` (DOM-free); UI: `web/src/ai-review-ui.ts`.
+
+**Triggers.** Automatic when the AI coach is on and Settings > "End-of-game review" is checked
+(default on): the PostGame screen, or a match the profile closes (new match, long gap) after at
+least 10 minutes of observed game time. Replays are never reviewed automatically; the Player page
+button **Review my last match** reviews the last finished match (live or the last completed replay,
+from the replay's own snapshots and rule cues) or, without one, the match in progress. One review
+per match (key: HUD match id + hero + end minute + deaths, because the HUD "match id" repeats across
+matches); a failed request can be retried, a reply that is not the JSON is stored and shown as raw text.
+
+**Match digest** (`buildDigest`, deterministic, at most 8,000 characters; observed facts only, "?" /
+"not read" for unknowns). A private `ReviewTracker` segments matches exactly like the player profile
+and keeps a compact timeline of the current match only (rec12's first ~100 frames are the previous
+Violet match and are not in its digest). Sections: hero, role, result (or "likely win/loss" from the
+Patron health banner at the end, marked as not read), clock span and observed minutes, K/D/A when
+read, allies and enemies (most-read, so stale reads drop out); team souls every 5 minutes; your net
+worth at 10/20/30 min; unspent souls against the usual tier (1,600 before 10:00, 3,200 before 20:00,
+6,400 after); time dead and the time shares by phase (lane / jungle / base / shop / dead); every death
+(cause, damage panel rows, killing blow, close-range share of the panel, CC/status before, HP fall,
+alone, forward with enemies unseen, seconds after respawn, souls held vs the tier, seconds dead) with
+the rule coach's death review; fights joined / missed / while dead with times; enemy-dead windows used
+/ unused; objectives seen (Midboss take, Urn carries, Patron banner); the rule coach's pattern calls;
+the comparison with earlier profile matches (per metric: this match vs the pooled newest 10, verdict
+improved / worse / same; the profile's known weaknesses with their verdict); up to 3 short knowledge
+excerpts (hero matchup stats, sections retrieved for the worst metrics). Budget: the lowest-priority
+lines (excerpts first) are dropped until it fits.
+
+| Recording | Hero | Deaths | Digest | vs earlier matches |
+|---|---|---|---|---|
+| rec11 (live export) | Violet | 7 | 7,986 chars | deaths/10 min, unspent at death, fights missed: worse |
+| rec12 (live export) | Grey Talon | 3 | 6,090 chars | time dead 17% -> 7%, deaths/10 min 1.8 -> 1.0, unspent at death: improved |
+
+**Prompt** (`REVIEW_SYSTEM_PROMPT`, `buildReviewPrompt`): elite Deadlock coach persona; use only the
+digest, cite timestamps, never invent events, say when data is missing; rank by impact (deaths and
+dead time, souls spending, fight/objective presence, map and waves); hero- and enemy-specific; praise
+real improvement from the comparison. Reply: strict JSON `{summary, went_well[], improvements[{title,
+evidence, why_it_matters, how_to_practice}] (top 3), next_game_focus, hero_tips[], spoken}`. The rec12
+prompt is about 8,600 characters (~2,150 tokens). Max reply tokens: `max(aiMaxTokens x 3, 3072)`, at
+most 8,192, plus the same reasoning headroom as live calls; timeout 120 s; a reply cut off by the
+token limit is retried once with 8,192 tokens, then parsed as far as it got (`partial`).
+`parseReview` accepts fenced JSON, text around it, `<think>` blocks and cut-off JSON (closed at the
+last complete field).
+
+**Speech.** The coach `Speaker` keeps one pending cue for 15 s and stops an utterance after 25 s, so
+the review is read by `ReviewReader`: sentence by sentence, each with its own watchdog, with **Speak**
+/ **Stop** buttons per review. It is read automatically when "Speak AI advice" is on and the voice is
+not muted; Speak is refused while muted; mute or a High coach call stops it.
+
+**Storage.** `localStorage` key `deadlock-coach-match-reviews-v1`, newest 20 (`ReviewStore`), with
+the digest for reference; **Export reviews** downloads them as JSON. The API key is never stored with
+a review. A short notice appears on the Coach page when a review arrives.
+
+**Offline evaluation:** `node --experimental-strip-types scripts/ai-review-eval.ts [--quiet] [--all]
+[--digest rec11]` builds the rec11 / rec12 digests (sizes, determinism, comparison verdicts) and
+prints the full rec12 prompt. With `AI_REVIEW_URL`, `AI_REVIEW_KEY`, `AI_REVIEW_MODEL` (optional
+`AI_REVIEW_PROVIDER=anthropic`, `AI_REVIEW_REASONING`, `AI_REVIEW_MAX_TOKENS`) it sends the prompt and
+prints the parsed review. Keys are never printed or written.
+
+Example (illustrative, written by hand for this document from the rec12 digest; not a model output):
+
+```json
+{"summary": "Your cleanest game in the profile: 3 deaths and 7% of the game dead, down from 17%, and your team led on souls from 15:00 to the end.",
+ "went_well": ["Time dead fell from 17% to 7% (121 s of 29 min)", "No deaths within 40 s of a respawn", "You carried the Urn at 16:09"],
+ "improvements": [{"title": "Keep range against Drifter", "evidence": "14:50 and 22:10: Melee and Rend were most of the damage panel", "why_it_matters": "Drifter hunts isolated targets; each death cost 37-66 s", "how_to_practice": "When Drifter is missing, stand behind a teammate and keep one stamina charge to escape"}],
+ "next_game_focus": "Spend down to the next item before you walk back out.",
+ "hero_tips": ["As Grey Talon, take fights from max range behind your front line"],
+ "spoken": "That was your cleanest game so far. You were dead only seven percent of the time ..."}
+```
