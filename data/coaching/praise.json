@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "threshold_note": "Positive reinforcement (crates/engine/src/praise.rs). Every call names one good decision the frames proved, with the numbers that prove it; a praise is said only in a calm moment (alive, health read twice at 60%+, not falling, no enemy marker within near_radius, not carrying the urn, the team not wiped) and the engine allows at most 3 per 10 minutes, 60 s apart (praise::MIN_GAP_SECS / PER_WINDOW). Thresholds are coach heuristics tuned on rec12 (a 12/3/11 Grey Talon win) and checked for false praise on rec5 / rec8 / rec11, not game rules. Distances are minimap fractions.",
+  "thresholds": {
+    "calm_hp": 0.6, "near_radius": 0.12,
+    "window_dead": 2, "window_min_secs": 15, "window_valid_secs": 120, "with_ally": 0.15, "half_y": 0.38, "lane_advance": 0.15,
+    "urn_gain": 1500, "urn_after_secs": 45, "urn_valid_secs": 60,
+    "spent_valid_secs": 120, "tier_buy_secs": 60, "tier_valid_secs": 90, "purchase_drop": 800,
+    "streaks": [600, 1200], "streak_valid_secs": 120, "streak_gap_secs": 90,
+    "solo_distance": 0.25, "group_radius": 0.12, "group_after_secs": 60, "group_valid_secs": 45,
+    "lead_back_min": 240, "lead_back_max": 480, "lead_growth": 4000, "lead_min": 4000, "lead_min_pct": 15, "lead_jump_pct": 8, "lead_every_secs": 480, "lead_share_pct": 18, "lead_min_clock": 600, "lead_valid_secs": 20
+  },
+  "cards": [
+    { "id": "window", "speech": "Good use of the {time} window: with {count} enemies dead {what}. That is how a pick turns into map pressure.", "priority": "normal", "cooldown_secs": 120,
+      "rationale": "Two or more enemies on respawn timers is a numbers advantage; the frames showed it converted (you in their half with a teammate, a lane front moving up, or their structure's health banner).",
+      "sources": [
+        { "path": "strategy/teamfighting.md", "section": "## 4. Engage / disengage", "basis": "COMMUNITY", "excerpt": "count survivors and take the highest-value safe action (objective, wave, reset) rather than chasing" },
+        { "path": "strategy/moba-fundamentals.md", "section": "### When ahead (net worth lead, more towers/structures)", "basis": "GENERAL", "excerpt": "Take Guardian/Walker/Midboss while enemies respawn." } ] },
+    { "id": "urn", "speech": "Urn delivered: about {gain} souls, plus the courier's permanent buffs. Taking it straight to the drop-off was the right call.", "priority": "normal", "cooldown_secs": 240,
+      "rationale": "Carrying the urn, then your souls jumping by the urn's value within seconds of the carry ending, is a delivery.",
+      "sources": [
+        { "path": "strategy/midgame-macro.md", "section": "## 2. Objective value table (HUD-trackable)", "basis": "WIKI", "excerpt": "courier gets 4 permanent buffs" },
+        { "path": "strategy/midgame-macro.md", "section": "## 7. Soul Urn decisions", "basis": "WIKI", "excerpt": "if not denied all go to the courier" } ] },
+    { "id": "spent_dead", "speech": "Good shopping: you spent {spent} souls during your respawn, so you came back with the upgrades instead of carrying souls into the next fight.", "priority": "normal", "cooldown_secs": 120,
+      "rationale": "The death screen is a shop window; the souls read on it fell from at least the tier normally bought then to below it.",
+      "sources": [
+        { "path": "strategy/moba-fundamentals.md", "section": "### Itemization", "basis": "GENERAL", "excerpt": "Do not hoard souls through fights; buy during respawn or at the base." },
+        { "path": "strategy/economy-and-buy-order.md", "section": "## 4. When to buy", "basis": "COMMUNITY", "excerpt": "Spend steadily and stay alive" } ] },
+    { "id": "spent_tier", "speech": "Good timing: you spent {spent} souls {secs} seconds after reaching {tier}. Buying on time is how souls become fighting power.", "priority": "normal", "cooldown_secs": 120,
+      "rationale": "Souls reached the tier normally bought at this game time (economy::spend_target) and fell back below it within a minute.",
+      "sources": [
+        { "path": "strategy/moba-fundamentals.md", "section": "### When ahead (net worth lead, more towers/structures)", "basis": "GENERAL", "excerpt": "Spend souls immediately; unspent souls are wasted power." },
+        { "path": "strategy/economy-and-buy-order.md", "section": "## 4. When to buy", "basis": "COMMUNITY", "excerpt": "Shop after major value spikes so a fragile lead does not enter a fight unspent" } ] },
+    { "id": "streak", "speech": "{min} minutes without dying{since}. You've been dead {pct}% of the game so far: staying alive keeps your farm going and your team at full strength.", "priority": "low", "cooldown_secs": 300,
+      "rationale": "No death screen since the match start (watched from the first two minutes) or since the last respawn, without recording gaps.",
+      "sources": [
+        { "path": "strategy/moba-fundamentals.md", "section": "### When behind", "basis": "GENERAL", "excerpt": "each death costs both time off the map and souls." },
+        { "path": "strategy/midgame-macro.md", "section": "## 1. What midgame is", "basis": "WIKI", "excerpt": "Downtime: respawning, idly waiting, aimless rotation." } ] },
+    { "id": "group", "speech": "You walked out with a teammate this time. After {deaths} alone, that's the fix: a fight next to a teammate is one you can win.", "priority": "normal", "cooldown_secs": 120,
+      "rationale": "An earlier death came with every visible teammate a quarter of the map away; after this respawn an allied marker stayed beside you on the way out.",
+      "sources": [
+        { "path": "strategy/moba-fundamentals.md", "section": "### When ahead (net worth lead, more towers/structures)", "basis": "GENERAL", "excerpt": "Group; avoid being caught solo." },
+        { "path": "strategy/common-mistakes.md", "section": "## 16. Fighting split / piecemeal", "basis": "COMMUNITY", "excerpt": "Fall back and regroup. Don't fight split." } ] },
+    { "id": "lead", "speech": "Your team's soul lead grew from {from} at {time} to {to} at {at}.{share} Keep grouping for objectives: it is working.", "priority": "low", "cooldown_secs": 480,
+      "rationale": "Team totals read without a digit drop or a jump, a lead of at least 15% that grew by 4,000+ souls over the last 4-8 minutes and held on the last three readings.",
+      "sources": [
+        { "path": "strategy/moba-fundamentals.md", "section": "## Core principles", "basis": "GENERAL", "excerpt": "Gold/souls lead converts to item lead then fights then objectives" },
+        { "path": "strategy/moba-fundamentals.md", "section": "### When ahead (net worth lead, more towers/structures)", "basis": "GENERAL", "excerpt": "Convert the lead into objectives, not kills." } ] }
+  ]
+}

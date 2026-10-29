@@ -340,7 +340,9 @@ function logCue(cue:Cue,s:Snapshot,fast:boolean,aiCue=false){
 const FULL_ONLY=['counter','death','review','lead','behind','unspent-dead','player',
   'active:debuff','active:cc','active:heal','active:unsecured','active:repeat','active:close','pos:enemies_down',
   // Top-bar deaths, structure banners and the urn carrier (full scan only).
-  'active:hold_base','active:team_losing','active:base_attack','active:urn_hold'];
+  'active:hold_base','active:team_losing','active:base_attack','active:urn_hold',
+  // Praise (crates/engine/src/praise.rs) needs the top bar, status effects and the structure banner.
+  'praise'];
 function deliver(analysis:Analysis,timestamp:number,fast=false){
   const now=Date.now(),age=Math.max(0,now-timestamp);const delivered:Cue[]=[];
   for(const original of analysis.cues){

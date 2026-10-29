@@ -10,6 +10,7 @@ pub mod jungle;
 pub mod economy;
 pub mod review;
 pub mod active;
+pub mod praise;
 mod counter_explanations;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -321,7 +322,9 @@ pub fn death_cause_advice(cause: &str) -> (&'static str, &'static str) {
         }
 }
 /// Speaks only after the same state (ahead/behind) is seen on 4 snapshots in a row and the gap
-/// is at least `lead_min_abs` souls, so noisy reads near parity do not flip-flop.
+/// is at least `lead_min_abs` souls, so noisy reads near parity do not flip-flop. The same state
+/// is repeated at most every 8 minutes (the cue cooldown; rec12 said "your team is ahead" five
+/// times in 28 minutes); a change of state (ahead -> behind) is a new key and is said at once.
 pub struct NetworthLeadRule { cfg: RulesConfig, streak: std::cell::Cell<(i8, u8)>, last: std::cell::Cell<Option<(u32, u32)>> }
 impl NetworthLeadRule { pub fn new(cfg: RulesConfig) -> Self { NetworthLeadRule { cfg, streak: std::cell::Cell::new((0, 0)), last: std::cell::Cell::new(None) } } }
 impl Rule for NetworthLeadRule {
@@ -348,14 +351,17 @@ impl Rule for NetworthLeadRule {
         } else {
             ("behind", "Your team is behind in souls. Farm safely and fight near your structures.")
         };
-        vec![Cue { key: key.into(), text: text.into(), priority: Priority::Normal, cooldown_secs: 240 }]
+        vec![Cue { key: key.into(), text: text.into(), priority: Priority::Normal, cooldown_secs: LEAD_REPEAT_SECS }]
     }
 }
+/// Minimum seconds between two "your team is ahead / behind" calls of the same state.
+pub const LEAD_REPEAT_SECS: u32 = 480;
 pub fn default_rules(cfg: RulesConfig) -> Vec<Box<dyn Rule>> {
     // The active coach goes first: among equal priorities its specific call (the debuff on you,
     // the lane to push in an enemy-dead window, souls to spend in base) wins the step over the
-    // generic one, and the shared keys keep the generic one quiet for its cooldown.
-    vec![Box::new(active::ActiveCoach::default()), Box::new(positioning::PositionCoach::default()), Box::new(jungle::JungleCoach::default()), Box::new(laning::LaneCoach::default()), Box::new(map_rules::MapRule), Box::new(UnspentSoulsRule::new(cfg.clone())), Box::new(review::ReviewCoach::default()), Box::new(NetworthLeadRule::new(cfg)),Box::new(economy::PaceRule::default()),Box::new(economy::WaveReportRule::default())]
+    // generic one, and the shared keys keep the generic one quiet for its cooldown. Praise comes
+    // before the farm-pace compliment, which it outranks for the shared praise budget.
+    vec![Box::new(active::ActiveCoach::default()), Box::new(positioning::PositionCoach::default()), Box::new(jungle::JungleCoach::default()), Box::new(laning::LaneCoach::default()), Box::new(map_rules::MapRule), Box::new(UnspentSoulsRule::new(cfg.clone())), Box::new(review::ReviewCoach::default()), Box::new(NetworthLeadRule::new(cfg)), Box::new(praise::PraiseCoach::default()), Box::new(economy::PaceRule::default()),Box::new(economy::WaveReportRule::default())]
 }
 
 pub struct Engine {
@@ -368,17 +374,20 @@ pub struct Engine {
     last_cue_at: Option<u32>,
     /// Text of the last spoken wave overview (which lanes it named).
     wave_text: Option<String>,
+    /// Clocks of the praise calls spoken, and of the last compliment of any kind (praise or the
+    /// farm-pace compliment): the praise budget ([`praise::budget_allows`]).
+    praise_at: Vec<u32>, compliment_at: Option<u32>,
 }
 
 impl Engine {
-    pub fn new(rules: Vec<Box<dyn Rule>>) -> Self { Engine { rules, last_said: HashMap::new(), max_per_step: 1, min_gap_secs: 8, last_cue_at: None, wave_text: None } }
+    pub fn new(rules: Vec<Box<dyn Rule>>) -> Self { Engine { rules, last_said: HashMap::new(), max_per_step: 1, min_gap_secs: 8, last_cue_at: None, wave_text: None, praise_at: vec![], compliment_at: None } }
 
     /// Evaluate all rules; returns cues not suppressed by cooldown, highest priority first.
     pub fn step(&mut self, snap: &GameSnapshot) -> Vec<Cue> {
         if snap.screen.as_deref().is_some_and(|s|!matches!(s,"Gameplay"|"Scoreboard"|"Dead")){return vec![];}
         let Some(now) = snap.game_clock_secs else { return vec![] };
         if let Some(last)=self.last_cue_at {if now<last {
-            if last-now>120 {self.last_said.clear();self.last_cue_at=None;}
+            if last-now>120 {self.last_said.clear();self.last_cue_at=None;self.praise_at.clear();self.compliment_at=None;}
             else {return vec![];} // small OCR backsteps are not a new match
         }}
         let mut out: Vec<Cue> = self.rules.iter().flat_map(|r| r.evaluate(snap)).collect();
@@ -391,6 +400,10 @@ impl Engine {
             Some(&t) if now >= t && now - t < c.cooldown_secs => false,
             _ => true,
         });
+        // Praise is rationed: at most 3 per 10 minutes, a minute apart (praise.rs).
+        out.retain(|c| praise::budget_allows(&c.key, &self.praise_at, self.compliment_at, now));
+        // "Your lead grew from X to Y" says more than the generic "your team is ahead".
+        if out.iter().any(|c| c.key.starts_with("praise:lead:")) { out.retain(|c| c.key != "lead"); }
         // A counter item is suggested once per match (rec8 suggested Long Range twice, 31 min apart).
         out.retain(|c|!c.key.starts_with("counter:")||(
             self.last_said.get("$counter-category").is_none_or(|t|now.saturating_sub(*t)>=180)
@@ -422,6 +435,12 @@ impl Engine {
         if out.iter().any(|c| active::is_escape_call(&c.key)) { self.last_said.insert("lane:back_off".into(), now); }
         // The specific call covers the generic one: holding the urn replaces "head for delivery".
         if out.iter().any(|c| c.key == "active:urn_hold") { self.last_said.insert("map:urn-you".into(), now); }
+        // A growing-lead praise already says the team is ahead: the generic call waits its repeat time.
+        if out.iter().any(|c| c.key.starts_with("praise:lead:")) { self.last_said.insert("lead".into(), now); }
+        for c in out.iter().filter(|c| praise::is_compliment(&c.key)) {
+            self.compliment_at = Some(now);
+            if praise::is_praise(&c.key) { self.praise_at.push(now); }
+        }
         if let Some(c) = out.iter().find(|c| c.key == "wave:overview") { self.wave_text = Some(c.text.clone()); }
         for c in out.iter().filter(|c|c.key.starts_with("counter:")){
             self.last_said.insert("$counter-category".into(),now);
@@ -534,6 +553,38 @@ mod tests {
         let mut said = 0;
         for t in [600, 610, 620, 630] { let mut s = at(t); s.ally_networth = Some(1000); s.enemy_networth = Some(60000); said += e.step(&s).len(); }
         assert_eq!(said, 0, "a 98% gap is a misread, not a game state");
+    }
+
+    #[test]
+    fn the_team_lead_is_repeated_at_most_every_eight_minutes_but_a_change_is_news() {
+        // rec12 said "your team is ahead" five times in 28 minutes.
+        let mut e = Engine::new(vec![Box::new(NetworthLeadRule::new(RulesConfig::default()))]);
+        e.min_gap_secs = 0;
+        let mut said: Vec<(u32, String)> = vec![];
+        let mut step = |t: u32, a: u32, en: u32, said: &mut Vec<(u32, String)>| { let mut s = at(t); s.ally_networth = Some(a); s.enemy_networth = Some(en); said.extend(e.step(&s).into_iter().map(|c| (t, c.key))); };
+        for t in (600..1500).step_by(10) { let a = 60000 + (t - 600) * 50; step(t, a, a * 100 / 125, &mut said); }
+        let leads: Vec<u32> = said.iter().filter(|x| x.1 == "lead").map(|x| x.0).collect();
+        assert_eq!(leads.len(), 2, "{said:?}");
+        assert!(leads[1] >= leads[0] + LEAD_REPEAT_SECS, "{leads:?}");
+        // Ahead -> behind is said at once (a new state, its own key).
+        said.clear();
+        for t in (1500..1560).step_by(10) { step(t, 100000, 125000 + (t - 1500) * 20, &mut said); }
+        assert_eq!(said.iter().filter(|x| x.1 == "behind").count(), 1, "{said:?}");
+    }
+
+    #[test]
+    fn a_growing_lead_praise_replaces_the_generic_lead_call() {
+        let mut e = Engine::new(default_rules(RulesConfig::default()));
+        e.min_gap_secs = 0;
+        let mut keys: Vec<String> = vec![];
+        for t in (600..1100).step_by(10) {
+            let mut s = at(t); s.screen = Some("Gameplay".into()); s.hp = Some(1800); s.max_hp = Some(2000); s.health_observations = 3;
+            s.minimap = Some(coach_core::MinimapState { observations: 3, you: Some(coach_core::Pt { x: 0.5, y: 0.7 }), ..Default::default() });
+            s.ally_networth = Some(50000 + (t - 600) * 40); s.enemy_networth = Some(50000 + (t - 600) * 10);
+            keys.extend(e.step(&s).into_iter().map(|c| c.key));
+        }
+        let praise = keys.iter().position(|k| k.starts_with("praise:lead:")).unwrap_or_else(|| panic!("{keys:?}"));
+        assert!(!keys[praise..].iter().any(|k| k == "lead"), "{keys:?}");
     }
 
     #[test]

@@ -367,3 +367,30 @@ fn dropped_timer_digits_do_not_shorten_the_rest_of_a_death() {
     let dead: Vec<&String> = p.iter().filter(|t| t.contains("were dead for")).collect();
     assert!(!dead.is_empty() && dead.iter().all(|t| t.contains("were dead for 88 seconds")), "{dead:?}");
 }
+
+#[test]
+fn a_good_five_minutes_names_what_went_well() {
+    // No deaths, one purchase (2,900 -> 400 at 1100), a teammate beside you in their half while
+    // three enemies were dead (1150-1180).
+    let p = patterns(1000, 1300, &|t| {
+        let souls = if t < 1100 { 2900 } else { 400 };
+        if (1150..=1180).contains(&t) {
+            alive(t, 2400, Pt { x: 0.5, y: 0.3 }, Some(Lane::Blue), vec![track(1, true, 0.52, 0.31)], (0..12).map(|i| HeroStatus { ally: i < 6, slot: i % 6, dead: Some(i >= 6 && i < 9), bar_visible: Some(true), ..Default::default() }).collect(), souls)
+        } else { lane_frame(t, souls) }
+    });
+    let g = p.iter().find(|t| t.contains("minutes went well:")).unwrap_or_else(|| panic!("{p:?}"));
+    assert!(g.contains("no deaths"), "{g}");
+    assert!(g.contains("at 19:10, with 3 enemies dead, you pushed into their half"), "{g}");
+    assert!(g.contains("you spent your souls on time (1 purchase)"), "{g}");
+}
+#[test]
+fn a_critical_summary_also_says_what_went_well() {
+    // Hoarding is criticised; the purchase-free window still names the fight joined with the team.
+    let p = patterns(1000, 1300, &|t| {
+        let mut s = lane_frame(t, 5130);
+        if (1100..1130).contains(&t) { s.minimap.as_mut().unwrap().heroes.extend([track(2, true, 0.51, 0.61), track(3, false, 0.52, 0.62), track(4, false, 0.53, 0.6)]); }
+        s
+    });
+    let h = p.iter().find(|t| t.contains("You held over")).unwrap_or_else(|| panic!("{p:?}"));
+    assert!(h.contains("What went well: no deaths and you were with your team for 1 fight."), "{h}");
+}
