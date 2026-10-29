@@ -52,7 +52,7 @@ fn dead_with(t:u32,rows:&[(&str,u32)],souls:u32)->GameSnapshot{
     let rule=counter_rule_from_json(include_str!("../../../data/counters.json")).unwrap();
     let c=rule.evaluate(&dead_with(2810,&[("Affliction",2172),("Spirit Armor",1104),("Frost Grenade",1017)],3580));
     assert_eq!(c[0].key,"counter:hero_synth:upgrade_spirit_bubble","{c:?}");
-    assert!(c[0].text.starts_with("Pocket's Affliction did 2,172 damage when you last died. Consider Spirit Shielding for 1,600 souls"),"{}",c[0].text);
+    assert!(c[0].text.starts_with("Pocket's Affliction did 2,172 damage last death. Get Spirit Shielding for 1,600 souls"),"{}",c[0].text);
     let rule=counter_rule_from_json(include_str!("../../../data/counters.json")).unwrap();
     let c=rule.evaluate(&dead_with(2990,&[("Bullet Dance",2017),("Fixation",932),("Capacitor",398)],4474));
     assert_eq!(c[0].key,"counter:hero_haze:upgrade_weapon_shielding","{c:?}");

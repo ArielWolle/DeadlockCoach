@@ -72,9 +72,9 @@ impl PaceRule{
             if median(&mut enemy).is_none_or(|e|own*100>=e*85){return None;}
         }
         let text=match band {
-            "behind"=>format!("Your earned souls are behind the observed lobby at {} minutes. Prioritize a safe wave, then a nearby camp instead of a speculative gank.",clock/60),
-            "ahead"=>"Good farm pace. Your earned souls are ahead of the observed lobby; protect that lead and convert wave priority into objectives.".into(),
-            _=>"Good farming. Your earned souls are keeping pace with the observed lobby. Keep catching waves between rotations.".into(),
+            "behind"=>format!("You are behind the lobby on farm at {} minutes. Safe wave first, then a nearby camp.",clock/60),
+            "ahead"=>"Good farm: you are ahead of the lobby. Turn it into objectives with us.".into(),
+            _=>"Good farm, on pace with the lobby. Keep catching waves between rotations.".into(),
         };
         Some((band,Cue{key:format!("pace:{band}"),text,priority:Priority::Low,cooldown_secs:120}))
     }
@@ -93,7 +93,7 @@ impl Rule for WaveReportRule{
         for(lane,name)in [(coach_core::Lane::Green,"Green"),(coach_core::Lane::Blue,"Blue"),(coach_core::Lane::Yellow,"Yellow")]{
             let v=map.lane(lane);if v.ally_troopers+v.enemy_troopers<2{continue;}
             if let Some(front)=v.push {
-                let state=if front>=0.7{"pushed out"}else if front<0.35{"coming toward our side"}else{"contested near the middle"};
+                let state=if front>=0.7{"is pushed out"}else if front<0.35{"is coming to us"}else{"is even"};
                 actionable|=front>=0.7||front<0.35;parts.push(format!("{name} {state}"));
             }
         }
@@ -106,6 +106,6 @@ impl Rule for WaveReportRule{
             if clock>=*at&&(since<90||*prev==summary&&since<300){return vec![];}
         }
         *last=Some((summary.clone(),clock));
-        vec![Cue{key:"wave:overview".into(),text:format!("Wave check: {summary}. Catch incoming farm before roaming."),priority:Priority::Low,cooldown_secs:45}]
+        vec![Cue{key:"wave:overview".into(),text:format!("Waves: {summary}. Catch the farm before you roam."),priority:Priority::Low,cooldown_secs:45}]
     }
 }

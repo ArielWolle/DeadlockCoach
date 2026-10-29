@@ -63,7 +63,7 @@ fn a_window_used_with_a_teammate_in_their_half_is_praised_once() {
     let (t, cue) = &said[0];
     assert!(*t >= 1015, "after the window held for 15 s: {t}");
     assert!(cue.key.starts_with("praise:window:"), "{cue:?}");
-    assert_eq!(cue.text, "Good use of the 16:40 window: with three enemies dead you pushed into their half with your team. That is how a pick turns into map pressure.");
+    assert_eq!(cue.text, "Good use of the 16:40 window: with three enemies dead, you pushed into their half with your team.");
 }
 
 #[test]
@@ -90,7 +90,7 @@ fn their_structure_banner_during_a_window_names_the_patron() {
         s
     }));
     assert_eq!(said.len(), 1, "{said:?}");
-    assert!(said[0].1.text.contains("with five enemies dead your team was hitting their Patron"), "{}", said[0].1.text);
+    assert!(said[0].1.text.contains("with five enemies dead, your team was hitting their Patron"), "{}", said[0].1.text);
 }
 
 #[test]
@@ -139,7 +139,7 @@ fn a_delivered_urn_is_praised_with_its_souls() {
         alive(1011, 1990, Pt { x: 0.3, y: 0.44 }, vec![], team(0, 0), 2607)]);
     let said = run(&c, frames);
     assert_eq!(said.len(), 1, "{said:?}");
-    assert_eq!(said[0].1.text, "Urn delivered: about 2,100 souls, plus the courier's permanent buffs. Taking it straight to the drop-off was the right call.");
+    assert_eq!(said[0].1.text, "Urn delivered: about 2,100 souls. Walking it straight in was the right call.");
 }
 #[test]
 fn a_small_or_late_souls_jump_after_carrying_is_not_an_urn() {
@@ -166,7 +166,7 @@ fn souls_spent_during_a_respawn_are_praised_after_it() {
     let said = run(&c, frames);
     assert_eq!(said.len(), 1, "{said:?}");
     assert!(said[0].0 >= 928, "said after the respawn, not on the death screen");
-    assert!(said[0].1.text.starts_with("Good shopping: you spent 5,941 souls during your respawn"), "{}", said[0].1.text);
+    assert!(said[0].1.text.starts_with("Good shopping: you spent 5,941 souls on the death screen"), "{}", said[0].1.text);
 }
 #[test]
 fn a_death_with_the_souls_kept_is_not_praised() {
@@ -198,7 +198,7 @@ fn ten_minutes_without_dying_is_praised_with_the_time_dead() {
     let said = run(&c, (3..=64).map(|i| alive(i * 10, 1800, ME_OWN_HALF, vec![], team(0, 0), 500)));
     assert_eq!(said.len(), 1, "{said:?}");
     assert_eq!(said[0].0, 630, "10 minutes after the first frame (0:30)");
-    assert!(said[0].1.text.starts_with("10 minutes without dying. You've been dead 0% of the game so far"), "{}", said[0].1.text);
+    assert!(said[0].1.text.starts_with("10 minutes without dying. You've been dead 0% of the game"), "{}", said[0].1.text);
     // A death resets the streak; watched from mid-match it is unknown.
     let d = PraiseCoach::default();
     let mut frames: Vec<GameSnapshot> = (3..30).map(|i| alive(i * 10, 1800, ME_OWN_HALF, vec![], team(0, 0), 500)).collect();
@@ -237,7 +237,7 @@ fn a_growing_team_lead_is_praised_from_reliable_totals_only() {
     let c = PraiseCoach::default();
     let said = run(&c, (0..=50).map(|i| { let t = 600 + i * 10; at(t, 50000 + (t - 600) * 40, 50000 + (t - 600) * 10) }));
     assert_eq!(said.len(), 1, "{said:?}");
-    assert!(said[0].1.text.starts_with("Your team's soul lead grew from"), "{}", said[0].1.text);
+    assert!(said[0].1.text.starts_with("Our soul lead grew from"), "{}", said[0].1.text);
     // Totals that jump between readings (misreads) are never a story.
     let j = PraiseCoach::default();
     assert!(run(&j, (0..=50).map(|i| { let t = 600 + i * 10; at(t, if i % 2 == 0 { 70000 } else { 50000 }, 50000) })).is_empty());
@@ -259,8 +259,8 @@ fn two_good_things_waiting_share_one_call() {
     let said = run(&c, frames);
     assert_eq!(said.len(), 1, "{said:?}");
     let t = &said[0].1.text;
-    assert!(t.starts_with("Urn delivered: about 1,900 souls, plus the courier's permanent buffs. Also, good use of the 16:40 window"), "{t}");
-    assert!(!t.contains("map pressure"), "a shared call keeps only the observations: {t}");
+    assert!(t.starts_with("Urn delivered: about 1,900 souls. Also, good use of the 16:40 window"), "{t}");
+    assert!(!t.contains("right call"), "a shared call keeps only the observations: {t}");
 }
 
 #[test]
@@ -303,7 +303,7 @@ fn rec12_praise_calls() {
         (943, "praise:window:815", "with five enemies dead you pushed into their base with your team. Also, good shopping: you spent 5,941 souls during your respawn"),
         (1011, "praise:urn:", "Urn delivered: about 2,100 souls"),
         (1548, "praise:lead:", "You hold 18% of your team's souls"),
-        (1687, "praise:window:1637", "with five enemies dead your team was hitting their Patron"),
+        (1687, "praise:window:1637", "with five enemies dead, your team was hitting their Patron"),
     ];
     assert_eq!(said.len(), expect.len(), "{said:?}");
     for ((t, c), (et, key, text)) in said.iter().zip(expect) {

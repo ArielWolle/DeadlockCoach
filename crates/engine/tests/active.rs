@@ -100,7 +100,7 @@ fn a_debuff_is_said_once_per_cooldown_not_every_frame() {
 fn hard_cc_is_called_only_while_health_is_low_or_falling_fast() {
     let mut s = alive(); s.status_effects = vec!["stunned".into(), "knocked_off_zipline".into()]; s.hp = Some(1700); s.health_delta_ratio = Some(-0.31);
     let cues = eval(&ActiveCoach::default(), &s);
-    assert_eq!(keys(&cues), ["active:cc"]); assert!(cues[0].text.starts_with("Stunned")); speakable(&cues[0]);
+    assert_eq!(keys(&cues), ["active:cc"]); assert!(cues[0].text.starts_with("Escape the moment the stun ends")); speakable(&cues[0]);
     // A lane trade: stunned at 81%, losing 8% (rec3 1:49).
     let mut trade = alive(); trade.status_effects = vec!["stunned".into()]; trade.hp = Some(2430); trade.health_delta_ratio = Some(-0.08);
     assert!(eval(&ActiveCoach::default(), &trade).is_empty());
@@ -108,7 +108,7 @@ fn hard_cc_is_called_only_while_health_is_low_or_falling_fast() {
     let mut unread = s.clone(); unread.hp = None; assert!(eval(&ActiveCoach::default(), &unread).is_empty());
     // Silence and zipline knock-offs have their own advice.
     let mut sil = alive(); sil.status_effects = vec!["silenced".into()]; sil.hp = Some(1500);
-    assert!(eval(&ActiveCoach::default(), &sil)[0].text.starts_with("Silenced"));
+    assert!(eval(&ActiveCoach::default(), &sil)[0].text.starts_with("Back behind cover until the silence ends"));
     let mut zip = alive(); zip.status_effects = vec!["knocked_off_zipline".into()]; zip.hp = Some(1500);
     assert!(eval(&ActiveCoach::default(), &zip)[0].text.contains("zipline"));
 }
@@ -174,13 +174,18 @@ fn spend_reminders_scale_with_the_clock_and_are_said_once_per_buy_episode() {
     // Affordable: said once, with the tier.
     let c = rule.evaluate(&field(2210, 6629)); assert_eq!(keys(&c), ["unspent"]);
     assert!(c[0].text.contains("6,400-soul item") && c[0].text.contains("6,629"), "{}", c[0].text);
+    rule.spoken(&c[0]);
     // Still holding: nothing for 3 minutes, then one reminder, then silence.
     assert!(rule.evaluate(&field(2300, 7000)).is_empty());
-    assert!(rule.evaluate(&field(2400, 7100))[0].text.starts_with("Still holding 7,100"));
+    let c = rule.evaluate(&field(2400, 7100)); assert!(c[0].text.starts_with("Still holding 7,100")); rule.spoken(&c[0]);
     assert!(rule.evaluate(&field(2700, 7400)).is_empty());
     // A purchase starts a new episode.
     assert!(rule.evaluate(&field(2710, 900)).is_empty());
-    assert_eq!(keys(&rule.evaluate(&field(2900, 6500))), ["unspent"]);
+    let c = rule.evaluate(&field(2900, 6500)); assert_eq!(keys(&c), ["unspent"]); rule.spoken(&c[0]);
+    // Held back by the engine (not spoken): offered again on the next frame.
+    let rule = UnspentSoulsRule::new(RulesConfig::default());
+    assert_eq!(keys(&rule.evaluate(&field(2210, 6629))), ["unspent"]);
+    assert_eq!(keys(&rule.evaluate(&field(2215, 6629))), ["unspent"]);
     // Early game the bar is lower.
     let early = UnspentSoulsRule::new(RulesConfig::default());
     assert_eq!(keys(&early.evaluate(&field(450, 1700))), ["unspent"]);
@@ -218,7 +223,7 @@ fn shopping_at_low_health_then_walking_out_gets_a_heal_call_once() {
     let mut after = at(alive(), 2294); after.souls = Some(250); after.hp = Some(1380);
     let cues = e.step(&after);
     assert_eq!(keys(&cues), ["active:heal"]);
-    assert_eq!(cues[0].text, "You're heading out at 46% health. Heal before your next fight: standing in base restores health fast.");
+    assert_eq!(cues[0].text, "You're heading out at 46% health. Heal in base first; it's fast.");
     speakable(&cues[0]);
     let mut said = 0;
     for t in 2296..2330 { let mut x = at(after.clone(), t); x.hp = Some(1400); said += e.step(&x).len(); }
@@ -242,7 +247,7 @@ fn unsecured_souls_near_an_enemy_or_at_low_health_say_back_off() {
     let mut s = alive(); s.unsecured_souls = Some(607); s.minimap.as_mut().unwrap().heroes = vec![track(false, 0.53, 0.6)];
     let cues = eval(&ActiveCoach::default(), &s);
     assert_eq!(keys(&cues), ["active:unsecured"]);
-    assert_eq!(cues[0].text, "You carry 607 unsecured souls with an enemy close. Don't die with them: back off until they secure.");
+    assert_eq!(cues[0].text, "You carry 607 unsecured souls with an enemy close. Back off until they secure.");
     speakable(&cues[0]);
     let mut low = alive(); low.unsecured_souls = Some(900); low.hp = Some(1200);
     assert!(eval(&ActiveCoach::default(), &low)[0].text.contains("at 40% health"));
@@ -340,7 +345,7 @@ fn a_team_fight_far_away_held_for_eight_seconds_says_rotate() {
     assert!(e.step(&fight(1505, far)).is_empty(), "not held long enough");
     let cues = e.step(&fight(1509, far));
     assert_eq!(keys(&cues), ["active:fight"]);
-    assert!(cues[0].text.starts_with("Your team is fighting 3 against 2 at"), "{}", cues[0].text);
+    assert!(cues[0].text.starts_with("We're fighting 3 on 2 at"), "{}", cues[0].text);
     speakable(&cues[0]);
     let mut said = 0; for t in 1510..1560 { said += e.step(&fight(t, far)).len(); }
     assert_eq!(said, 0, "60 s cooldown");
@@ -374,13 +379,13 @@ fn three_teammates_dead_says_hold_in_base_and_again_when_you_walk_out() {
     let mut s = in_base(at(alive(), 2494)); s.hero_status = allies_dead(&[Some(11), Some(79), Some(77)]);
     let c = e.step(&s);
     assert_eq!(keys(&c), ["active:hold_base"]);
-    assert_eq!(c[0].text, "Three teammates are dead, the next back in 11 seconds. Hold in base; don't walk out alone.");
+    assert_eq!(c[0].text, "Hold in base: three teammates are dead, the next back in 11 seconds. Don't walk out alone.");
     assert_eq!(c[0].priority, Priority::High); speakable(&c[0]);
     let mut s2 = in_base(at(alive(), 2500)); s2.hero_status = allies_dead(&[Some(5), Some(73), Some(71)]);
     assert!(e.step(&s2).is_empty(), "said once while in base");
     let mut out = walked_out(at(alive(), 2506)); out.hero_status = allies_dead(&[Some(86), Some(63), Some(61)]);
     let c = e.step(&out);
-    assert_eq!(c[0].text, "Three teammates are dead, the next back in 61 seconds. Go back to base; don't walk out alone.");
+    assert_eq!(c[0].text, "Go back to base: three teammates are dead, the next back in 61 seconds. Don't walk out alone.");
     let mut later = walked_out(at(alive(), 2540)); later.hero_status = allies_dead(&[Some(52), Some(29), Some(27)]);
     assert!(e.step(&later).is_empty(), "once per walk out");
     // Two dead, or the third back in a few seconds: no hold call.
@@ -393,7 +398,7 @@ fn teammates_about_to_respawn_say_wait_for_them() {
     let mut s = in_base(at(alive(), 2891)); s.hero_status = allies_dead(&[Some(4), Some(5)]);
     let c = eval(&ActiveCoach::default(), &s);
     assert_eq!(keys(&c), ["active:hold_base"]);
-    assert_eq!(c[0].text, "Two teammates respawn within 5 seconds. Wait for them and walk out together."); speakable(&c[0]);
+    assert_eq!(c[0].text, "Wait for them: two teammates respawn within 5 seconds. Walk out together."); speakable(&c[0]);
     // An unread timer is not "about to respawn".
     s.hero_status = allies_dead(&[Some(4), None]);
     assert!(eval(&ActiveCoach::default(), &s).is_empty());
@@ -411,7 +416,8 @@ fn two_teammates_dying_far_away_is_a_lost_fight_not_a_rotation() {
     assert!(e.step(&farm(2086, &[Some(67)])).is_empty(), "one death is not a lost fight");
     let c = e.step(&farm(2090, &[Some(63), Some(73)]));
     assert_eq!(keys(&c), ["active:team_losing"]);
-    assert_eq!(c[0].text, "Your team is losing a fight at the Yellow side jungle: two teammates died in 4 seconds. Don't go in alone: regroup or back off.");
+    // A teammate died seconds ago: fight mode, the call is cut to its first sentence.
+    assert_eq!(c[0].text, "Don't go in alone.");
     speakable(&c[0]);
     assert!(e.step(&farm(2094, &[Some(59), Some(69)])).is_empty(), "said once");
     // Next to the fight: the review's fight-lost call owns it.
@@ -441,10 +447,10 @@ fn your_base_under_attack_says_go_defend() {
     let m = s.minimap.as_mut().unwrap(); m.you = Some(Pt { x: 0.69, y: 0.26 }); m.heroes = vec![track(false, 0.47, 0.82), track(false, 0.5, 0.8)];
     let c = eval(&ActiveCoach::default(), &s);
     assert_eq!(keys(&c), ["active:base_attack"]);
-    assert_eq!(c[0].text, "Your base is under attack: two enemies are inside it. Go defend now."); speakable(&c[0]);
+    assert_eq!(c[0].text, "Go defend our base: two enemies are inside it."); speakable(&c[0]);
     // The structure banner, when the screen reader provides it.
     let mut b = at(alive(), 2900); b.objective_banner = Some(coach_core::ObjectiveBanner { name: "HIDDEN KING".into(), own: Some(true), health_ratio: Some(0.6) });
-    assert_eq!(eval(&ActiveCoach::default(), &b)[0].text, "Your Patron is under attack. Go defend it now.");
+    assert_eq!(eval(&ActiveCoach::default(), &b)[0].text, "Go defend our Patron: it's under attack.");
     b.objective_banner.as_mut().unwrap().own = Some(false);
     assert!(eval(&ActiveCoach::default(), &b).is_empty(), "their structure");
     // You are defending already, or one enemy only: nothing.
@@ -511,6 +517,7 @@ fn default_rules_put_the_debuff_call_first() {
     // The generic back-off does not repeat it a second later; the critical call still can.
     let mut next = at(s.clone(), 1501); next.status_effects.clear(); next.hp = Some(1300);
     assert!(!keys(&e.step(&next)).contains(&"lane:back_off".to_string()));
-    let mut critical = at(next, 1503); critical.hp = Some(300);
+    // In a fight the next call waits 3 s (critical) / 15 s (anything else).
+    let mut critical = at(next, 1507); critical.hp = Some(300);
     assert_eq!(keys(&e.step(&critical)), ["lane:critical"]);
 }

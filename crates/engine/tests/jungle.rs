@@ -54,7 +54,7 @@ fn invade_only_when_the_opposing_heroes_are_accounted_for() {
     assert_eq!(j.assess(&pushed(["unseen", "seen", "seen", "seen", "seen", "seen"])).unwrap().id, "invade");
     // Missing enemies may be in that jungle: farm your own side instead.
     let u = j.assess(&pushed(["unseen", "unseen", "seen", "seen", "seen", "seen"])).unwrap();
-    assert_eq!(u.id, "invade_unsafe"); assert!(u.text.contains("2 enemies are unaccounted for") && u.text.contains("own side"), "{}", u.text);
+    assert_eq!(u.id, "invade_unsafe"); assert!(u.text.contains("2 enemies are unaccounted for") && u.text.contains("our side"), "{}", u.text);
 }
 
 #[test]

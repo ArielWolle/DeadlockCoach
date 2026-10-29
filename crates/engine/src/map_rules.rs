@@ -24,14 +24,14 @@ impl Rule for MapRule {
         if clock >= 600 {
             match map.urn {
                 Some(UrnState::CarriedByEnemy) => out.push(cue("map:urn-enemy".into(),
-                    format!("The urn appears to be moving with an enemy on {side}. Group up before contesting the delivery."),
-                    Priority::High, 45)),
+                    format!("Their courier has the urn on {side}. Group up before we contest it."),
+                    Priority::Normal, 45)),
                 Some(UrnState::CarriedByYou) => out.push(cue("map:urn-you".into(),
-                    "You are carrying the urn. Head for delivery and avoid isolated fights.".into(), Priority::High, 60)),
+                    "You have the urn. Walk it in, away from fights.".into(), Priority::Normal, 60)),
                 Some(UrnState::CarriedByAlly) => out.push(cue("map:urn-ally".into(),
-                    format!("The urn appears to be moving with an ally on {side}. Help escort them if you are nearby."), Priority::Normal, 90)),
+                    format!("Our courier has the urn on {side}. Escort them if you are close."), Priority::Normal, 90)),
                 Some(UrnState::Ground) => out.push(cue("map:urn-ground".into(),
-                    format!("The urn marker is at the {side} bridge. Check enemy positions before picking it up."), Priority::Low, 120)),
+                    format!("The urn is at the {side} bridge. Check who is missing before you grab it."), Priority::Low, 120)),
                 _ => {}
             }
         }
@@ -49,26 +49,27 @@ impl Rule for MapRule {
                 && state.enemy_progress.is_some_and(|p| p < 0.38) {
                 urgent = true;
                 out.push(cue(format!("map:wave:{l:?}"),
-                    format!("Enemy troopers are deep in {} lane. Catch that wave before taking jungle camps.", name(l)),
-                    Priority::High, 60));
+                    // Lane income, never a safety call (rec13 spoke it at High in late-game sieges).
+                    format!("{} wave is deep on our side. Catch it before you take camps.", name(l)),
+                    Priority::Low, 60));
             }
         }
         let pushed = lanes.iter().filter(|l| map.lane(**l).push.is_some_and(|p| p > 0.65)).count();
         let no_bad_lane = lanes.iter().all(|l| map.lane(*l).push.is_some_and(|p| p >= 0.35));
         if !urgent && !poor_health && pushed >= 2 && no_bad_lane && clock >= 300 && crate::laning::focus(snap).is_none() {
             out.push(cue("map:farm-window".into(),
-                "Two lanes look pushed. There may be time for nearby camps before the next wave. Watch missing enemies.".into(),
+                "Two lanes are pushed. Time for a nearby camp; watch who is missing.".into(),
                 Priority::Low, 150));
         }
         // The Midboss is up from 0:00, so "it is lit" is news only once, and again when it returns
         // after a kill (the tracker confirms a 20 s absence, then a sighting).
         if map.midboss_up && map.midboss_back_ms.is_some_and(|ms| ms <= 30_000) && !urgent {
             out.push(cue("map:midboss-back".into(),
-                "The Midboss is back on the map. Push your lanes and gather teammates before considering it.".into(),
+                "Midboss is back. Push your lanes first, then we group for it.".into(),
                 Priority::Normal, 120));
         } else if map.midboss_up && map.midboss_back_ms.is_none() && clock >= 600 && !urgent && !poor_health && no_bad_lane {
             out.push(cue("map:midboss".into(),
-                "The Midboss icon is lit. Push your lanes and gather teammates before considering it.".into(),
+                "Midboss is up. Push your lanes first, then we group for it.".into(),
                 Priority::Low, 36_000));
         }
         out
@@ -110,7 +111,7 @@ mod tests {
     fn enemy_urn_overrides_farming_priority_and_unknown_possession_is_silent() {
         let mut s = snap(); let m = s.minimap.as_mut().unwrap();
         m.urn = Some(UrnState::CarriedByEnemy); m.urn_pos = Some(Pt { x: 0.8, y: 0.4 });
-        let c = MapRule.evaluate(&s); assert_eq!(c[0].priority, Priority::High);
+        let c = MapRule.evaluate(&s); assert_eq!(c[0].key, "map:urn-enemy");
         assert!(c[0].text.contains("Yellow side"));
         s.minimap.as_mut().unwrap().urn = Some(UrnState::Visible);
         assert!(MapRule.evaluate(&s).is_empty());

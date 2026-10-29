@@ -408,12 +408,12 @@ impl Rule for ActiveCoach {
                 if long.len() >= t.hold_dead && (in_base == Some(true) && st.hold_said & 1 == 0 || walked_out && st.hold_said & 2 == 0) {
                     st.hold_offer = if in_base == Some(true) { 1 } else { 3 };
                     let (action, key) = if in_base == Some(true) { ("Hold in base", "active:hold_base") } else { ("Go back to base", "active:hold_base:out") };
-                    out.push(self.cue("hold_base", key.into(), &[("count", count_word(long.len())), ("next", next), ("action", action.into())]));
+                    out.push(self.cue("hold_base", key.into(), &[("count", count_word(long.len()).to_lowercase()), ("next", next), ("action", action.into())]));
                 } else if in_base == Some(true) && st.hold_said == 0 && p.allies_dead.len() >= 2
                     && p.allies_dead.iter().all(|r| r.is_some_and(|r| (3..=t.hold_soon_secs).contains(&r))) {
                     st.hold_offer = 1;
                     let max = p.allies_dead.iter().flatten().max().copied().unwrap_or(0);
-                    out.push(self.cue("wait_respawn", "active:hold_base".into(), &[("count", count_word(p.allies_dead.len())), ("secs", max.to_string())]));
+                    out.push(self.cue("wait_respawn", "active:hold_base".into(), &[("count", count_word(p.allies_dead.len()).to_lowercase()), ("secs", max.to_string())]));
                 }
             }
             // --- Teammates dying in a fight away from you (rec8 34:46-34:52: two died at the
