@@ -68,6 +68,8 @@ export interface Settings {
   aiKey: string; aiInterval: number; aiMaxTokens: number; aiSpeak: boolean; aiHeaders: string;
   /** Model reasoning ("thinking") budget: 'off', 'low' (default) or the model's own 'default'. */
   aiReasoning: 'off' | 'low' | 'default';
+  /** End-of-game AI review (ai-review.ts): one longer review when a match ends, if the AI coach is on. Default on. */
+  aiReview: boolean;
   /** Player profile (player-profile.ts): learn from matches and speak one focus reminder. Local only. */
   playerProfile:boolean;
 }

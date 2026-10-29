@@ -8,6 +8,8 @@ export const defaults: Settings = {
   crop: { x: 0, y: 0, w: 1, h: 1 },
   // Optional AI coach: off by default.
   aiEnabled: false, aiProvider: 'openai', aiBaseUrl: '', aiModel: '', aiKey: '', aiInterval: 90, aiMaxTokens: 1024, aiSpeak: true, aiHeaders: '', aiReasoning: 'low',
+  // End-of-game review (ai-review.ts): on by default, used only when the AI coach is enabled.
+  aiReview: true,
 };
 const number = (n: unknown, lo: number, hi: number, fallback: number) => typeof n === 'number' && Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : fallback;
 export function normalize(input: unknown): Settings {
@@ -30,6 +32,7 @@ export function normalize(input: unknown): Settings {
   // 40 s was the old default and made the coach chatty (rec11: 48 AI tips in 29 min on top of the
   // rule calls). A saved 40 is moved to the new 90 s default; event triggers fill the gaps.
   s.aiInterval = value.aiInterval === 40 ? defaults.aiInterval : Math.round(number(value.aiInterval, 15, 600, defaults.aiInterval));
+  s.aiReview = value.aiReview !== false; // end-of-game review
   s.aiReasoning = value.aiReasoning === 'off' || value.aiReasoning === 'default' ? value.aiReasoning : 'low';
   // 200 was the old default and cut replies off (OpenRouter + Claude Haiku stopped mid-JSON): saved
   // values below 512 are raised to the new default. Still editable in Settings (512-8192).
