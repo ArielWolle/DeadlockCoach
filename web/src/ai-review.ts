@@ -38,6 +38,8 @@ export type TimelineArea = 'lane' | 'jungle' | 'base' | 'enemy_base' | 'dead' | 
 export interface TimelinePoint {
   t: number | null; wall: number | null; area: TimelineArea; hp: number | null; souls: number | null; nw: number | null; allyNw: number | null; enemyNw: number | null;
   enemiesDead: number | null; midboss: boolean | null; urn: string | null; banner: { name: string; own: boolean | null; hp: number | null } | null; effects: string[] | null;
+  /** The zone label under the minimap says the enemy base (also when your marker is read). */
+  enemyBase?: boolean;
 }
 export interface DeathPanel { t: number; rows: Array<{ source: string; damage: number }>; killingBlow: string | null; total: number | null; effectsBefore: string[] }
 export interface FightEpisode { t: number; status: 'joined' | 'missed' | 'dead' }
@@ -83,7 +85,8 @@ export class MatchTimeline {
       enemiesDead: team ? team.filter(h => !h.ally && h.dead === true).length : null,
       midboss: typeof map?.midboss_up === 'boolean' ? map.midboss_up : null, urn: map?.urn ?? null,
       banner: b && typeof b.name === 'string' ? { name: b.name.slice(0, 30), own: typeof b.own === 'boolean' ? b.own : null, hp: finite(b.health_ratio) ? b.health_ratio : null } : null,
-      effects: Array.isArray(s.status_effects) && s.status_effects.length ? s.status_effects.filter(e => typeof e === 'string').slice(0, 6) : null };
+      effects: Array.isArray(s.status_effects) && s.status_effects.length ? s.status_effects.filter(e => typeof e === 'string').slice(0, 6) : null,
+      ...(map?.zone_area === 'EnemyBase' && !dead ? { enemyBase: true } : {}) };
     this.d.points.push(p);
     if (this.d.points.length > MAX_POINTS) this.d.points.splice(0, this.d.points.length - MAX_POINTS);
     for (const [ids, votes] of [[s.enemy_heroes, this.d.enemies], [s.ally_heroes, this.d.allies]] as const)
@@ -230,7 +233,9 @@ export interface DigestInput {
   /** Rule-coach texts from the live cue log (death reviews, pattern summaries) when the timeline did not see them. */
   cues?: ReviewCueText[];
 }
-export interface Digest { text: string; chars: number; hero: string | null; heroName: string; result: string; minutes: number; deaths: number; comparisons: Comparison[]; key: string }
+export interface Digest { text: string; chars: number; hero: string | null; heroName: string; result: string; minutes: number; deaths: number; comparisons: Comparison[]; key: string;
+  /** What went well (the STRENGTHS section) and whether the match reads as a good game. */
+  strengths: Strength[]; goodGame: boolean }
 const defaultName = (id: string) => new PlayerProfileModel().heroName(id);
 interface Section { title: string; lines: string[]; keep: number }
 
@@ -293,6 +298,102 @@ function runs<T>(points: TimelinePoint[], f: (p: TimelinePoint) => T | null, min
   return out.filter(r => r.n >= minPts);
 }
 
+/** A strength of the match with its evidence (and its measurable effect when there is one). */
+export interface Strength { id: string; text: string }
+/** What went well, from the same signals the live coach reinforces (ai-coach.ts GoodPlay) plus
+ *  the whole-match facts: K/D/A, time dead, deathless stretches, enemy-dead windows used to push,
+ *  the urn delivered, death-screen shopping, the team souls lead, Patron pressure, low-health
+ *  resets, fights joined and the metrics that improved on earlier matches. Observed facts only. */
+export function strengthsOf(match: EndedMatch, comparisons: Comparison[] = []): Strength[] {
+  const rec = match.record, pts = match.timeline.points, out: Strength[] = [];
+  const span = spanOf(rec), dead = deadOf(rec), deadPct = span > 0 ? dead / span : null;
+  const first = pts.find(p => p.t != null)?.t ?? rec.startClock ?? null, end = rec.endClock ?? [...pts].reverse().find(p => p.t != null)?.t ?? null;
+  const kda = match.timeline.kda;
+  if (kda?.kills != null && kda.deaths != null && kda.assists != null) {
+    const ratio = (kda.kills + kda.assists) / Math.max(1, kda.deaths);
+    if (ratio >= 3) out.push({ id: 'kda', text: `K/D/A ${kda.kills}/${kda.deaths}/${kda.assists}: ${kda.kills + kda.assists} kills and assists for ${kda.deaths} death${kda.deaths === 1 ? '' : 's'} (ratio ${ratio.toFixed(1)}): big fight impact while handing the enemy few kill bounties.` });
+  }
+  const deadCmp = comparisons.find(c => c.id === 'dead');
+  if (deadPct != null && span >= 600 && (deadPct <= 0.12 || deadCmp?.verdict === 'improved'))
+    out.push({ id: 'dead', text: `Dead only ${pct(dead, span)}% of the game (${Math.round(dead)} s of ${Math.round(span)} s, ${rec.deaths.length} death${rec.deaths.length === 1 ? '' : 's'})${deadCmp?.before ? `, against ${deadCmp.before}` : ''}: more time on the map for farm, waves and fights.` });
+  // Deathless stretches of 5+ minutes (first frame → death, respawn → death, respawn → end).
+  if (first != null && end != null) {
+    const runs: Array<[number, number]> = []; let from = first;
+    for (const d of rec.deaths) { if (d.clock - from >= 300) runs.push([from, d.clock]); from = d.clock + (d.deadSecs ?? 20); }
+    if (end - from >= 300) runs.push([from, end]);
+    if (runs.length) out.push({ id: 'deathless', text: `Deathless stretches: ${runs.map(([a, b]) => `${clockText(a)}-${clockText(b)} (${Math.round((b - a) / 6) / 10} min)`).join(', ')}.` });
+  }
+  // Enemy-dead windows used to push: 2+ enemies dead while you were alive in the enemy base or at an enemy objective.
+  {
+    const pushes: string[] = []; let i = 0, lastPush = -Infinity;
+    while (i < pts.length) {
+      if ((pts[i].enemiesDead ?? 0) < 2 || pts[i].t == null) { i++; continue; }
+      let j = i, max = 0, at: TimelinePoint | null = null;
+      while (j < pts.length && ((pts[j].enemiesDead ?? 2) >= 2 || pts[j].enemiesDead == null && j - i < 3)) {
+        const p = pts[j]; max = Math.max(max, p.enemiesDead ?? 0);
+        if (!at && p.area !== 'dead' && (p.enemyBase || p.area === 'enemy_base' || p.banner?.own === false)) at = p;
+        j++;
+      }
+      if (at?.t != null && at.t - lastPush >= 60) {
+        lastPush = at.t;
+        const before = [...pts.slice(0, i + 1)].reverse().find(p => p.allyNw != null && p.enemyNw != null);
+        const after = pts.slice(j).find(p => p.allyNw != null && p.enemyNw != null && p.t != null && p.t >= (pts[j - 1].t ?? 0));
+        const gain = before && after ? (after.allyNw! - after.enemyNw!) - (before.allyNw! - before.enemyNw!) : null;
+        const label = `${clockText(at.t)} (${max} enemies dead${at.banner?.own === false ? `, ${at.banner.name} under attack` : ', you in the enemy base'})${gain != null && gain >= 1000 ? `, team souls lead +${k(gain)} across the window` : ''}`;
+        pushes.push(label);
+      }
+      i = Math.max(j, i + 1);
+    }
+    if (pushes.length) out.push({ id: 'windows', text: `Enemy-dead windows turned into pushes: ${pushes.slice(0, 5).join('; ')}: dead enemies cannot defend, so a structure or base push is free value.` });
+  }
+  // The Soul Urn delivered: carried by you, then a souls jump of 1,000+ within 25 s.
+  {
+    const delivered: string[] = [];
+    for (let i = 0; i + 1 < pts.length; i++) {
+      if (pts[i].urn !== 'CarriedByYou' || pts[i + 1].urn === 'CarriedByYou' || pts[i].t == null) continue;
+      const base = pts[i].souls; if (base == null) continue;
+      const jump = pts.slice(i + 1).filter(p => p.t != null && p.t - pts[i].t! <= 25 && p.souls != null && p.area !== 'dead').map(p => p.souls! - base);
+      const best = jump.length ? Math.max(...jump) : 0;
+      if (best >= 1000) delivered.push(`${clockText(pts[i].t)} (+${grouped(best)} souls)`);
+    }
+    if (delivered.length) out.push({ id: 'urn', text: `Delivered the Soul Urn: ${delivered.join(', ')}: team souls and a secured objective.` });
+  }
+  // Shopping on the death screen (souls at death vs the first read after respawning).
+  {
+    const shops: string[] = [];
+    for (const d of rec.deaths) {
+      const deadPts = pts.filter(p => p.t != null && p.t >= d.clock - 2 && p.t <= d.clock + (d.deadSecs ?? 30) + 5);
+      const peak = Math.max(d.souls ?? 0, ...pts.filter(p => p.t != null && p.t <= d.clock && p.t >= d.clock - 10 && p.souls != null).map(p => p.souls!), ...deadPts.filter(p => p.area === 'dead' && p.souls != null).slice(0, 2).map(p => p.souls!));
+      const afterRespawn = pts.find(p => p.t != null && p.t > d.clock + 3 && p.area !== 'dead' && p.area !== 'unknown' && p.area !== 'shop' && p.souls != null);
+      const low = Math.min(...deadPts.filter(p => p.souls != null).map(p => p.souls!), afterRespawn?.souls ?? Infinity);
+      const spent = Number.isFinite(low) ? peak - low : 0;
+      if (spent >= Math.max(800, deathSpend(d.clock)) && afterRespawn?.souls != null && afterRespawn.souls <= peak - Math.max(800, deathSpend(d.clock)) + 400)
+        shops.push(`after the ${clockText(d.clock)} death about ${k(Math.round(spent / 100) * 100)} spent`);
+    }
+    if (shops.length) out.push({ id: 'shop', text: `Spent on the death screen: ${shops.join('; ')}: you walked back out stronger instead of carrying the souls.` });
+  }
+  // Team souls lead: since when it stayed positive, its peak and the last read.
+  {
+    const nw = pts.filter(p => p.t != null && p.allyNw != null && p.enemyNw != null).map(p => ({ t: p.t!, d: p.allyNw! - p.enemyNw! }));
+    if (nw.length >= 10 && nw.at(-1)!.d > 0) {
+      let since = nw.length - 1; while (since > 0 && nw[since - 1].d > 0) since--;
+      const peak = nw.slice(since).reduce((a, b) => b.d > a.d ? b : a);
+      if (nw.at(-1)!.t - nw[since].t >= 300) out.push({ id: 'lead', text: `Team souls lead from ${clockText(nw[since].t)} to the end: +${k(nw[since].d)} then, ${peak.d - nw.at(-1)!.d >= 1000 ? `peak +${k(peak.d)} at ${clockText(peak.t)}, ` : ''}+${k(nw.at(-1)!.d)} at the last read ${clockText(nw.at(-1)!.t)}: the team kept converting its fights into souls.` });
+    }
+  }
+  // Pressure on the enemy Patron.
+  {
+    const patron = pts.filter(p => p.banner && p.banner.own === false && /king|mother|patron/i.test(p.banner.name) && p.t != null);
+    if (patron.length >= 2) out.push({ id: 'patron', text: `Pressure on the enemy Patron (${patron[0].banner!.name}) ${clockText(patron[0].t)}-${clockText(patron.at(-1)!.t)}: the game-ending objective.` });
+  }
+  if (rec.lowHp.episodes >= 2 && rec.lowHp.survived >= rec.lowHp.died * 2 && rec.lowHp.survived >= 2)
+    out.push({ id: 'lowhp', text: `Survived ${rec.lowHp.survived} of ${rec.lowHp.episodes} moments under 30% health: you got out and reset instead of dying.` });
+  if (rec.fights.joined >= 1 && rec.fights.missed === 0) out.push({ id: 'fights', text: `Joined every team fight observed (${rec.fights.joined}, none missed).` });
+  const improved = comparisons.filter(c => c.verdict === 'improved' && c.before && !['dead', 'close'].includes(c.id));
+  if (improved.length) out.push({ id: 'improved', text: `Better than your earlier matches: ${improved.map(c => `${c.label.toLowerCase()} ${c.now.replace(/ \(.*\)$/, '')} vs ${c.before!.replace(/ over .*/, '')}`).join('; ')}.` });
+  return out;
+}
+
 export function buildDigest(input: DigestInput, maxChars = DIGEST_MAX_CHARS): Digest {
   const { match } = input; const rec = match.record; const tl = match.timeline; const pts = tl.points;
   const name = input.name || defaultName;
@@ -311,6 +412,15 @@ export function buildDigest(input: DigestInput, maxChars = DIGEST_MAX_CHARS): Di
   const allies = topHeroes(tl.allies), enemies = topHeroes(tl.enemies);
   if (allies.length || enemies.length) head.push(`Allies: ${allies.map(name).join(', ') || '?'}. Enemies: ${enemies.map(name).join(', ') || '?'}.`);
   secs.push({ title: 'MATCH', lines: head, keep: 99 });
+
+  // Strengths first: the review leads with what went well and why it worked.
+  const previous = (input.previous || []).filter(m => !sameMatch(m, rec));
+  const comparisons = compare(rec, previous);
+  const strengths = strengthsOf(match, comparisons);
+  const goodGame = /win/.test(res.short) || (span >= 600 && deadS / span <= 0.12 && rec.deaths.length <= 3);
+  secs.push({ title: `STRENGTHS (${strengths.length}: what went well, with evidence)`, keep: 99, lines: strengths.length
+    ? [...strengths.map((s, i) => `- ${s.text}`), ...(goodGame ? [`Verdict: a good game (${res.short === 'unknown' ? `dead ${pct(deadS, span)}%, ${rec.deaths.length} deaths` : res.short}). Lead with these strengths and why each worked; give at least as many went_well items as improvements.`] : [])]
+    : ['No clear strength observed: do not invent praise.'] });
 
   // Economy
   const eco: string[] = [];
@@ -421,8 +531,6 @@ export function buildDigest(input: DigestInput, maxChars = DIGEST_MAX_CHARS): Di
   if (dedup.length) secs.push({ title: 'RULE COACH PATTERN CALLS', lines: dedup.slice(-8), keep: 2 });
 
   // Comparison
-  const previous = (input.previous || []).filter(m => !sameMatch(m, rec));
-  const comparisons = compare(rec, previous);
   const recordClose = rec.deaths.filter(d => d.close === true).length, closeUnclear = closeDeaths !== recordClose;
   const cmp: string[] = [];
   if (!previous.length) cmp.push('No earlier matches in the profile: nothing to compare.');
@@ -468,35 +576,39 @@ export function buildDigest(input: DigestInput, maxChars = DIGEST_MAX_CHARS): Di
   for (const s of order) { while (text.length > maxChars && s.lines.length > Math.min(s.keep, s.lines.length) ) { s.lines.pop(); text = render(); } }
   for (const s of order) { while (text.length > maxChars && s.lines.length > 1) { s.lines.pop(); text = render(); } }
   if (text.length > maxChars) text = text.slice(0, maxChars - 1) + '…';
-  return { text, chars: text.length, hero: rec.hero, heroName, result: res.short, minutes: Math.round(span / 6) / 10, deaths: rec.deaths.length, comparisons, key: reviewKey(rec) };
+  return { text, chars: text.length, hero: rec.hero, heroName, result: res.short, minutes: Math.round(span / 6) / 10, deaths: rec.deaths.length, comparisons, key: reviewKey(rec), strengths, goodGame };
 }
 
 // ---------------------------------------------------------------------------------------------
 // Prompt
 // ---------------------------------------------------------------------------------------------
-export const REVIEW_SYSTEM_PROMPT = `You are an elite Deadlock coach (Valve's 6v6 hero-shooter MOBA: three lanes with Guardians, Walkers, Shrines and the Patron; souls economy and item tiers of 800 / 1,600 / 3,200 / 6,400; jungle camps; the Midboss and its Rejuvenator; the Soul Urn; respawn timers that grow with game time). The player just finished a match and wants an honest, high-level review of how to improve overall, and what they did well.
+export const REVIEW_SYSTEM_PROMPT = `You are an elite Deadlock coach (Valve's 6v6 hero-shooter MOBA: three lanes with Guardians, Walkers, Shrines and the Patron; souls economy and item tiers of 800 / 1,600 / 3,200 / 6,400; jungle camps; the Midboss and its Rejuvenator; the Soul Urn; respawn timers that grow with game time). The player just finished a match and wants an honest, high-level review: what they did well and why it worked, and how to improve overall.
 
 You get a MATCH DIGEST read from the screen by an automatic coach, not a video. Rules:
 - Use only facts in the digest. Cite game-clock timestamps (m:ss) as evidence. Never invent kills, items, abilities, teammates' actions or events. Values marked "?" or "not read" are unknown: say so instead of guessing.
+- Lead with what went well (STRENGTHS, and "improved" lines in COMPARED WITH EARLIER MATCHES). For each strength say WHY it worked: the cause and its effect on the team's result (the shape, not this match: "you pushed into their base while five were dead, and the souls lead grew right after: dead enemies cannot defend, so that push was free"). Reinforcing the habits that won the game is as important as fixing mistakes.
+- Balance: after a good game (the digest's Verdict line, a win, or few deaths) give at least as many went_well items as improvements. Never invent praise: if STRENGTHS says none, say so honestly.
 - Rank improvements by impact on winning: deaths and time dead first (every death is souls and map time for the enemy), then souls spending, then fight and objective presence (enemy-dead windows, Walkers, Midboss, Urn), then map and wave habits.
 - Be specific to Deadlock and to the player's hero and the enemy heroes named in the digest. Prefer concrete habits ("after a respawn, walk out with the next teammate or catch the closest safe wave") over generic advice ("play safer").
-- Praise real progress: when the comparison with earlier matches says improved, say what improved and by how much. Do not invent praise.
+- Praise real progress: when the comparison with earlier matches says improved, say what improved and by how much.
 - Speak to the player as "you", direct and warm, like a coach after a game.
 
 Reply with one JSON object only (no markdown, no code fences):
-{"summary": "2-3 sentences: the verdict on this match",
- "went_well": ["specific thing done well, with its evidence"],
+{"summary": "2-3 sentences: the verdict on this match, opening with what went well when it did",
+ "went_well": ["what you did, with its evidence and timestamps, then why it worked: its effect on the team's result"],
  "improvements": [{"title": "short habit to fix", "evidence": "what happened, with timestamps", "why_it_matters": "the cost in Deadlock terms", "how_to_practice": "a concrete drill or rule for the next games"}],
+ "keep_doing": ["a habit from this match to repeat every game"],
  "next_game_focus": "one sentence: the single thing to focus on next game",
  "hero_tips": ["tip for this hero in situations like the ones in the digest"],
  "spoken": "180-300 words of natural speech for text-to-speech"}
-improvements: the top 3 by impact, most important first. went_well: 2-4 items. hero_tips: 1-3 items.
-"spoken": plain sentences only, no lists, no markdown, no symbols or abbreviations like K/D/A; say times as "around fifteen minutes in" or "at 15:20"; round numbers; open with the verdict, then what went well, then the top fixes with one reason each, and end with the next-game focus.`;
+went_well: 2-5 items, strongest first. improvements: 1-3 by impact, most important first (after a good game, no more than went_well). keep_doing: 1-3 items. hero_tips: 1-3 items.
+"spoken": plain sentences only, no lists, no markdown, no symbols or abbreviations like K/D/A; say times as "around fifteen minutes in" or "at 15:20"; round numbers. When the game went well, open with genuine, specific praise (what you did and why it mattered), never a generic "good game"; then the top fixes with one reason each; end with what to keep doing and the next-game focus.`;
 
 export interface ReviewPrompt { system: string; user: string; chars: number; maxTokens: number }
 export function buildReviewPrompt(digest: Digest | string, aiMaxTokens = 1024): ReviewPrompt {
   const text = typeof digest === 'string' ? digest : digest.text;
-  const user = ['Review this match for the player.', '', text, '', 'Reply with the JSON object only.'].join('\n');
+  const good = typeof digest !== 'string' && digest.goodGame;
+  const user = [good ? 'Review this match for the player. It went well: open with the strengths and why they worked, then the fixes, then what to keep doing and the next focus.' : 'Review this match for the player: what went well and why, the fixes by impact, what to keep doing and the next focus.', '', text, '', 'Reply with the JSON object only.'].join('\n');
   return { system: REVIEW_SYSTEM_PROMPT, user, chars: REVIEW_SYSTEM_PROMPT.length + user.length, maxTokens: reviewMaxTokens(aiMaxTokens) };
 }
 
@@ -504,7 +616,9 @@ export function buildReviewPrompt(digest: Digest | string, aiMaxTokens = 1024): 
 // Reply parsing (fenced, prefixed, or cut off)
 // ---------------------------------------------------------------------------------------------
 export interface Improvement { title: string; evidence: string; why_it_matters: string; how_to_practice: string }
-export interface ReviewContent { summary: string; went_well: string[]; improvements: Improvement[]; next_game_focus: string; hero_tips: string[]; spoken: string; partial?: boolean }
+export interface ReviewContent { summary: string; went_well: string[]; improvements: Improvement[];
+  /** Habits from this match to repeat (older stored reviews have none). */
+  keep_doing: string[]; next_game_focus: string; hero_tips: string[]; spoken: string; partial?: boolean }
 export type ReviewParse = { ok: true; review: ReviewContent } | { ok: false; error: string };
 
 /** Close an unfinished JSON text: open string, dangling key / comma, open brackets. */
@@ -570,9 +684,9 @@ export function parseReview(raw: string): ReviewParse {
     const o = x && typeof x === 'object' ? x as Record<string, unknown> : {};
     return { title: str(o.title, 160), evidence: str(o.evidence), why_it_matters: str(o.why_it_matters ?? o.why), how_to_practice: str(o.how_to_practice ?? o.practice ?? o.how) };
   }).filter(i => i.title || i.evidence);
-  const r: ReviewContent = { summary: str(obj.summary, 900), went_well: strs(obj.went_well, 6), improvements, next_game_focus: str(obj.next_game_focus ?? obj.focus, 300),
+  const r: ReviewContent = { summary: str(obj.summary, 900), went_well: strs(obj.went_well, 6), improvements, keep_doing: strs(obj.keep_doing ?? obj.keep, 4, 300), next_game_focus: str(obj.next_game_focus ?? obj.focus, 300),
     hero_tips: strs(obj.hero_tips, 4), spoken: speakable(typeof obj.spoken === 'string' ? obj.spoken : '') };
-  if (!r.spoken) r.spoken = speakable([r.summary, r.went_well.length ? `What went well: ${r.went_well.join('. ')}.` : '', ...r.improvements.map((i, n) => `${['First', 'Second', 'Third'][n]}, ${i.title}. ${i.how_to_practice}`), r.next_game_focus ? `Next game: ${r.next_game_focus}` : ''].filter(Boolean).join(' '));
+  if (!r.spoken) r.spoken = speakable([r.summary, r.went_well.length ? `What went well: ${r.went_well.join('. ')}.` : '', ...r.improvements.map((i, n) => `${['First', 'Second', 'Third'][n]}, ${i.title}. ${i.how_to_practice}`), r.keep_doing.length ? `Keep doing this: ${r.keep_doing.join('. ')}.` : '', r.next_game_focus ? `Next game: ${r.next_game_focus}` : ''].filter(Boolean).join(' '));
   if (!r.summary && !r.spoken && !r.improvements.length) return { ok: false, error: 'The review JSON had no summary, improvements or spoken text.' };
   if (partial) r.partial = true;
   return { ok: true, review: r };

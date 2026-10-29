@@ -189,3 +189,41 @@ test('live coaching: periodic AI advice is spoken through the speaker, and pause
   expect(seen.length).toBe(count);
   await page.getByRole('button', { name: 'Stop', exact: true }).click();
 });
+test('reinforcement and this match\'s killers reach the prompt: GOOD PLAYS after an enemy-dead push, damage by hero from abilities.json', async ({ page }) => {
+  await page.addInitScript(s => localStorage.setItem('deadlock-coach-settings-v1', JSON.stringify(s)), settings('openai'));
+  const PRAISE = 'Good push while five were dead: that is how a lead snowballs. Back off before they respawn.';
+  const seen = await mockGateway(page, 'gateway.test', () => ({ choices: [{ message: { content: JSON.stringify({ speak: PRAISE, priority: 'Normal', why: 'GOOD PLAYS', focus: 'reinforce' }) } }] }));
+  const enemies = ['hero_astro', 'hero_inferno', 'hero_atlas', 'hero_drifter', 'hero_gigawatt', 'hero_werewolf'], allies = ['hero_mirage', 'hero_orion', 'hero_warden', 'hero_doorman', 'hero_nano', 'hero_haze'];
+  const team = (dead: number) => [...allies.map((hero, slot) => ({ ally: true, slot, hero, health_ratio: 1, networth_observations: 3, observations: 3, position_observations: 0 })),
+    ...enemies.map((hero, slot) => ({ ally: false, slot, hero, dead: slot < dead, networth_observations: 3, observations: 3, position_observations: 0 }))];
+  const lane = () => ({ push: .5, ally_troopers: 3, enemy_troopers: 2 });
+  const frame = (c: number, dead: number, zone: string | null, extra: Record<string, unknown> = {}) => ({ game_clock_secs: c, screen: 'Gameplay', hero: 'hero_orion', souls: 900, hp: 1600, max_hp: 1700,
+    enemy_heroes: enemies, ally_heroes: allies, hero_status: team(dead), ally_networth: 68000, enemy_networth: 51000,
+    minimap: { observations: 3, green: lane(), blue: lane(), yellow: lane(), midboss_up: true, enemies: [], allies: [], enemy_count: 0, zone_area: zone }, ...extra });
+  const frames = [frame(810, 0, 'Lane'), frame(815, 2, 'Lane'), frame(825, 5, 'Base'), frame(834, 5, 'EnemyBase'), frame(838, 4, 'EnemyBase')];
+  await page.goto('./#replay');
+  await page.locator('#replay-files').setInputFiles({ name: 'push.jsonl', mimeType: 'application/x-ndjson', buffer: Buffer.from(frames.map(f => JSON.stringify(f)).join('\n')) });
+  await page.getByRole('button', { name: 'Analyze selected files' }).click();
+  await expect(page.locator('#replay-status')).toContainText('Replay complete.', { timeout: 110000 });
+  await page.locator('[data-page="coach"]').click();
+  await page.getByRole('button', { name: 'Ask the coach now' }).click();
+  await expect(page.locator('#ai-advice')).toHaveText(PRAISE);
+  const user = JSON.parse(seen[0].body).messages[1].content as string;
+  expect(user).toContain('GOOD PLAYS (this match, observed; evidence for praise):');
+  expect(user).toMatch(/pushed into the enemy base at 13:54 while 5 enemies were dead/);
+  expect(user).toMatch(/Praise: allowed/);
+  expect(JSON.parse(seen[0].body).messages[0].content).toContain('Reinforce what works');
+  // A death on the same replay: Rend and Boot Kick are attributed to this match's Drifter and Silver.
+  const death = [...frames, frame(842, 0, 'Jungle', { souls: 2060 }), frame(846, 0, null, { screen: 'Dead', dead: true, hp: null, max_hp: null, souls: 2060, respawn_secs: 30, death_cause: 'Trooper',
+    death_damage: [{ source: 'Gun Damage', damage: 481 }, { source: 'Rend', damage: 407 }, { source: 'Boot Kick', damage: 168 }] })];
+  await page.locator('[data-page="replay"]').click();
+  await page.locator('#replay-files').setInputFiles({ name: 'death.jsonl', mimeType: 'application/x-ndjson', buffer: Buffer.from(death.map(f => JSON.stringify(f)).join('\n')) });
+  await page.getByRole('button', { name: 'Analyze selected files' }).click();
+  await expect(page.locator('#replay-status')).toContainText('Replay complete.', { timeout: 110000 });
+  await page.locator('[data-page="coach"]').click();
+  await page.getByRole('button', { name: 'Ask the coach now' }).click();
+  await expect.poll(() => seen.length).toBe(2);
+  const dead = JSON.parse(seen[1].body).messages[1].content as string;
+  expect(dead).toMatch(/Damage by hero \(ability names matched to this match's enemies\): Drifter 407 \(Rend\), Silver 168 \(Boot Kick\)/);
+  expect(dead).toContain('the panel cause "Trooper" is misleading');
+});

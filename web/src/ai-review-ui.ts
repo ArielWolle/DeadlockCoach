@@ -143,6 +143,7 @@ export function mountMatchReviews(deps: ReviewUiDeps): ReviewUi {
         }
         body.append(ol);
       }
+      body.append(list('Keep doing', v.keep_doing || []));
       if (v.next_game_focus) { const p = el('p', undefined, 'review-focus'); p.append(el('strong', 'Next game: '), v.next_game_focus); body.append(p); }
       body.append(list('Hero tips', v.hero_tips));
       if (v.partial) body.append(el('p', 'The reply was cut off; this is the part that arrived.', 'muted'));

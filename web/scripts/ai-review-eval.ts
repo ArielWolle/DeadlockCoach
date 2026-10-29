@@ -61,6 +61,12 @@ for (const [label, file, previous] of [['rec11', rec11, prev11], ['rec12', rec12
   console.log(`${label}: ${digest.heroName}, result ${digest.result}, ${digest.minutes} min observed, ${r.deaths.length} deaths at ${r.deaths.map(d => `${Math.floor(d.clock / 60)}:${String(d.clock % 60).padStart(2, '0')}`).join(' ')}, ` +
     `digest ${digest.chars} chars (deterministic: ${again.text === digest.text}), ${match.timeline.points.length} frames, ${match.timeline.cues.length} rule texts, key ${digest.key}`);
   console.log(`  vs earlier: ${digest.comparisons.map(c => `${c.id} ${c.verdict}`).join(', ')}`);
+  console.log(`  strengths ${digest.strengths.length} (${digest.strengths.map(s => s.id).join(', ') || 'none'}) · good game: ${digest.goodGame}`);
+}
+// The strengths the review must lead with (rec12: a win after a clean game).
+if (out.rec12) {
+  const s = out.rec12.digest.text.match(/\nSTRENGTHS[\s\S]*?(?=\n\n[A-Z])/)?.[0]?.trim();
+  console.log(`\n===== rec12 STRENGTHS (as sent in the digest) =====\n${s ?? '(missing)'}`);
 }
 const which = args.includes('--digest') ? args[args.indexOf('--digest') + 1] : null;
 if (which && out[which]) console.log(`\n===== ${which} DIGEST =====\n${out[which].digest.text}`);

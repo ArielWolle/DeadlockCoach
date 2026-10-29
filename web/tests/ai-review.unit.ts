@@ -75,18 +75,21 @@ test('prompt: persona, JSON contract, evidence rules; token budget', () => {
   const [m] = ended(match('hero_orion', 30, 900, [450], { postGame: true }));
   const p = buildReviewPrompt(buildDigest({ match: m }), 1024);
   assert.equal(p.system, REVIEW_SYSTEM_PROMPT); assert.match(p.system, /elite Deadlock coach/); assert.match(p.user, /MATCH DIGEST/);
-  for (const k of ['"summary"', '"went_well"', '"improvements"', '"why_it_matters"', '"how_to_practice"', '"next_game_focus"', '"hero_tips"', '"spoken"', '180-300 words']) assert.ok(p.system.includes(k), k);
+  for (const k of ['"summary"', '"went_well"', '"improvements"', '"why_it_matters"', '"how_to_practice"', '"next_game_focus"', '"hero_tips"', '"spoken"', '180-300 words', '"keep_doing"']) assert.ok(p.system.includes(k), k);
+  // Strengths first, why they worked, balance after a good game, praise in the spoken text.
+  assert.match(p.system, /Lead with what went well/); assert.match(p.system, /WHY it worked: the cause and its effect on the team's result/);
+  assert.match(p.system, /at least as many went_well items as improvements/); assert.match(p.system, /open with genuine, specific praise/); assert.match(p.system, /end with what to keep doing and the next-game focus/);
   assert.equal(reviewMaxTokens(1024), 3072); assert.equal(reviewMaxTokens(2000), 6000); assert.equal(reviewMaxTokens(4000), 8192); assert.equal(reviewMaxTokens(512), 3072);
 });
 
 const REVIEW = { summary: 'A much cleaner game: 3 deaths and 7% dead.', went_well: ['Only 3 deaths (9:48, 14:50, 22:10)'],
   improvements: [{ title: 'Respect Drifter', evidence: '14:50 and 22:10: melee and Rend', why_it_matters: 'Each death is 40+ s off the map', how_to_practice: 'Hold max range; keep a dash for Drifter' }],
-  next_game_focus: 'Spend before you walk back out.', hero_tips: ['Grey Talon: shoot from max range'], spoken: 'Great game. You died only three times. Next game, spend before you walk out.' };
+  keep_doing: ['Push when two or more enemies are dead'], next_game_focus: 'Spend before you walk back out.', hero_tips: ['Grey Talon: shoot from max range'], spoken: 'Great game. You died only three times. Next game, spend before you walk out.' };
 test('review parsing: fenced, prefixed, think blocks, cut off, not JSON', () => {
   const json = JSON.stringify(REVIEW);
   for (const raw of [json, '```json\n' + json + '\n```', `Here is your review:\n${json}\nGood luck!`, `<think>let me see {"x":1}</think>${json}`]) {
     const r = parseReview(raw); assert.ok(r.ok, raw.slice(0, 40)); if (!r.ok) continue;
-    assert.equal(r.review.summary, REVIEW.summary); assert.equal(r.review.improvements[0].how_to_practice, REVIEW.improvements[0].how_to_practice); assert.equal(r.review.partial, undefined);
+    assert.equal(r.review.summary, REVIEW.summary); assert.deepEqual(r.review.keep_doing, REVIEW.keep_doing); assert.equal(r.review.improvements[0].how_to_practice, REVIEW.improvements[0].how_to_practice); assert.equal(r.review.partial, undefined);
   }
   // Cut off inside the spoken text: everything before it survives, marked partial.
   const cut = parseReview(json.slice(0, json.indexOf('Next game,')));
@@ -151,6 +154,15 @@ test('digest on the recorded matches: rec12 is only the last match and reads as 
   assert.match(d12.text, /Hero: Grey Talon/); assert.match(d12.text, /DEATHS \(3\)/); assert.match(d12.text, /Rule coach said:/);
   for (const id of ['dead', 'per10', 'unspent']) assert.equal(d12.comparisons.find(c => c.id === id)?.verdict, 'improved', id);
   assert.match(d12.text, /Dying too often \(improved\)/);
+  // What went well, with evidence, leads the digest (before ECONOMY and DEATHS) and the prompt asks to lead with it.
+  assert.ok(d12.goodGame); assert.ok(d12.text.indexOf('STRENGTHS') < d12.text.indexOf('ECONOMY') && d12.text.indexOf('STRENGTHS') < d12.text.indexOf('DEATHS ('));
+  for (const id of ['kda', 'dead', 'deathless', 'windows', 'urn', 'shop', 'lead', 'patron']) assert.ok(d12.strengths.some(s => s.id === id), `strength ${id}: ${d12.strengths.map(s => s.id)}`);
+  for (const re of [/K\/D\/A 12\/3\/11: 23 kills and assists for 3 deaths/, /Dead only 7% of the game/, /Deathless stretches: 0:\d\d-9:\d\d \(9\.\d min\)/, /Enemy-dead windows turned into pushes: 13:\d\d \(\d enemies dead, you in the enemy base\)[^\n]*27:\d\d/,
+    /Delivered the Soul Urn: 16:\d\d \(\+2,\d{3} souls\)/, /Spent on the death screen: [^\n]*after the 14:50 death about 5\.9k spent/, /Team souls lead from \d+:\d\d to the end/, /Pressure on the enemy Patron \(ARCHMOTHER\)/, /Verdict: a good game \(likely win\)/])
+    assert.match(d12.text, re);
+  assert.match(buildReviewPrompt(d12).user, /^Review this match for the player\. It went well: open with the strengths and why they worked/);
+  const d11s = buildDigest({ match: lastMatchOf(load(files[1]))!, previous: profileOf([files[0]]).matches, name });
+  assert.equal(d11s.goodGame, false); assert.ok(d11s.strengths.length < d12.strengths.length);
   const m11 = lastMatchOf(load(files[1]))!;
   const d11 = buildDigest({ match: m11, previous: profileOf([files[0]]).matches, name });
   assert.equal(m11.record.deaths.length, 7); assert.match(d11.text, /Hero: Violet/); assert.match(d11.text, /DEATHS \(7\)/); assert.ok(d11.chars <= DIGEST_MAX_CHARS);

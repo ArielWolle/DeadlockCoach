@@ -96,11 +96,13 @@ gateway that is not running.
   (≥ 2 enemies dead), a major objective within 60 s (Powerups at 5:00, Sinner's at 8:00, every
   Soul Urn, first Rift, Guardians at 12:00, Walkers at 18:00), souls reaching the usual buy, or a
   big swing in the team souls difference (≥ 4,000 or 5% of the average team souls) since the last
-  request. The prompt starts with `WHY NOW: <what changed>`.
+  request, or a good play (see "Reinforcing good plays"). The prompt starts with
+  `WHY NOW: <what changed>`.
 - **Periodic, quiet.** Otherwise once per *interval* (default 90 s) with `WHY NOW: routine check,
   nothing new since …: PASS unless you see a NEW, specific insight`.
-- **Death:** once per death, after the rule coach's death review has been spoken or 4 s after
-  the death panel has been read (8 s at most). This is a deeper "why you died and what to
+- **Death:** once per death, after the rule coach's death review **of this death** has been
+  spoken, or 4 s after the death panel has been read (8 s at most); with a respawn timer of 25 s or
+  more it waits up to 15 s for that review (rec12's reviews came 7-25 s after the death). This is a deeper "why you died and what to
   change" answer of up to 3 sentences, built from the damage panel, the killing blow, the
   status effects of the last 10 s alive, the health before death, who was near you and the
   rule death review (which names the killer hero). Opening the shop or scoreboard from the
@@ -175,6 +177,86 @@ repeats, in the prompt and in code (`checkAdvice()` in `web/src/ai-coach.ts`):
   focus, or PASS". Otherwise it simply does not speak.
 - **On demand is not gated.** **Ask the coach now** shows the model's answer as is (the prompt
   rules still apply).
+
+## Match boundaries and this match's evidence
+
+**rec12 bug.** Two of the three live death explanations in rec12 (Grey Talon) named heroes of the
+previous match ("Baba's Feed The Birds" at 9:48, "Baba and Graves" at 14:50) and the third blamed
+"trooper melee" at 22:10, when Drifter and Silver did the damage. Root cause, from the recorded
+prompts:
+
+1. **The AI history was never reset between the two matches.** `AiHistory` started a new match only
+   when the clock of a frame was 30 s lower than the clock of the *previous frame*. Between the
+   Violet match (last clock 37:22) and the Grey Talon match (1:07) the app read about 11 minutes of
+   menus without a clock (Shop, Countdown, loading), so the comparison never ran; the HUD "match id"
+   was 127139499 in both matches, so nothing else noticed either. The rec12 death prompts said
+   "Deaths observed this session: 10 (at 27:50, 33:52, 37:16, 9:48)".
+2. **The rule death review was matched by `clock >= death clock` only.** The Violet match's last
+   review ("Baba did 71% of the damage … Baba and Graves", spoken at 37:22) passed that test for
+   every rec12 death (9:48, 14:50), and the AI asked 4 s after the panel, before rec12's own review
+   (7-25 s later) arrived. So the model quoted Baba and Graves.
+3. **No hero names for the damage panel.** "Rend" (Drifter) and "Boot Kick" (Silver) were bare
+   ability names and the panel's cause read "Trooper", so the model said "trooper melee".
+4. The player profile (earlier matches) also names killers ("Jar x3"); nothing told the model that
+   those are other matches.
+
+**Fixes** (`web/src/ai-coach.ts`):
+- **Boundaries.** A new match starts (history, deaths, spoken cues, advice, roster, good plays and
+  the controller's cadence state are forgotten) when the clock restarts against the last clock
+  *read* (across clock-less frames), after a post-game screen, when the hero changes after a 3-minute
+  gap (or, confirmed by 3 reads, with a clock that is not continuous), or when the clock jumps more
+  than the wall time allows after a long gap. A game pause (clock still) and an early portrait
+  misread with a continuous clock are not boundaries. Diagnostics show "new match detected N× (last:
+  the clock restarted (37:16 → 1:07))".
+- **This death only.** `reviewsFor(death)`: a rule review counts only when spoken after this death
+  (wall time), before its respawn, and within its clock window (`death:review:<clock>` within 40 s).
+  The death review waits up to 15 s for it when the respawn timer is long. Earlier deaths of the
+  match are labelled "Earlier Death at …", the current one "(THIS death)".
+- **Damage by hero.** `data/abilities.json` maps panel sources to heroes, filtered to this match's
+  enemies: `Damage by hero (ability names matched to this match's enemies): Drifter 222 (Rend),
+  Silver 168 (Boot Kick); not attributable to one hero: Melee 237, Gun Damage 190`. When the cause
+  reads "Trooper" but hero abilities are on the panel: `the panel cause "Trooper" is misleading: hero
+  abilities did 25% of the listed damage, so enemy heroes killed you, not troopers`.
+- **Named-hero check.** `strangerHeroes()` finds hero names (all 44) in a reply that are not in this
+  match's roster (most-read allies and enemies, once 3+ enemies are known); those sentences are
+  dropped, and the answer is not spoken when nothing actionable is left — for every trigger,
+  including Ask the coach now. "Seven seconds" is a number, not the hero.
+- The prompt says to name only heroes of this match, that PLAYER PROFILE heroes and killers are from
+  other matches, and the system-prompt example no longer names heroes.
+- On the death screen the souls line uses the souls left to spend (rec12 had spent 6,073 down to 132
+  and was told "spend your 6,073 souls"), and notes "already spent about 5,900 on this death screen".
+
+## Reinforcing good plays
+
+The player asked for rec12 (a win, 12/3/11, 7% dead): "point out and encourage the good behaviour
+that caused our team and myself to do so well, not only point out bad." `AiHistory` derives cheap
+good-play signals from the samples it already keeps (`GoodPlay`, newest last):
+
+| Signal | Evidence (rec12) |
+|---|---|
+| `window-push` | 2+ enemies dead while you are in the enemy base, at an enemy objective banner, or 70%+ up a lane (13:54 with 6 dead, 27:40 with 5 dead); once per push (60 s) |
+| `urn` | carrying the urn, then souls +1,000 within 25 s (16:46, +2,128 in 13 s) |
+| `death-shop` | two death-screen reads at least the death-spend threshold below the peak, or the first alive read (14:50 death: about 5,900 spent) |
+| `reset` | under 35% health, then 90%+ within 150 s without dying (25:14 at 29%) |
+| `deathless` | 7 minutes without dying, then every 5 (since the match start or the last respawn) |
+| `lead` | team souls lead +5,000 (or 5% of the team average) in about 3 minutes — context only, never praised alone |
+
+A praisable signal is a cadence event (`WHY NOW: good play (see GOOD PLAYS): …`). The summary
+lists the last 5 minutes' signals and the gate:
+
+```text
+GOOD PLAYS (this match, observed; evidence for praise):
+- [13:54] pushed into the enemy base at 13:54 while 6 enemies were dead: a dead-enemy window turned into structure pressure
+Praise: allowed (fresh good play: pushed into the enemy base at 13:54 while 6 enemies were dead: …)
+```
+
+The model may then open with one short, specific praise and the next action ("Good push while
+three were dead: that is how a lead snowballs. Next, back off before they respawn."), focus
+`reinforce`. **Gate** (`reinforceGate()`, enforced by `checkAdvice()`): a fresh good play (≤ 90 s,
+not praised yet), none of the last 3 AI tips was praise (at most 1 in 4), and at least 150 s since
+the last praise. Without it, praise sentences ("Good…", "Nice…", "Well done", "That's how…") are
+dropped and the rest must stand alone. A praise of death-screen shopping is not souls advice (the
+souls gate does not cut it). Reinforcement has its own gate instead of the theme memory.
 
 ## Review-style advice: coaching angles
 
@@ -265,6 +347,18 @@ souls tier 1, team souls swing 1. A real model is also told to PASS on routine c
 should speak less than the fake one. The recordings are git-ignored, so the script is not part of
 `npm run test:unit`; the unit tests cover the same rules.
 
+rec12 (`scripts/ai-coach-eval.ts <main checkout>/frames/rec12/recording.json`): the previous
+match's frames (rec11, Violet) are fed first, as in the live session (`--prepend none` skips
+that). The fake model names the killer from the rule review or the damage-by-hero line, and praises
+when the summary says `Praise: allowed`.
+
+| | Before (live) | After (this build, fake model) |
+|---|---|---|
+| Match boundary | none (history carried over) | `[0:31] a post-game screen, then gameplay again` |
+| Death prompts | 9:50 and 15:08 quoted the Violet match's "Baba … Graves" review; 22:14 had only "cause Trooper" | only rec12 heroes; 15:08 `Drifter 222 (Rend), Silver 168 (Boot Kick)`; 22:27 `the panel cause "Trooper" is misleading` |
+| Tips spoken | 77 (2.72/min) | 17 (0.60/min), 3 of them praise (no deaths for 7 minutes at 8:35, the urn at 17:25, the 29% reset at 25:55) |
+| Good plays found | — | reset 2:16, deathless 7:31, death-shop 10:17 and 14:54, window-push 13:54 and 27:40, urn 16:46, reset 25:39 (+4 team-lead context lines) |
+
 ## What is sent
 
 The input budget is **about 2,500 tokens**, estimated as characters ÷ 4 and enforced by
@@ -272,8 +366,8 @@ The input budget is **about 2,500 tokens**, estimated as characters ÷ 4 and enf
 
 | Part | Budget | Source |
 |---|---|---|
-| System prompt | ~2,700 chars | `SYSTEM_PROMPT` in `web/src/ai-coach.ts` |
-| Task line | ~250–500 chars | depends on the trigger (periodic / death / manual) |
+| System prompt | ~3,200 chars | `SYSTEM_PROMPT` in `web/src/ai-coach.ts` |
+| Task line | ~250–800 chars | depends on the trigger (periodic / death / manual) |
 | State summary | ≤ 3,000 chars | `buildSummary()`: the latest snapshot plus about 90 s of history, recent AI advice and coaching angles |
 | Player profile | ≤ 900 chars | `setProfileProvider(fn)` callback, if registered |
 | Coach brief | ~1,500 chars | `COACH_BRIEF`: key facts from `docs/timings` and `docs/strategy` |
@@ -334,7 +428,7 @@ Minimap: 4 enemy heroes visible
 Lanes: Green lane front 37% up (troopers 0 yours v 3 theirs); Blue lane front 56% up (troopers 0 yours v 0 theirs); Yellow lane front 42% up (troopers 2 yours v 1 theirs)
 Objectives: Midboss alive (team target only after a won fight)
 Upcoming: Powerups spawn at 20:00 (in 0:57); Soul Urn spawns at 20:00 (in 0:57)
-Deaths observed this session: 2 (at 10:08, 11:55)
+Deaths this match: 2 (at 10:08, 11:55)
 Last death at 11:55 (7:08 ago): Baba did at least 297 damage with Granny Long Legs, 27% of what the panel lists; cause Granny Long Legs · most damage Granny Long Legs 297 · carrying_urn, slowed
 RECENT AI ADVICE (yours):
 - [10:14] healing: Melee finished you again. Next life, hold max range behind your front line and heal above 60% before you go back in.
@@ -379,7 +473,7 @@ enemy comes near) — or PASSes.
 - **Souls only when they matter.** Souls advice only when the summary says "Souls advice:
   allowed"; holding less than the usual buy is saving, not hoarding.
 - **Strict JSON with a reason.** `{"speak", "priority", "why", "focus", "weakness"}` (`focus` is
-  one of the nine themes; `weakness` the profile weakness coached, or null). `why` must cite the
+  one of the nine themes or `reinforce`; `weakness` the profile weakness coached, or null). `why` must cite the
   evidence, and the panel shows it, so you can judge each call. The parser accepts code
   fences, text around the JSON and `<think>` blocks from local reasoning models. Anything else
   is shown as an error, not spoken.
@@ -399,6 +493,10 @@ enemy comes near) — or PASSes.
   loads them from `assets/items.json`.
 - `liveTriggers()`, `themeMemory()`, `reasoningParams()` and `usageOf()` are pure and exported
   for other modules (for example an end-of-game review) and tests.
+- `AiHistory.setAbilities(rows)`: `data/abilities.json` rows (published as `assets/abilities.json`;
+  `ai-coach-ui.ts` loads it) map damage-panel sources to heroes (`abilityIndex()`, `damageByHero()`).
+  `HERO_NAMES` (all 44 heroes) backs `strangerHeroes()`; `AiHistory.rosterOf()`, `reviewsFor(death)`,
+  `good`, `boundaries` and `reinforceGate()` are exported for tests and other modules.
 - Optional snapshot fields are used when present: `status_effects`, `death_damage`,
   `death_killing_blow`, `level`, `unsecured_souls`, `kills` / `deaths` / `assists` and
   `minimap.zone`.
@@ -406,9 +504,10 @@ enemy comes near) — or PASSes.
 ## End-of-game review
 
 When a match ends, the AI coach (if enabled) writes one longer review of the whole match: a verdict,
-what went well, the top three improvements by impact (with timestamps, why it matters and how to
-practice), a next-game focus, hero tips, and a 180-300 word spoken version (about 1-2 minutes) that
-is read aloud and shown as text. Logic: `web/src/ai-review.ts` (DOM-free); UI: `web/src/ai-review-ui.ts`.
+what went well **and why it worked** (first), up to three improvements by impact (with timestamps,
+why it matters and how to practice), what to keep doing, a next-game focus, hero tips, and a 180-300
+word spoken version (about 1-2 minutes) that opens with specific praise after a good game and is read
+aloud and shown as text. Logic: `web/src/ai-review.ts` (DOM-free); UI: `web/src/ai-review-ui.ts`.
 
 **Triggers.** Automatic when the AI coach is on and Settings > "End-of-game review" is checked
 (default on): the PostGame screen, or a match the profile closes (new match, long gap) after at
@@ -423,7 +522,13 @@ matches); a failed request can be retried, a reply that is not the JSON is store
 and keeps a compact timeline of the current match only (rec12's first ~100 frames are the previous
 Violet match and are not in its digest). Sections: hero, role, result (or "likely win/loss" from the
 Patron health banner at the end, marked as not read), clock span and observed minutes, K/D/A when
-read, allies and enemies (most-read, so stale reads drop out); team souls every 5 minutes; your net
+read, allies and enemies (most-read, so stale reads drop out); **STRENGTHS** right after (`strengthsOf()`,
+never dropped for budget: K/D/A ratio ≥ 3, time dead ≤ 12% or improved, deathless stretches of 5+
+minutes, enemy-dead windows used to push with the team souls swing across them, the urn delivered,
+souls spent on the death screen, the team souls lead since when and how far, enemy Patron pressure,
+low-health moments survived, fights joined, metrics improved on earlier matches; with a `Verdict: a
+good game …` line after a win or a clean game, or "No clear strength observed: do not invent
+praise."); team souls every 5 minutes; your net
 worth at 10/20/30 min; unspent souls against the usual tier (1,600 before 10:00, 3,200 before 20:00,
 6,400 after); time dead and the time shares by phase (lane / jungle / base / shop / dead); every death
 (cause, damage panel rows, killing blow, close-range share of the panel, CC/status before, HP fall,
@@ -435,17 +540,41 @@ improved / worse / same; the profile's known weaknesses with their verdict); up 
 excerpts (hero matchup stats, sections retrieved for the worst metrics). Budget: the lowest-priority
 lines (excerpts first) are dropped until it fits.
 
-| Recording | Hero | Deaths | Digest | vs earlier matches |
-|---|---|---|---|---|
-| rec11 (live export) | Violet | 7 | 7,986 chars | deaths/10 min, unspent at death, fights missed: worse |
-| rec12 (live export) | Grey Talon | 3 | 6,090 chars | time dead 17% -> 7%, deaths/10 min 1.8 -> 1.0, unspent at death: improved |
+| Recording | Hero | Deaths | Digest | Strengths | vs earlier matches |
+|---|---|---|---|---|---|
+| rec11 (live export) | Violet | 7 | 7,784 chars | 2 (deathless stretches, death-screen shopping); not a good game | deaths/10 min, unspent at death, fights missed: worse |
+| rec12 (live export) | Grey Talon | 3 | 7,541 chars | 10; good game (likely win) | time dead 17% -> 7%, deaths/10 min 1.8 -> 1.0, unspent at death: improved |
+
+rec12 STRENGTHS as sent (`scripts/ai-review-eval.ts`):
+
+```text
+STRENGTHS (10: what went well, with evidence)
+- K/D/A 12/3/11: 23 kills and assists for 3 deaths (ratio 7.7): big fight impact while handing the enemy few kill bounties.
+- Dead only 7% of the game (121 s of 1732 s, 3 deaths), against 17% over 2 earlier matches: more time on the map for farm, waves and fights.
+- Deathless stretches: 0:31-9:48 (9.3 min), 15:27-22:10 (6.7 min), 23:16-28:49 (5.6 min).
+- Enemy-dead windows turned into pushes: 13:54 (6 enemies dead, you in the enemy base), team souls lead +1k across the window; 27:40 (5 enemies dead, you in the enemy base), team souls lead +16k across the window: dead enemies cannot defend, so a structure or base push is free value.
+- Delivered the Soul Urn: 16:33 (+2,244 souls): team souls and a secured objective.
+- Spent on the death screen: after the 14:50 death about 5.9k spent: you walked back out stronger instead of carrying the souls.
+- Team souls lead from 6:32 to the end: +3k then, +52k at the last read 28:49: the team kept converting its fights into souls.
+- Pressure on the enemy Patron (ARCHMOTHER) 27:56-28:10: the game-ending objective.
+- Joined every team fight observed (1, none missed).
+- Better than your earlier matches: deaths per 10 min 1.0 vs 1.8; deaths holding half an item tier+ unspent 67% vs 85%; team fights missed 0% vs 24%.
+Verdict: a good game (likely win). Lead with these strengths and why each worked; give at least as many went_well items as improvements.
+```
 
 **Prompt** (`REVIEW_SYSTEM_PROMPT`, `buildReviewPrompt`): elite Deadlock coach persona; use only the
-digest, cite timestamps, never invent events, say when data is missing; rank by impact (deaths and
-dead time, souls spending, fight/objective presence, map and waves); hero- and enemy-specific; praise
-real improvement from the comparison. Reply: strict JSON `{summary, went_well[], improvements[{title,
-evidence, why_it_matters, how_to_practice}] (top 3), next_game_focus, hero_tips[], spoken}`. The rec12
-prompt is about 8,600 characters (~2,150 tokens). Max reply tokens: `max(aiMaxTokens x 3, 3072)`, at
+digest, cite timestamps, never invent events, say when data is missing; **lead with what went well**
+(STRENGTHS and improved metrics) and say **why each worked: cause → effect on the team's result**;
+**balance**: after a good game (the Verdict line, a win, or few deaths) at least as many went_well
+items as improvements, and never invented praise; rank improvements by impact (deaths and dead time,
+souls spending, fight/objective presence, map and waves); hero- and enemy-specific. After a good game
+the user line says "It went well: open with the strengths and why they worked, then the fixes, then
+what to keep doing and the next focus." Reply: strict JSON `{summary, went_well[] (2-5),
+improvements[{title, evidence, why_it_matters, how_to_practice}] (1-3), keep_doing[] (1-3),
+next_game_focus, hero_tips[], spoken}`; the spoken text opens with genuine, specific praise when the
+game went well (never a generic "good game"), then the fixes, and ends with what to keep doing and the
+next-game focus. The review panel shows "What went well", "Top improvements", "Keep doing" and "Next
+game". The rec12 prompt is about 11,100 characters (~2,780 tokens). Max reply tokens: `max(aiMaxTokens x 3, 3072)`, at
 most 8,192, plus the same reasoning headroom as live calls; timeout 120 s; a reply cut off by the
 token limit is retried once with 8,192 tokens, then parsed as far as it got (`partial`).
 `parseReview` accepts fenced JSON, text around it, `<think>` blocks and cut-off JSON (closed at the
@@ -469,10 +598,11 @@ prints the parsed review. Keys are never printed or written.
 Example (illustrative, written by hand for this document from the rec12 digest; not a model output):
 
 ```json
-{"summary": "Your cleanest game in the profile: 3 deaths and 7% of the game dead, down from 17%, and your team led on souls from 15:00 to the end.",
- "went_well": ["Time dead fell from 17% to 7% (121 s of 29 min)", "No deaths within 40 s of a respawn", "You carried the Urn at 16:09"],
- "improvements": [{"title": "Keep range against Drifter", "evidence": "14:50 and 22:10: Melee and Rend were most of the damage panel", "why_it_matters": "Drifter hunts isolated targets; each death cost 37-66 s", "how_to_practice": "When Drifter is missing, stand behind a teammate and keep one stamina charge to escape"}],
- "next_game_focus": "Spend down to the next item before you walk back out.",
+{"summary": "Your cleanest game in the profile, and you helped win it: 3 deaths, 7% of the game dead (down from 17%), and you turned enemy-dead windows into base pushes.",
+ "went_well": ["At 13:54 and 27:40 you were in their base while five or six enemies were dead: dead enemies cannot defend, and the team souls lead grew by 16k across the second window", "You delivered the Urn at 16:33 (+2.2k souls): a secured objective", "After dying at 14:50 you spent about 5.9k on the death screen, so you walked back out a full item stronger", "Dead only 7% of the game, with 9, 7 and 6 minute stretches without dying: more time farming and fighting"],
+ "improvements": [{"title": "Keep range against Drifter", "evidence": "14:50 and 22:10: Rend and melee were most of the damage panel", "why_it_matters": "Drifter hunts isolated targets; each death cost 37-66 s", "how_to_practice": "When Drifter is missing, stand behind a teammate and keep one stamina charge to escape"}],
+ "keep_doing": ["Push the moment two or more enemies are dead", "Shop on the death screen"],
+ "next_game_focus": "Do not jungle alone after 20:00 while Drifter is missing.",
  "hero_tips": ["As Grey Talon, take fights from max range behind your front line"],
- "spoken": "That was your cleanest game so far. You were dead only seven percent of the time ..."}
+ "spoken": "That was your cleanest game so far, and you played a real part in the win. When five or six of them were dead you were already in their base, and that is exactly how a lead turns into structures ..."}
 ```
