@@ -28,7 +28,7 @@ for (const kind of ['shop', 'h_card', 'h_crit']) {
 }
 chunks[1].writeUInt32LE(count);
 await emit('templates.bin', Buffer.concat(chunks));
-for (const name of ['heroes.json', 'items.json', 'timings.json', 'counters.json', 'rules.json']) {
+for (const name of ['heroes.json', 'items.json', 'timings.json', 'counters.json', 'rules.json', 'abilities.json']) {
   const text = (await readFile(path.join(root, 'data', name), 'utf8')).replace(/^\uFEFF/, '');
   JSON.parse(text); await emit(name, text);
 }

@@ -1,6 +1,6 @@
 // DOM wiring for the optional AI coach: the Coach-page panel and the Settings fieldset.
 // All decisions live in ai-coach.ts; main.ts only calls the handle returned by mountAiCoach().
-import { AiCoach, PROVIDER_PRESETS, aiExchanges, onAiExchange, clockText, configFrom, parseExtraHeaders, testConnection, type Advice, type AdviceMeta, type AiSnapshot, type AiStatus, type ItemInfo } from './ai-coach';
+import { AiCoach, PROVIDER_PRESETS, aiExchanges, onAiExchange, clockText, configFrom, parseExtraHeaders, testConnection, type Advice, type AdviceMeta, type AiSnapshot, type AiStatus, type AbilityRow, type ItemInfo } from './ai-coach';
 import type { Cue, GameItem, Knowledge, Settings } from './types';
 
 export interface AiUiDeps {
@@ -64,6 +64,10 @@ export function mountAiCoach(deps: AiUiDeps): AiUi {
     pageProtocol: () => location.protocol, onStatus: render,
     onAdvice: (cue, _advice, meta) => deps.deliver(cue, meta.live),
   });
+  // Ability names → heroes, so a death panel's "Rend" or "Boot Kick" is attributed to this match's
+  // Drifter or Silver (the death review must not guess killers).
+  void fetch(`${import.meta.env.BASE_URL}assets/abilities.json`).then(r => r.ok ? r.json() as Promise<AbilityRow[]> : []).then(rows => coach.history.setAbilities(rows))
+    .catch(() => { /* attribution is optional */ });
   function presetHints(provider: Settings['aiProvider']) {
     const preset = PROVIDER_PRESETS[provider];
     field('ai-base-url').placeholder = `Default: ${preset.baseUrl}`; field('ai-model').placeholder = preset.modelHint;

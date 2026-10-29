@@ -7,8 +7,8 @@ import path from 'node:path';
 import { AiCoach, AiHistory, MAX_INPUT_CHARS, SUMMARY_MAX_CHARS, SYSTEM_PROMPT, COACH_BRIEF, buildPrompt, buildRequest, buildSummary, callGateway, cleanSpeech,
   endpoint, extractText, heroMatchup, parseAdvice, retrieve, sections, situationTerms, testConnection, upcomingObjectives, setProfileProvider, profileText,
   checkAdvice, coachingAngles, overlap, soulsView, topicOf, TASKS, aiExchanges, clearAiExchanges, onAiExchange,
-  configFrom, effectiveMaxTokens, isOpenRouter, liveTriggers, themesIn, usageOf, weaknessOf,
-  type Advice, type AiConfig, type AiSnapshot, type ItemInfo } from '../src/ai-coach.ts';
+  configFrom, effectiveMaxTokens, isOpenRouter, liveTriggers, themesIn, usageOf, weaknessOf, reinforceGate, strangerHeroes, damageByHero, isPraise, HERO_NAMES,
+  type Advice, type AbilityRow, type AiConfig, type AiSnapshot, type ItemInfo } from '../src/ai-coach.ts';
 import { defaults, normalize } from '../src/settings.ts';
 import type { Knowledge, Settings } from '../src/types.ts';
 
@@ -196,7 +196,7 @@ test('controller: periodic cadence, one request in flight, stale drop, backoff a
   assert.equal(calls, atDeath, 'waits for the rule death review or 4 s after the panel');
   now += 500; coach.observe(snap(782, { dead: true, screen: 'Dead', death_cause: 'Graves' }), [{ key: 'death:review:780', text: 'Why you died: Graves did 620 damage at close range.', priority: 'Normal', cooldown_secs: 0 }], true); await flush(); await flush();
   assert.equal(calls, atDeath + 1); assert.equal(delivered.at(-1)?.key, 'ai:death:positioning');
-  assert.ok(bodies.at(-1)!.includes('Rule death review (already spoken): Why you died: Graves did 620'));
+  assert.ok(bodies.at(-1)!.includes('Rule death review of this death (already spoken): Why you died: Graves did 620'));
   assert.ok(bodies.at(-1)!.includes('just died') && bodies.at(-1)!.includes('cause Graves'));
   now += 3000; coach.observe(snap(784, { dead: true, screen: 'Dead', death_cause: 'Graves' }), [], true); await flush(); assert.equal(calls, atDeath + 1);
   // Not live (replay/paused): no automatic requests; generation change drops a manual answer.
@@ -277,7 +277,7 @@ test('death review: no souls talk below the death-spend threshold; the prompt ca
   const summary = buildSummary({ snapshot: dead, history: h, now: 7000, trigger: 'death' });
   for (const part of ['YOU ARE DEAD', 'You: haze', 'cause Melee · damage taken: Melee 525, Flying Slash 501 · killing blow Melee · status effects before death: stunned · last alive HP 32%',
     'death-spend threshold 3,200: not reached', 'Souls advice: not allowed (2,409 is below the 3,200 death-spend threshold: not a souls death)',
-    'Rule death review (already spoken): Why you died: Yamato did 35%']) assert.ok(summary.includes(part), `${part}\n---\n${summary}`);
+    'Rule death review of this death (already spoken): Why you died: Yamato did 35%']) assert.ok(summary.includes(part), `${part}\n---\n${summary}`);
   const p = buildPrompt({ trigger: 'death', summary });
   assert.ok(p.user.startsWith(TASKS.death)); assert.match(p.user, /Explain WHY/); assert.match(p.system, /Souls advice: allowed/);
   assert.ok(!situationTerms(dead, h, 'death').includes('haunted'), 'no unsecured-souls excerpts for a death below the threshold');
@@ -570,4 +570,184 @@ test('summary wording (rec11): lanes are places, roles and items are named, team
   assert.equal(cleanSpeech("Calico is at 18% and melee range is how you've died most. Stay at max range behind your front line until Paige and Apollo are back, then walk out.", 20, 2),
     'Stay at max range behind your front line until Paige and Apollo are back, then walk out.');
   assert.deepEqual(parseAdvice('{"speak":"Push Green lane.","priority":"Normal","why":"w","focus":"wave","weakness":"Dies alone"}'), { ok: true, advice: { speak: 'Push Green lane.', priority: 'Normal', why: 'w', focus: 'wave', weakness: 'Dies alone' } });
+});
+// ---------------------------------------------------------------------------------------
+// rec12: match boundaries, evidence of the current death only, this match's heroes, reinforcement
+// ---------------------------------------------------------------------------------------
+const team12 = (enemies: string[], allies: string[], deadEnemies = 0) => [
+  ...allies.map((hero, slot) => ({ ally: true, slot, hero, health_ratio: 1, networth_observations: 3, observations: 3, position_observations: 0 })),
+  ...enemies.map((hero, slot) => ({ ally: false, slot, hero, dead: slot < deadEnemies, respawn_secs: slot < deadEnemies ? 20 : null, networth_observations: 3, observations: 3, position_observations: 0 })),
+];
+// rec11 (Violet, the previous match of the session) and rec12 (Grey Talon) rosters.
+const V_ENEMIES = ['hero_ghost', 'hero_baba', 'hero_nurse', 'hero_dynamo', 'hero_nano', 'hero_necro'], V_ALLIES = ['hero_werewolf', 'hero_ratking', 'hero_artist', 'hero_bookworm', 'hero_fencer', 'hero_unicorn'];
+const G_ENEMIES = ['hero_astro', 'hero_inferno', 'hero_atlas', 'hero_drifter', 'hero_gigawatt', 'hero_werewolf'], G_ALLIES = ['hero_mirage', 'hero_orion', 'hero_warden', 'hero_doorman', 'hero_nano', 'hero_haze'];
+const m12 = (clock: number, hero: string, enemies: string[], allies: string[], extra: Partial<AiSnapshot> = {}, deadEnemies = 0): AiSnapshot =>
+  snap(clock, { hero, enemy_heroes: enemies, ally_heroes: allies, hero_status: team12(enemies, allies, deadEnemies), ...extra });
+const heroName = (id: string) => HERO_NAMES[id] || id;
+const abilities = (): AbilityRow[] => JSON.parse(readFileSync(path.join(root, 'data', 'abilities.json'), 'utf8'));
+
+test('rec12 match boundary: the clock restart is found across clock-less menus (same HUD match id); pauses and portrait misreads are not new matches', () => {
+  const h = new AiHistory(); h.name = heroName;
+  h.push(m12(2230, 'hero_artist', V_ENEMIES, V_ALLIES, { match_id: 127139499 }), [], 0);
+  h.push(m12(2236, 'hero_artist', V_ENEMIES, V_ALLIES, { match_id: 127139499, dead: true, screen: 'Dead', death_cause: 'Feed The Birds', death_damage: [{ source: 'Feed The Birds', damage: 1438 }] }),
+    [{ key: 'death:review:2236', text: 'Why you died: Baba did 71% of the damage (2,311) with Feed The Birds. At least 2 enemy heroes hit you: Baba and Graves.', priority: 'Normal', cooldown_secs: 0 }], 6000);
+  h.noteAdvice({ t: 6000, clock: 2236, trigger: 'death', topic: 'positioning', text: "Stay out of Baba's reach until you are above 60% health." });
+  assert.equal(h.deathCount, 1);
+  // The old check compared with the previous SAMPLE only: these clock-less frames hid the restart.
+  for (const [i, screen] of ['Shop', 'Countdown', 'Unknown'].entries()) h.push({ screen, hero: i ? null : 'hero_artist', game_clock_secs: null, match_id: 127139499 }, [], 60000 + i * 1000);
+  h.push(m12(67, 'hero_orion', G_ENEMIES, G_ALLIES, { match_id: 127139499 }), [], 600000);
+  assert.equal(h.match, 1); assert.match(h.boundaries[0].reason, /^the clock restarted \(37:16 → 1:07\)$/);
+  assert.equal(h.deaths.length, 0); assert.equal(h.deathCount, 0); assert.equal(h.spoken.length, 0); assert.equal(h.advice.length, 0); assert.equal(h.hero, 'hero_orion');
+  assert.deepEqual(h.rosterOf().enemies.sort(), [...G_ENEMIES].sort());
+  const s = buildSummary({ snapshot: m12(70, 'hero_orion', G_ENEMIES, G_ALLIES), history: h, now: 603000, trigger: 'periodic', name: heroName });
+  assert.ok(!/Baba|Graves|Feed The Birds|37:16/.test(s), s);
+  // A game pause (clock barely moves over a long gap) and an early portrait misread are the same match.
+  h.push(m12(500, 'hero_orion', G_ENEMIES, G_ALLIES), [], 1033000);
+  h.push(m12(590, 'hero_orion', G_ENEMIES, G_ALLIES), [], 1500000);
+  for (let i = 0; i < 4; i++) h.push(m12(591 + i, 'hero_mirage', G_ENEMIES, G_ALLIES), [], 1501000 + i * 1000);
+  for (let i = 0; i < 4; i++) h.push(m12(596 + i, 'hero_orion', G_ENEMIES, G_ALLIES), [], 1506000 + i * 1000);
+  assert.equal(h.match, 1); assert.equal(h.hero, 'hero_orion'); assert.ok(h.samples.length >= 10);
+  // A post-game screen ends the match; the next gameplay frame is a new one.
+  h.push({ screen: 'PostGame', game_clock_secs: null }, [], 1520000);
+  h.push(m12(35, 'hero_haze', G_ENEMIES, G_ALLIES), [], 1700000);
+  assert.equal(h.match, 2); assert.match(h.boundaries.at(-1)!.reason, /post-game/);
+  // A hero change after a long gap is a new match even when the clock looks plausible.
+  h.push(m12(300, 'hero_haze', G_ENEMIES, G_ALLIES), [], 1965000);
+  h.push(m12(400, 'hero_wraith', G_ENEMIES, G_ALLIES), [], 2400000);
+  assert.equal(h.match, 3); assert.match(h.boundaries.at(-1)!.reason, /hero changed \(haze → wraith\) after a 435 s gap/);
+});
+
+test('rec12 death evidence: only this death\'s rule review, damage attributed to this match\'s enemies (Drifter Rend, Silver Boot Kick), a "Trooper" cause that was hero damage, and replies naming other matches\' heroes are cut', () => {
+  const h = new AiHistory(); h.name = heroName; h.setAbilities(abilities());
+  let t = 0; const at = (c: number, extra: Partial<AiSnapshot> = {}, cues: Parameters<AiHistory['push']>[1] = []) => { h.push(m12(c, 'hero_orion', G_ENEMIES, G_ALLIES, extra), cues, t); t += 3000; };
+  for (let c = 870; c <= 886; c += 4) at(c, { souls: 6073 });
+  at(890, { dead: true, screen: 'Dead', souls: 6073, respawn_secs: 19, death_cause: 'Gun Damage', status_effects: ['out_of_stamina'],
+    death_damage: [{ source: 'Melee', damage: 237 }, { source: 'Rend', damage: 222 }, { source: 'Gun Damage', damage: 190 }, { source: 'Boot Kick', damage: 168 }] });
+  const first = buildSummary({ snapshot: m12(890, 'hero_orion', G_ENEMIES, G_ALLIES, { dead: true, screen: 'Dead', souls: 6073 }), history: h, now: t, trigger: 'death', name: heroName });
+  assert.match(first, /Damage by hero \(ability names matched to this match's enemies\): Drifter 222 \(Rend\), Silver 168 \(Boot Kick\); not attributable to one hero: Melee 237, Gun Damage 190/);
+  // Its rule review (spoken 12 s later) belongs to this death only.
+  at(902, { dead: true, screen: 'Dead', souls: 132 }, [{ key: 'death:review:890', text: 'Why you died: Drifter did at least 222 damage with Rend. At least 2 enemy heroes hit you: Drifter and Silver.', priority: 'Normal', cooldown_secs: 0 }]);
+  at(906, { dead: true, screen: 'Dead', souls: 132 });
+  for (let c = 912; c <= 1325; c += 6) at(c, { souls: 2060 });
+  at(1330, { dead: true, screen: 'Dead', souls: 2060, respawn_secs: 62, death_cause: 'Trooper', death_killing_blow: 'Melee',
+    death_damage: [{ source: 'Gun Damage', damage: 481 }, { source: 'Rend', damage: 407 }, { source: 'Melee', damage: 387 }, { source: 'Melee', damage: 363 }] });
+  const dead = m12(1334, 'hero_orion', G_ENEMIES, G_ALLIES, { dead: true, screen: 'Dead', souls: 2060 });
+  h.push(dead, [], t);
+  const s = buildSummary({ snapshot: dead, history: h, now: t, trigger: 'death', name: heroName });
+  assert.ok(!/Rule death review/.test(s), `the 14:50 review is not evidence for the 22:10 death\n${s}`);
+  assert.match(s, /Earlier Death at 14:50/); assert.match(s, /Death at 22:10 \(THIS death\): cause Trooper/);
+  assert.match(s, /Damage by hero[^\n]*: Drifter 407 \(Rend\)[^\n]*the panel cause "Trooper" is misleading: hero abilities did 25% of the listed damage, so enemy heroes killed you, not troopers/);
+  assert.ok(!/Baba|Graves/.test(s));
+  assert.match(TASKS.death, /Name only heroes of this match/); assert.match(TASKS.death, /cause says Trooper but hero abilities/);
+  assert.equal(damageByHero([{ source: 'Stalkers MarkX', damage: 300 }], h).heroes[0]?.hero, 'hero_drifter', 'OCR suffixes still match');
+  // Replies naming heroes of the previous match (the live rec12 answers) are cut or dropped.
+  assert.deepEqual(strangerHeroes("Died at melee range to Baba and Graves while out of stamina.", h), ['Graves', 'Baba']);
+  assert.deepEqual(strangerHeroes('Seven seconds until Drifter respawns: Seven is still alive.', h), []);
+  const v = soulsView(dead, h, t);
+  const cut = checkAdvice({ speak: "Baba's Feed The Birds finished you at 41%. Next life, hold max range behind your front line and heal above 60%.", priority: 'High', why: '', focus: 'death' }, 'death', v, h, t);
+  assert.ok(cut.ok && cut.speak === 'Next life, hold max range behind your front line and heal above 60%.' && /Baba, not in this match/.test(cut.note || ''), JSON.stringify(cut));
+  const gone = checkAdvice({ speak: 'Died at melee range to Baba and Graves while out of stamina and silenced.', priority: 'High', why: '', focus: 'death' }, 'manual', v, h, t);
+  assert.ok(!gone.ok && /names Graves, Baba, not in this match/.test(gone.reason), JSON.stringify(gone));
+  assert.ok(checkAdvice({ speak: 'Drifter and Silver caught you alone in the jungle. Next life, walk with Warden.', priority: 'High', why: '', focus: 'death' }, 'death', v, h, t).ok);
+});
+
+test('death-screen shopping: souls advice uses what is left to spend, and the spend is a good play', () => {
+  const h = new AiHistory();
+  h.push(m12(880, 'hero_orion', G_ENEMIES, G_ALLIES, { souls: 6073 }), [], 0);
+  h.push(m12(890, 'hero_orion', G_ENEMIES, G_ALLIES, { dead: true, screen: 'Dead', souls: 2873 }), [], 2000);
+  h.push(m12(894, 'hero_orion', G_ENEMIES, G_ALLIES, { dead: true, screen: 'Shop', souls: 132, hp: null, max_hp: null }), [], 6000);
+  h.push(m12(900, 'hero_orion', G_ENEMIES, G_ALLIES, { dead: true, screen: 'Dead', souls: 132 }), [], 12000);
+  const v = soulsView(m12(900, 'hero_orion', G_ENEMIES, G_ALLIES, { dead: true, screen: 'Dead', souls: 132 }), h, 12000);
+  assert.equal(v.souls, 132); assert.equal(v.allowed, false); assert.match(v.reason, /already spent about 5,900 on this death screen/);
+  assert.equal(h.good.filter(g => g.kind === 'death-shop').length, 1); assert.match(h.good[0].text, /^spent about 5,900 souls on the death screen after the 14:50 death/);
+});
+
+test('reinforce: a fresh good play may be praised once, briefly and specifically, at most 1 in 4 AI tips; no praise without evidence', () => {
+  const h = new AiHistory(); let t = 0;
+  const push = (s: AiSnapshot) => { h.push(s, [], t); t += 4000; };
+  const v = () => soulsView(h.samples.length ? m12(h.samples.at(-1)!.clock!, 'hero_orion', G_ENEMIES, G_ALLIES) : snap(0), h, t);
+  const a = (speak: string, focus = 'reinforce'): Advice => ({ speak, focus, priority: 'Normal', why: '' });
+  push(m12(800, 'hero_orion', G_ENEMIES, G_ALLIES));
+  // No good play yet: praise is dropped (or the answer is), whatever the model tags it.
+  const none = checkAdvice(a('Good push, keep doing that.'), 'periodic', v(), h, t);
+  assert.ok(!none.ok && /praise not allowed: no fresh good play/.test(none.reason), JSON.stringify(none));
+  const kept = checkAdvice(a('Nice work in lane. Group with Warden and hit the Yellow lane Guardian now.', 'objective'), 'periodic', v(), h, t);
+  assert.ok(kept.ok && kept.speak === 'Group with Warden and hit the Yellow lane Guardian now.' && /praise dropped/.test(kept.note || ''), JSON.stringify(kept));
+  assert.equal(reinforceGate(h, t).allowed, false);
+  // 13:54: five enemies dead and you are in the enemy base: a used enemy-dead window.
+  const base = (c: number, dead: number) => m12(c, 'hero_orion', G_ENEMIES, G_ALLIES, { minimap: { ...snap(c).minimap!, zone_area: 'EnemyBase', your_lane: null } }, dead);
+  push(m12(825, 'hero_orion', G_ENEMIES, G_ALLIES, {}, 5)); push(base(834, 5)); push(base(838, 4));
+  assert.deepEqual(h.good.map(g => g.kind), ['window-push']);
+  assert.match(h.good[0].text, /^pushed into the enemy base at 13:54 while 5 enemies were dead/);
+  assert.ok(h.events.some(e => e.kind === 'good'), 'a good play is a cadence event');
+  const summary = buildSummary({ snapshot: base(842, 4), history: h, now: t, trigger: 'periodic' });
+  assert.match(summary, /GOOD PLAYS \(this match, observed; evidence for praise\):\n- \[13:54\] pushed into the enemy base at 13:54 while 5 enemies were dead[^\n]*\nPraise: allowed \(fresh good play: pushed into the enemy base/);
+  assert.match(SYSTEM_PROMPT, /Reinforce what works: when GOOD PLAYS says "Praise: allowed"/); assert.match(SYSTEM_PROMPT, /wave, mechanics, reinforce"/);
+  const ok = checkAdvice(a('Good push while five were dead: that is how a lead snowballs. Back off before they respawn.'), 'periodic', v(), h, t);
+  assert.ok(ok.ok && ok.topic === 'reinforce' && ok.praised === 'window-push:834', JSON.stringify(ok));
+  h.noteAdvice({ t, clock: 842, trigger: 'periodic', topic: 'reinforce', text: ok.ok ? ok.speak : '' }); h.praised.push('window-push:834');
+  assert.equal(reinforceGate(h, t).allowed, false, 'praised once');
+  // The urn delivered right after: fresh, but one of the last 3 tips was praise (at most 1 in 4).
+  push(m12(850, 'hero_orion', G_ENEMIES, G_ALLIES, { souls: 479, status_effects: ['carrying_urn'] }));
+  push(m12(856, 'hero_orion', G_ENEMIES, G_ALLIES, { souls: 482 })); push(m12(862, 'hero_orion', G_ENEMIES, G_ALLIES, { souls: 2607 }));
+  assert.ok(h.good.some(g => g.kind === 'urn' && /^delivered the Soul Urn at 14:22 \(\+2,128 souls in 12 s\)/.test(g.text)), JSON.stringify(h.good));
+  const gate = reinforceGate(h, t); assert.equal(gate.allowed, false); assert.match(gate.reason, /at most 1 in 4/);
+  const blocked = checkAdvice(a('Good urn delivery, that was clean. Push Yellow lane with Warden now.', 'objective'), 'periodic', v(), h, t);
+  assert.ok(blocked.ok && blocked.speak === 'Push Yellow lane with Warden now.' && blocked.topic !== 'reinforce', JSON.stringify(blocked));
+  // Three other tips and 150 s later, a new good play may be praised again.
+  for (const [i, text] of ['Push Yellow lane with Warden now.', 'Check the minimap before the next camp.', 'Hold the Blue wave under your Guardian.'].entries())
+    h.noteAdvice({ t: t + i, clock: 870 + i * 40, trigger: 'periodic', topic: ['wave', 'map', 'objective'][i], text });
+  push(m12(1000, 'hero_orion', G_ENEMIES, G_ALLIES, { hp: 300, max_hp: 1000 })); push(m12(1040, 'hero_orion', G_ENEMIES, G_ALLIES, { hp: 950, max_hp: 1000 }));
+  const later = reinforceGate(h, t);
+  assert.ok(later.allowed && later.play?.kind === 'reset', JSON.stringify(later));
+  // A praise of death-screen shopping is not souls advice (the souls gate does not cut it).
+  assert.ok(isPraise('Good shopping on the death screen: you spent 5,900 souls.') && !isPraise('Stay at max range behind Warden.'));
+});
+
+test('controller: a good play asks sooner (WHY NOW) and a reinforcement is spoken with focus reinforce', async () => {
+  let now = 100000; const bodies: string[] = []; const delivered: string[] = [];
+  const fetchImpl = (async (_u: string, init: RequestInit) => { bodies.push(String(init.body));
+    return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ speak: 'Good push while five were dead: that is how a lead snowballs. Back off before they respawn.', priority: 'Normal', why: 'GOOD PLAYS', focus: 'reinforce' }) } }] })); }) as unknown as typeof fetch;
+  const coach = new AiCoach({ settings: () => settings({ aiInterval: 300 }), isLive: () => true, generation: () => 1, knowledge: async () => [], now: () => now, fetchImpl, onAdvice: c => delivered.push(`${c.key}|${c.text}`) });
+  const flush = async () => { for (let i = 0; i < 6; i++) await new Promise(r => setTimeout(r, 0)); };
+  const base = (c: number, dead: number) => m12(c, 'hero_orion', G_ENEMIES, G_ALLIES, { minimap: { ...snap(c).minimap!, zone_area: 'EnemyBase', your_lane: null } }, dead);
+  coach.observe(m12(780, 'hero_orion', G_ENEMIES, G_ALLIES), [], true);
+  now += 50000; coach.observe(m12(830, 'hero_orion', G_ENEMIES, G_ALLIES, {}, 1), [], true); await flush();
+  assert.equal(bodies.length, 0, 'nothing changed');
+  now += 4000; coach.observe(base(834, 1), [], true); await flush(); assert.equal(bodies.length, 0, 'one enemy dead is no window');
+  now += 4000; coach.observe(base(838, 5), [], true); await flush();
+  assert.equal(bodies.length, 1);
+  const user = JSON.parse(bodies[0]).messages[1].content as string;
+  assert.match(user, /WHY NOW: [^\n]*good play \(see GOOD PLAYS\): pushed into the enemy base at 13:58 while 5 enemies were dead/);
+  assert.deepEqual(delivered, ['ai:periodic:reinforce|Good push while five were dead: that is how a lead snowballs. Back off before they respawn.']);
+  assert.deepEqual(coach.history.praised, ['window-push:838']);
+});
+
+// The live rec11 → rec12 session (local recordings, not in the repository): with the previous match
+// in the history first, as it was live, no rec12 death prompt names a previous-match hero.
+test('rec12 recording: death prompts carry only this match\'s heroes and the death evidence of each death', async () => {
+  const dir = 'C:/Users/arielwolle/Documents/Github/DeadlockCoach/frames';
+  const files = ['rec11', 'rec12'].map(r => `${dir}/${r}/recording.json`);
+  if (!files.every(f => { try { readFileSync(f, { flag: 'r' }); return true; } catch { return false; } })) return;
+  type Rec = { frames: Array<{ timestamp: number; snapshot: AiSnapshot; cues?: Array<{ key: string; text: string; priority: 'High' | 'Normal' | 'Low'; cooldown_secs: number }> }> };
+  const [r11, r12] = files.map(f => JSON.parse(readFileSync(f, 'utf8')) as Rec);
+  const frames = [...r11.frames.filter(f => f.timestamp < r12.frames[0].timestamp), ...r12.frames];
+  let now = 0; const prompts: string[] = [];
+  const fetchImpl = (async (_u: string, init: RequestInit) => { const user = JSON.parse(String(init.body)).messages[1].content as string; if (/^Trigger: death/m.test(user)) prompts.push(user);
+    return new Response(JSON.stringify({ choices: [{ message: { content: '{"speak":null,"priority":"Low","why":"pass","focus":"pass"}' } }] })); }) as unknown as typeof fetch;
+  const coach = new AiCoach({ settings: () => settings(), isLive: () => true, generation: () => 1, knowledge: async () => [], now: () => now, fetchImpl, name: heroName, onAdvice: () => {} });
+  coach.history.setAbilities(abilities());
+  // Only wait while a request is in flight (a timer per frame made this test take a minute on Windows).
+  const flush = async () => { for (let i = 0; i < 50 && coach.busy; i++) await new Promise(r => setImmediate(r)); };
+  let start = -1;
+  for (const f of frames) { now = f.timestamp; if (start < 0 && f.timestamp >= r12.frames[0].timestamp) start = prompts.length; coach.observe(f.snapshot, f.cues || [], true); await flush(); }
+  const mine = prompts.slice(start);
+  assert.equal(mine.length, 3, mine.map(p => p.match(/clock (\S+)/)?.[1]).join(', '));
+  assert.ok(coach.history.match >= 1, 'the Violet → Grey Talon boundary was found');
+  for (const p of mine) {
+    const state = p.split('\nPLAYER PROFILE')[0];
+    for (const stale of ['Baba', 'Graves', 'Violet', 'Feed The Birds', 'Jar of Dead', 'Deaths observed this session']) assert.ok(!state.includes(stale), `${stale} in\n${state}`);
+  }
+  assert.match(mine[1], /Damage by hero[^\n]*Drifter 222 \(Rend\), Silver 168 \(Boot Kick\)/);
+  assert.match(mine[2], /the panel cause "Trooper" is misleading/);
 });

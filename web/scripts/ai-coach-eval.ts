@@ -13,7 +13,7 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { AiCoach, EVENT_GAP_SECS, SYSTEM_PROMPT, callGateway, checkAdvice, clockText, parseAdvice, setProfileProvider, soulsView, type AiConfig, type AiReasoning, type ItemInfo } from '../src/ai-coach.ts';
+import { AiCoach, EVENT_GAP_SECS, HERO_NAMES, SYSTEM_PROMPT, callGateway, checkAdvice, clockText, parseAdvice, setProfileProvider, soulsView, type AbilityRow, type AiConfig, type AiReasoning, type ItemInfo } from '../src/ai-coach.ts';
 import { defaults, normalize } from '../src/settings.ts';
 import type { Cue, Knowledge } from '../src/types.ts';
 import { profileOf } from './player-profile-replay.ts';
@@ -56,6 +56,16 @@ if (inputPath.endsWith('.json')) {
   const spokenPath = opt('--spoken') || path.join(path.dirname(inputPath), 'review', 'spoken.jsonl');
   if (existsSync(spokenPath)) original = readFileSync(spokenPath, 'utf8').split(/\r?\n/).filter(l => l.includes('"source":"ai"')).map(l => JSON.parse(l) as { clock: number; text: string });
 }
+// The previous match of the same live session first (rec12 followed rec11's Violet match in one
+// session; the live coach carried that match's deaths and heroes into rec12). --prepend none skips it.
+const prependPath = opt('--prepend') ?? (/rec12[\\/]recording\.json$/.test(inputPath) ? path.join(framesRoot, 'rec11', 'recording.json') : undefined);
+let prepended = 0;
+const mainStart = frames[0]?.t ?? 0;
+if (prependPath && prependPath !== 'none' && existsSync(prependPath)) {
+  const prev = JSON.parse(readFileSync(prependPath, 'utf8')) as { frames: Array<{ timestamp: number; snapshot: Record<string, unknown>; cues?: Cue[] }> };
+  const before = prev.frames.filter(f => f.timestamp < mainStart).map(f => ({ t: f.timestamp, snapshot: f.snapshot, cues: f.cues || [] }));
+  prepended = before.length; frames = [...before, ...frames];
+}
 const profileFiles = (opt('--profile')?.split(',') || ['rec4/replay9.jsonl', 'rec5/replay7.jsonl', 'rec6/replay5.jsonl'].map(f => path.join(framesRoot, f))).filter(f => existsSync(f));
 const profile = liveProfile ?? (profileFiles.length ? profileOf(profileFiles, false).promptText() : null);
 setProfileProvider(() => profile);
@@ -66,7 +76,14 @@ const calls: Array<{ clock: string; trigger: string; retry: boolean; body: strin
 function fakeAnswer(user: string, trigger: string): { speak: string; focus: string; priority: string } {
   const angles = user.split('COACHING ANGLES')[1]?.split('\n\n')[0] || '';
   const souls = user.match(/Unspent souls ([\d,]+)/)?.[1];
-  if (trigger === 'death') return { speak: `Melee finished you again. Next life, hold max range behind your front line and heal above 60% before you go back in.`, focus: 'death', priority: 'High' };
+  if (trigger === 'death') {
+    // Like the live model: it names the killer from the rule death review or the damage-by-hero line.
+    const killer = user.match(/Rule death review of this death \(already spoken\): Why you died: ([A-Z][\w &'.-]+?) did/)?.[1] || user.match(/^Damage by hero[^:]*: ([A-Z][\w &'.-]+?) \d/m)?.[1];
+    return { speak: `${killer ? `${killer} caught you at close range.` : 'Melee finished you again.'} Next life, hold max range behind your front line and heal above 60% before you go back in.`, focus: 'death', priority: 'High' };
+  }
+  // A good play the summary allows praising: one short, specific praise and the next step.
+  const good = user.match(/\nPraise: allowed \(fresh good play: ([^\n]+?)\)\n/)?.[1]?.replace(/ at \d+:\d\d.*$/, '').replace(/ \(.*$/, '') ?? null;
+  if (good && calls.length % 2 === 0) return { speak: `Good play: you ${good.trim()}. Keep doing that, then reset before they respawn.`, focus: 'reinforce', priority: 'Normal' };
   if (/Respawned \d+s ago/.test(angles)) return { speak: 'You just respawned: walk out with a teammate, not alone, and stay at max range behind your front line.', focus: 'team', priority: 'High' };
   if (/enemies dead/.test(angles)) return { speak: 'Enemies are down: group with your team and push the furthest lane now. Stay at max range from melee.', focus: 'objective', priority: 'High' };
   if (/Health \d+% and not recovering/.test(angles)) return { speak: 'Fall back to your Guardian and heal to full before any fight, since you get burst down.', focus: 'health', priority: 'High' };
@@ -85,6 +102,7 @@ const fetchImpl = (async (_url: string, init: RequestInit) => {
     usage: { prompt_tokens: Math.ceil(user.length / 4), completion_tokens: 60, completion_tokens_details: { reasoning_tokens: 0 } } }), { status: 200 });
 }) as unknown as typeof fetch;
 
+const abilities = JSON.parse(readFileSync(path.join(repo, 'data', 'abilities.json'), 'utf8')) as AbilityRow[];
 const settings = normalize({ ...defaults, aiEnabled: true, aiModel: 'fake-rec11-model' });
 const delivered: Array<{ clock: string; trigger: string; text: string; topic: string; why: string | null }> = [];
 const skipped: Array<{ clock: string; reason: string }> = [];
@@ -92,24 +110,34 @@ let lastClock: number | null = null, seenSuppressed = 0;
 const coach = new AiCoach({ settings: () => settings, isLive: () => true, generation: () => 1, knowledge: async () => docs, now: () => now, fetchImpl, name, items: id => items[id] ?? null,
   onAdvice: (cue, advice, meta) => delivered.push({ clock: clockText(meta.clock), trigger: meta.trigger, text: cue.text, topic: advice.focus, why: meta.reason ?? null }),
   onStatus: s => { if ((s.suppressed || 0) > seenSuppressed) { seenSuppressed = s.suppressed!; skipped.push({ clock: clockText(lastClock), reason: s.message }); } } });
+coach.history.setAbilities(abilities);
 const flush = async () => { for (let i = 0; i < 6; i++) await new Promise(r => setTimeout(r, 0)); };
 
 const samples: Record<'event' | 'death', { clock: string; user: string } | null> = { event: null, death: null };
+const goodSeen: Array<{ key: string; clock: number | null; kind: string; text: string; match: number }> = [];
+const boundaries: typeof coach.history.boundaries = [];
+let offsets: { calls: number; delivered: number; skipped: number; event: number; quiet: number; suppressed: number } | null = null;
 for (const rec of frames) {
   now = rec.t;
+  if (!offsets && rec.t >= mainStart) offsets = { calls: calls.length, delivered: delivered.length, skipped: skipped.length, event: coach.status.eventRequests || 0, quiet: coach.status.quietRequests || 0, suppressed: coach.status.suppressed || 0 };
   const before = calls.length;
   const clock = typeof rec.snapshot.game_clock_secs === 'number' ? rec.snapshot.game_clock_secs : null;
   if (clock != null) lastClock = clock;
   coach.observe(rec.snapshot, rec.cues, true);
   await flush();
+  for (const g of coach.history.good) if (!goodSeen.some(x => x.key === g.key && x.match === coach.history.match)) goodSeen.push({ ...g, match: coach.history.match });
+  for (const b of coach.history.boundaries) if (!boundaries.includes(b)) boundaries.push(b);
   if (calls.length > before) {
     const c = calls[before];
     if (c.trigger === 'periodic' && !samples.event && c.why && !/routine check/.test(c.why) && clock != null && clock >= 1100) samples.event = { clock: c.clock, user: c.body };
-    if (c.trigger === 'death' && clock != null && clock >= 1100 && !samples.death) samples.death = { clock: c.clock, user: c.body };
+    if (c.trigger === 'death' && clock != null && clock >= 1100 && rec.t >= mainStart && !samples.death) samples.death = { clock: c.clock, user: c.body };
   }
 }
-
-const clocks = frames.map(f => f.snapshot.game_clock_secs).filter((c): c is number => typeof c === 'number');
+// Report only the main recording (the prepended match only feeds the history, as it did live).
+const prevMatch = offsets ? { calls: calls.splice(0, offsets.calls), delivered: delivered.splice(0, offsets.delivered) } : { calls: [], delivered: [] };
+if (offsets) { skipped.splice(0, offsets.skipped); coach.status.eventRequests = (coach.status.eventRequests || 0) - offsets.event; coach.status.quietRequests = (coach.status.quietRequests || 0) - offsets.quiet; coach.status.suppressed = (coach.status.suppressed || 0) - offsets.suppressed; }
+if (prepended) console.log(`(Prepended ${prepended} frames of the previous match from ${path.relative(repo, prependPath!)}, as in the live session: ${prevMatch.calls.length} requests and ${prevMatch.delivered.length} tips there, not counted below.)`);
+const clocks = frames.filter(f => f.t >= mainStart).map(f => f.snapshot.game_clock_secs).filter((c): c is number => typeof c === 'number');
 const minutes = clocks.length ? (Math.max(...clocks) - Math.min(...clocks)) / 60 : 0;
 const firstClock = clocks.length ? Math.min(...clocks) : 0;
 const before = original.filter(o => o.clock == null || o.clock >= firstClock);
@@ -130,10 +158,25 @@ const words = ['max range', 'melee', 'front line', 'heal', 'midboss', 'walk out'
 console.log(`  stock phrases spoken: ${words.map(w => `"${w}" ${delivered.filter(o => o.text.toLowerCase().includes(w)).length}`).join(' · ')}`);
 const themes = new Map<string, number>(); for (const d of delivered) themes.set(d.topic, (themes.get(d.topic) || 0) + 1);
 console.log(`  themes spoken: ${[...themes].map(([k, v]) => `${k} ${v}`).join(' · ')}`);
-const kinds = new Map<string, number>(); for (const c of periodic) { const k = (c.why || '').match(/^(new phase|respawn|enemy-dead window|objective within 60 s|souls reach the usual buy|big team souls swing|routine check)/)?.[1] || 'other'; kinds.set(k, (kinds.get(k) || 0) + 1); }
+const kinds = new Map<string, number>(); for (const c of periodic) { const k = (c.why || '').match(/^(new phase|respawn|enemy-dead window|objective within 60 s|souls reach the usual buy|big team souls swing|routine check|good play)/)?.[1] || 'other'; kinds.set(k, (kinds.get(k) || 0) + 1); }
 console.log(`  periodic triggers: ${[...kinds].map(([k, v]) => `${k} ${v}`).join(' · ')}`);
 const reasons = new Map<string, number>(); for (const s of skipped) { const k = s.reason.replace(/^Skipped a repeat: /, '').replace(/ at \d+:\d\d/g, '').replace(/"[^"]*"/, '"…"').replace(/\.$/, ''); reasons.set(k, (reasons.get(k) || 0) + 1); }
 console.log(`  gate reasons: ${[...reasons].sort((a, b) => b[1] - a[1]).map(([k, v]) => `${v}× ${k}`).join(' | ')}`);
+// Match boundaries, good plays and praise share, and the death prompts' hero names vs this match.
+console.log(`  match boundaries: ${boundaries.length ? boundaries.map(b => `[${clockText(b.clock)}] ${b.reason}`).join(' | ') : 'none'}`);
+const praise = delivered.filter(d => d.topic === 'reinforce');
+console.log(`  good plays seen ${goodSeen.length}: ${goodSeen.map(g => `[${clockText(g.clock)}] ${g.kind}${g.match ? '' : ' (previous match)'}`).join(', ')}`);
+console.log(`  praise spoken ${praise.length} of ${delivered.length} AI tips (gate: at most 1 in 4)`);
+for (const g of goodSeen) console.log(`    GOOD [${clockText(g.clock)}] ${g.kind}: ${g.text}`);
+const heroRe = Object.values(HERO_NAMES).map(n => [n, new RegExp(`\\b${n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`)] as const);
+for (const c of calls.filter(x => x.trigger === 'death' && !x.retry)) {
+  const state = c.body.split('\nPLAYER PROFILE')[0];
+  const roster = (state.match(/^(?:Enemies|Allies|Enemy heroes this match|Enemy heroes|Allied heroes|Enemy roles)[^\n]*$/gm) || []).join(' ');
+  const named = heroRe.filter(([, re]) => re.test(state.replace(/^(?:RECENT|- \[)[^\n]*$/gm, ''))).map(([n]) => n);
+  const lines = state.split('\n').filter(l => /^(?:Death at|Earlier Death|Damage by hero|Rule death review|Souls |GOOD PLAYS|- \[|Praise:)/.test(l) && !/rule:/.test(l)).slice(0, 8);
+  console.log(`  DEATH PROMPT [${c.clock}] heroes named in STATE: ${named.join(', ') || 'none'}${roster ? '' : ' (no roster line)'}\n${lines.map(l => `      ${l.slice(0, 260)}`).join('\n')}`);
+}
+for (const d of delivered.filter(x => x.trigger === 'death')) console.log(`  DEATH SPOKEN [${d.clock}] ${d.text}`);
 if (!quiet) {
   for (const d of delivered) console.log(`  SPOKEN  [${d.clock}] ${d.trigger}/${d.topic}${d.why ? ` (why now: ${d.why.slice(0, 70)})` : ''}: ${d.text}`);
   for (const s of skipped) console.log(`  GATED   [${s.clock}] ${s.reason.replace(/^Skipped a repeat: /, '')}`);

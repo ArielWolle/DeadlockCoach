@@ -13,6 +13,7 @@ const REVIEW = {
     { title: 'Stop dying to Victor up close', evidence: '13:20 Aura of Suffering while alone', why_it_matters: 'Each death gives Victor souls and you lose 30+ seconds of map time', how_to_practice: 'Keep max range; step back the moment the aura ticks' },
     { title: 'Spend before you walk out', evidence: '13:20 you died holding 4,000 souls', why_it_matters: 'Unspent souls do nothing in a fight', how_to_practice: 'Shop whenever you hold the next tier' },
   ],
+  keep_doing: ['Stay on your lane between fights: it kept your farm ahead'],
   next_game_focus: 'Spend your souls before every fight.',
   hero_tips: ['As Grey Talon, shoot from max range behind your front line'],
   spoken: 'This was a much cleaner game. You stayed on your lane and never threw a life right after respawning. The biggest fix is Victor: you died to his aura up close at 13:20. Stay at max range. Next game, spend your souls before every fight.',
@@ -75,12 +76,16 @@ test('Review my last match after a replay: renders the review, reads it aloud wi
   const [system, user] = seen[0].body.messages.map((m: { content: string }) => m.content);
   expect(system).toContain('elite Deadlock coach'); expect(user).toContain('MATCH DIGEST'); expect(user).toContain('Hero: Grey Talon');
   expect(user).toContain('DEATHS (2)'); expect(user).toContain('Aura of Suffering');
+  // What went well leads the digest, and the prompt asks to open with it and end with keep doing + next focus.
+  expect(user).toMatch(/STRENGTHS \(\d+: what went well, with evidence\)\n- /); expect(user.indexOf('STRENGTHS')).toBeLessThan(user.indexOf('DEATHS ('));
+  expect(system).toContain('Lead with what went well'); expect(system).toContain('"keep_doing"');
   expect(seen[0].body.max_tokens).toBeGreaterThanOrEqual(3072);
   // Rendered: summary, what went well, improvements with evidence, next-game focus, hero tips.
   const item = page.locator('#review-list .review-item').first();
   await expect(item).toContainText(REVIEW.summary);
   await expect(item).toContainText('What went well'); await expect(item).toContainText('Lane presence');
   await expect(item).toContainText('Stop dying to Victor up close'); await expect(item).toContainText('Evidence: 13:20 Aura of Suffering');
+  await expect(item).toContainText('Keep doing'); await expect(item).toContainText('Stay on your lane between fights');
   await expect(item).toContainText('Next game: Spend your souls before every fight.');
   await expect(item).toContainText('As Grey Talon, shoot from max range');
   await expect(item.locator('summary').first()).toContainText('Grey Talon');
