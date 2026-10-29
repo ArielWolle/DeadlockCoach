@@ -12,9 +12,12 @@ fn at(t:u32)->GameSnapshot{GameSnapshot{game_clock_secs:Some(t),..Default::defau
 }
 #[test]fn rem_suggestion_explains_one_verified_item_and_respects_budget_and_danger(){
     let rule=counter_rule_from_json(include_str!("../../../data/counters.json")).unwrap();
+    // In base: a shop moment (rec13 review item 11: counters only at shop moments, <= 15 words).
     let mut s=at(400);s.screen=Some("Gameplay".into());s.souls=Some(3500);s.enemy_heroes=vec!["hero_familiar".into()];
-    let cues=rule.evaluate(&s);assert_eq!(cues.len(),1);assert!(cues[0].text.contains("Healing Nova"));assert!(cues[0].text.contains("nearby allies"));assert!(!cues[0].text.contains("Arcane Surge"));
-    s.souls=Some(1600);let cue=&rule.evaluate(&s)[0];assert!(cue.text.contains("Guardian Ward"));assert!(cue.text.contains("barrier"));
+    s.minimap=Some(coach_core::MinimapState{you:Some(coach_core::Pt{x:0.5,y:0.9}),..Default::default()});
+    let cues=rule.evaluate(&s);assert_eq!(cues.len(),1);assert!(cues[0].text.contains("Healing Nova"));assert!(cues[0].text.contains("nearby allies"),"{}",cues[0].text);assert!(!cues[0].text.contains("Arcane Surge"));
+    assert!(cues[0].text.split_whitespace().count()<=15,"{}",cues[0].text);
+    s.souls=Some(1600);let cue=&rule.evaluate(&s)[0];assert!(cue.text.contains("Guardian Ward"));assert!(cue.text.to_lowercase().contains("barrier"),"{}",cue.text);
     s.hp=Some(200);s.max_hp=Some(1000);assert!(rule.evaluate(&s).is_empty());
     s.hp=Some(900);s.items=vec!["upgrade_guardian_ward".into(),"upgrade_arcane_surge".into()];assert!(rule.evaluate(&s).is_empty());
     let values:serde_json::Value=serde_json::from_str(include_str!("../../../data/coaching/item-rationales.json")).unwrap();
@@ -24,9 +27,9 @@ fn at(t:u32)->GameSnapshot{GameSnapshot{game_clock_secs:Some(t),..Default::defau
     let rule=counter_rule_from_json(include_str!("../../../data/counters.json")).unwrap();
     let mut s=at(400);s.screen=Some("Dead".into());s.souls=Some(2000);s.enemy_heroes=vec!["hero_viscous".into()];
     let c=rule.evaluate(&s);let t=&c.iter().find(|c|c.key.contains("long_range")).expect("Long Range vs Viscous").text;
-    assert!(t.contains("Long Range for 1600 souls"),"{t}");
-    assert!(t.contains("beyond a minimum distance"),"game tooltip: {t}");
-    assert!(t.contains("percentage points more often against Viscous"),"{t}");
+    // Item and cost in <= 15 words (the long tooltip and the win-rate evidence no longer fit).
+    assert!(t.starts_with("Against Viscous: buy Long Range, 1,600 souls."),"{t}");
+    assert!(t.split_whitespace().count()<=15,"{t}");
     // A weapon item is not suggested to a spirit build.
     s.items=vec!["upgrade_improved_spirit".into()];
     assert!(!rule.evaluate(&s).iter().any(|c|c.key.contains("long_range")));
@@ -52,7 +55,7 @@ fn dead_with(t:u32,rows:&[(&str,u32)],souls:u32)->GameSnapshot{
     let rule=counter_rule_from_json(include_str!("../../../data/counters.json")).unwrap();
     let c=rule.evaluate(&dead_with(2810,&[("Affliction",2172),("Spirit Armor",1104),("Frost Grenade",1017)],3580));
     assert_eq!(c[0].key,"counter:hero_synth:upgrade_spirit_bubble","{c:?}");
-    assert!(c[0].text.starts_with("Pocket's Affliction did 2,172 damage when you last died. Consider Spirit Shielding for 1,600 souls"),"{}",c[0].text);
+    assert_eq!(c[0].text,"Pocket's Affliction hurt you most: buy Spirit Shielding, 1,600 souls.");
     let rule=counter_rule_from_json(include_str!("../../../data/counters.json")).unwrap();
     let c=rule.evaluate(&dead_with(2990,&[("Bullet Dance",2017),("Fixation",932),("Capacitor",398)],4474));
     assert_eq!(c[0].key,"counter:hero_haze:upgrade_weapon_shielding","{c:?}");
@@ -72,4 +75,17 @@ fn dead_with(t:u32,rows:&[(&str,u32)],souls:u32)->GameSnapshot{
     s.minimap=Some(coach_core::MinimapState{you:Some(coach_core::Pt{x:0.2,y:0.4}),..Default::default()});
     assert!(rule.evaluate(&s).is_empty(),"in lane");
     s.minimap.as_mut().unwrap().you=Some(coach_core::Pt{x:0.5,y:0.9});assert_eq!(rule.evaluate(&s).len(),1,"at base");
+    s.minimap.as_mut().unwrap().you=None;assert!(rule.evaluate(&s).is_empty(),"unknown position is not a shop moment");
+    s.screen=Some("Scoreboard".into());assert!(rule.evaluate(&s).is_empty(),"Tab while alive is not a shop moment");
+    s.dead=true;assert_eq!(rule.evaluate(&s).len(),1,"scoreboard on the death screen");
+}
+#[test]fn a_named_plan_threat_on_the_death_panel_picks_its_counter(){
+    // rec13 29:25 / 43:18: Infernus' Afterburn (spirit damage over time; not in the review's
+    // threat list) topped the panel: Spirit Shielding, not a statistical item.
+    let rule=counter_rule_from_json(include_str!("../../../data/counters.json")).unwrap();
+    let mut s=dead_with(2600,&[("Afterburn",1756),("Toxic Bullets",899)],3000);
+    s.enemy_heroes=["hero_inferno","hero_atlas","hero_vampirebat","hero_ghost","hero_chrono","hero_necro"].map(String::from).to_vec();
+    let c=rule.evaluate(&s);
+    assert_eq!(c[0].key,"counter:hero_inferno:upgrade_spirit_bubble","{c:?}");
+    assert_eq!(c[0].text,"Infernus' Afterburn hurt you most: buy Spirit Shielding, 1,600 souls.");
 }

@@ -13,7 +13,8 @@ fn main() {
     let path = args.next().expect("replay .jsonl path");
     let all = args.any(|a| a == "--all");
     let file = std::fs::File::open(&path).expect("open replay");
-    let mut rules = rules_from_timings(include_str!("../../../data/timings.json")).expect("timings");
+    // As the web coach registers them: the Urn timer readout is replaced by the Urn plan (plans.rs).
+    let mut rules = rules_from_timings(&coach_engine::plans::unplanned_timings(include_str!("../../../data/timings.json"))).expect("timings");
     rules.extend(default_rules(RulesConfig::default()));
     rules.push(counter_rule_from_json(include_str!("../../../data/counters.json")).expect("counters"));
     let mut engine = Engine::new(rules);

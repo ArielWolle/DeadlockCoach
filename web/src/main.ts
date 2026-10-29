@@ -342,7 +342,9 @@ const FULL_ONLY=['counter','death','review','lead','behind','unspent-dead','play
   // Top-bar deaths, structure banners and the urn carrier (full scan only).
   'active:hold_base','active:team_losing','active:base_attack','active:urn_hold',
   // Praise (crates/engine/src/praise.rs) needs the top bar, status effects and the structure banner.
-  'praise'];
+  'praise',
+  // Plans / threats / reset (crates/engine/src/plans.rs) need the top bar ('lead' covers lead:*).
+  'plan','threat','reset'];
 function deliver(analysis:Analysis,timestamp:number,fast=false){
   const now=Date.now(),age=Math.max(0,now-timestamp);const delivered:Cue[]=[];
   for(const original of analysis.cues){

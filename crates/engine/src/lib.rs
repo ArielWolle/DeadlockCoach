@@ -11,6 +11,7 @@ pub mod economy;
 pub mod review;
 pub mod active;
 pub mod praise;
+pub mod plans;
 mod counter_explanations;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -126,11 +127,14 @@ impl Rule for CounterRule {
         if snap.screen.as_deref()==Some("Gameplay") {
             if snap.game_clock_secs.unwrap_or(0)<180||snap.souls.unwrap_or(0)<800{return vec![];}
             if snap.minimap.as_ref().is_some_and(|m|m.you.is_some_and(|me|m.enemies.iter().any(|p|(me.x-p.x).hypot(me.y-p.y)<0.18))){return vec![];}
-            // A purchase tip is for a shop window: dead, on the scoreboard, or back at base. A
-            // recorded match spoke both counters mid-fight. (Unknown position is not blocked:
-            // the tip carries no risk, it just may come early.)
-            if snap.minimap.as_ref().and_then(|m|m.you).is_some_and(|me|me.y<0.8){return vec![];}
+            // A purchase tip is for a shop moment only: dead or back in base (rec13 review item 11;
+            // a recorded match spoke both counters mid-fight). Unknown position is not a shop moment.
+            let map = snap.minimap.as_ref();
+            let in_base = map.and_then(|m|m.you).is_some_and(|me|me.y>=0.8) || map.is_some_and(|m|m.zone_area==Some(coach_core::ZoneArea::OwnBase));
+            if !in_base {return vec![];}
         }
+        // The scoreboard is a shop moment only while dead (Tab mid-fight is not).
+        if snap.screen.as_deref()==Some("Scoreboard") && !snap.dead {return vec![];}
         // A suggestion must be affordable from souls actually read (a recorded match suggested
         // items with no souls reading at all), and fit the build you are seen buying: a damage
         // damage item is skipped when you own more items of the other damage category (rec3
@@ -161,19 +165,25 @@ impl Rule for CounterRule {
         let data = review::game_data();
         for (hero, _, _) in &hurt {
             // The hero's ability with a known counter need, as seen on a panel.
+            // (ability, need): the review's threats first, then the named threats of the live plans
+            // (data/coaching/plans.json: Afterburn, Grasping Hands, Shoulder Charge...).
+            let plan_threats = plans::catalog();
             let need = m.deaths.iter().rev().filter(|d| d.0 + COUNTER_DEATH_SECS >= clock).flat_map(|d| d.1.iter()).filter(|r| &r.0 == hero)
-                .find_map(|r| catalog.threats.iter().find(|t| &t.hero == hero && !t.counter.is_empty() && t.source.eq_ignore_ascii_case(&r.1)).map(|t| (t, r.2)));
-            let Some((threat, dmg)) = need else { continue };
-            let Some(counter) = catalog.counters.iter().find(|c| c.need == threat.counter) else { continue };
+                .find_map(|r| catalog.threats.iter().find(|t| &t.hero == hero && !t.counter.is_empty() && t.source.eq_ignore_ascii_case(&r.1)).map(|t| (t.source.clone(), t.counter.clone()))
+                    .or_else(|| plan_threats.threats.iter().find(|t| &t.hero == hero && !t.need.is_empty() && t.ability.eq_ignore_ascii_case(&r.1)).map(|t| (t.ability.clone(), t.need.clone()))));
+            let Some((source, need)) = need else { continue };
+            let Some(counter) = catalog.counters.iter().find(|c| c.need == need) else { continue };
             let item = counter.items.iter().filter_map(|n| data.item(n))
                 .filter(|i| !owned_item(&i.class_name, &i.name) && usable(&i.class_name) && fits(&i.class_name) && snap.souls.is_some_and(|s| s >= i.cost)).next();
             let Some(item) = item else { continue };
-            seen.push(hero.clone());
             let name = data.hero_name(hero);
-            let why = counter.why.replace("{hero}", &name).replace("{threat}", &threat.source);
-            cues.push(Cue { key: format!("counter:{hero}:{}", item.class_name),
-                text: format!("{name}'s {} did {} damage when you last died. Consider {} for {} souls: {why}.", threat.source, thousands_souls(dmg), item.name, thousands_souls(item.cost)),
-                priority: Priority::Low, cooldown_secs: 1200 });
+            let owner = if name.ends_with('s') { format!("{name}'") } else { format!("{name}'s") };
+            // Short and threat-based (rec13 review item 11: <= 15 words at a shop moment); "most"
+            // only for the hero with the most panel damage.
+            let text = if hurt.first().is_some_and(|h| &h.0 == hero) { format!("{owner} {source} hurt you most: buy {}, {} souls.", item.name, thousands_souls(item.cost)) }
+                else { format!("Against {owner} {source}: buy {}, {} souls.", item.name, thousands_souls(item.cost)) };
+            seen.push(hero.clone());
+            cues.push(Cue { key: format!("counter:{hero}:{}", item.class_name), text, priority: Priority::Low, cooldown_secs: 1200 });
         }
         // 2. Statistical counters. Once death panels name who hurts you, only those heroes
         //    ("Counter-buy against what is actually hurting you", moba-fundamentals): rec8
@@ -190,16 +200,16 @@ impl Rule for CounterRule {
                 .take(1).collect();
             let Some(first) = mine.first() else { continue };
             let who = if first.label.is_empty() { trigger.as_str() } else { first.label.as_str() };
-            // What the item does (curated summary, else the game's tooltip), what it costs, and
-            // the evidence for it against this opponent.
+            // Item, cost and (when it fits in 15 words) what it does: the curated summary's first
+            // clause, else the game's tooltip. The win-rate evidence stays in counters.json.
             let what=counter_explanations::summary(&first.suggest_class).map(str::to_string)
-                .or_else(||counter_explanations::tooltip(&first.suggest_class));
-            let cost=counter_explanations::cost(&first.suggest_class).map(|c|format!(" for {c} souls")).unwrap_or_default();
-            let why=counter_explanations::statistical_reason(&first.reason,who);
-            let text=match what {
-                Some(w)=>format!("Against {who}, consider {}{cost}. {}. {why}",first.suggest,w.trim_end_matches('.')),
-                None=>format!("Against {who}, consider {}{cost}. {why}",first.suggest),
-            };
+                .or_else(||counter_explanations::tooltip(&first.suggest_class))
+                .map(|w|w.split([',',':',';']).next().unwrap_or("").trim().trim_end_matches('.').to_string());
+            let cost=counter_explanations::cost(&first.suggest_class).map(|c|format!(", {} souls",thousands_souls(c))).unwrap_or_default();
+            let base=format!("Against {who}: buy {}{cost}.",first.suggest);
+            // The clause, else its part before " and " ("Its barrier absorbs damage"), if it fits.
+            let fit=|w:&str|{let t=format!("{base} {w}.");(t.split_whitespace().count()<=15).then_some(t)};
+            let text=what.and_then(|w|fit(&w).or_else(||w.split(" and ").next().and_then(|p|fit(p.trim())))).unwrap_or(base);
             cues.push(Cue {
                 key: format!("counter:{trigger}:{}",if first.suggest_class.is_empty(){&first.suggest}else{&first.suggest_class}),
                 text,
@@ -361,7 +371,7 @@ pub fn default_rules(cfg: RulesConfig) -> Vec<Box<dyn Rule>> {
     // the lane to push in an enemy-dead window, souls to spend in base) wins the step over the
     // generic one, and the shared keys keep the generic one quiet for its cooldown. Praise comes
     // before the farm-pace compliment, which it outranks for the shared praise budget.
-    vec![Box::new(active::ActiveCoach::default()), Box::new(positioning::PositionCoach::default()), Box::new(jungle::JungleCoach::default()), Box::new(laning::LaneCoach::default()), Box::new(map_rules::MapRule), Box::new(UnspentSoulsRule::new(cfg.clone())), Box::new(review::ReviewCoach::default()), Box::new(NetworthLeadRule::new(cfg)), Box::new(praise::PraiseCoach::default()), Box::new(economy::PaceRule::default()),Box::new(economy::WaveReportRule::default())]
+    vec![Box::new(active::ActiveCoach::default()), Box::new(positioning::PositionCoach::default()), Box::new(jungle::JungleCoach::default()), Box::new(laning::LaneCoach::default()), Box::new(map_rules::MapRule), Box::new(UnspentSoulsRule::new(cfg.clone())), Box::new(review::ReviewCoach::default()), Box::new(NetworthLeadRule::new(cfg)), Box::new(praise::PraiseCoach::default()), Box::new(economy::PaceRule::default()),Box::new(economy::WaveReportRule::default()), Box::new(plans::PlanCoach::default())]
 }
 
 pub struct Engine {
@@ -489,7 +499,7 @@ mod tests {
         let r = counter_rule_from_json(r#"[{"when_enemy_has":"A","suggest":"B","reason":"test."}]"#).unwrap();
         let mut e = Engine::new(vec![r]);
         let mut s = at(100); s.enemy_items = vec!["A".into()];
-        assert_eq!(e.step(&s)[0].text, "Against A, consider B. test.");
+        assert_eq!(e.step(&s)[0].text, "Against A: buy B.");
         assert!(e.step(&s).is_empty());
         let mut s2 = at(1000); s2.enemy_items = vec!["A".into()]; s2.items = vec!["B".into()];
         assert!(e.step(&s2).is_empty());

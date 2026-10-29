@@ -97,7 +97,8 @@ impl Coach {
     fn engine(&self) -> Result<Engine, JsValue> {
         if self.pipeline.profile().adapter != "deadlock" { return Ok(Engine::new(vec![])); }
         let mut rules: Vec<Box<dyn Rule>> = vec![];
-        if self.options.timers { rules.extend(coach_engine::rules_from_timings(&self.timings).map_err(js_error)?); }
+        // With the plan coach registered (laning), the Urn readout is replaced by the Urn plan.
+        if self.options.timers { let t = if self.options.laning { coach_engine::plans::unplanned_timings(&self.timings) } else { self.timings.clone() }; rules.extend(coach_engine::rules_from_timings(&t).map_err(js_error)?); }
         // Positioning (gank / outnumbered / missing / help) and jungle calls speak for themselves;
         // the lane plan mutes itself in their favour, so both must be registered or nothing is said.
         if self.options.laning {rules.push(Box::new(coach_engine::positioning::PositionCoach::default()));rules.push(Box::new(coach_engine::jungle::JungleCoach::default()));rules.push(Box::new(self.lane_coach.clone()));}
@@ -116,6 +117,8 @@ impl Coach {
         // it needs the top bar, status effects and the structure banner ('praise' in FULL_ONLY).
         if self.options.deaths { rules.push(Box::new(coach_engine::praise::PraiseCoach::default())); }
         if self.options.counters { rules.push(coach_engine::counter_rule_from_json(&self.counters).map_err(js_error)?); }
+        // Objective plans, lead / throw protection, heal-after-won-fight and named threats (top bar).
+        if self.options.laning { rules.push(Box::new(coach_engine::plans::PlanCoach::default())); }
         // Active calls (debuff on you, CC, enemy-dead window, heading out weak, unsecured souls,
         // repeat killer, missed team fight) go first so their specific text wins ties.
         if self.options.laning { rules.insert(0, Box::new(coach_engine::active::ActiveCoach::default())); }
@@ -186,7 +189,7 @@ impl QuickCoach {
     }
     pub fn configure(&mut self,options:&str)->Result<(),JsValue>{
         self.options=json(options)?;let mut rules:Vec<Box<dyn Rule>>=vec![];
-        if self.options.timers{rules.extend(coach_engine::rules_from_timings(include_str!("../../../data/timings.json")).map_err(js_error)?);}
+        if self.options.timers{let t=include_str!("../../../data/timings.json");let t=if self.options.laning{coach_engine::plans::unplanned_timings(t)}else{t.to_string()};rules.extend(coach_engine::rules_from_timings(&t).map_err(js_error)?);}
         if self.options.laning{rules.push(Box::new(coach_engine::positioning::PositionCoach::default()));rules.push(Box::new(coach_engine::jungle::JungleCoach::default()));rules.push(Box::new(self.lane.clone()));}
         if self.options.map{rules.push(Box::new(coach_engine::economy::WaveReportRule::default()));rules.push(Box::new(coach_engine::map_rules::MapRule));}
         if self.options.economy{rules.push(Box::new(coach_engine::economy::PaceRule::default()));rules.push(Box::new(coach_engine::UnspentSoulsRule::new(RulesConfig::default())));}
