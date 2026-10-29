@@ -107,6 +107,45 @@ pub struct GameSnapshot {
     /// attack). None = no banner read on this frame.
     #[serde(default)]
     pub objective_banner: Option<ObjectiveBanner>,
+    /// "win" / "loss" when the end-of-match Victory / Defeat banner was read.
+    #[serde(default)]
+    pub match_result: Option<String>,
+    /// Lane structures seen on the minimap (Guardian / Walker / Shrine / Patron). Empty = not read;
+    /// a structure is listed only when its state was observed.
+    #[serde(default)]
+    pub structures: Vec<StructureState>,
+    /// Who took the most recent Midboss, when evidence supports it ("ally" / "enemy").
+    #[serde(default)]
+    pub midboss_taken_by: Option<String>,
+    /// Your own ability bar (slots 1-4, 4 = ultimate): ready / cooldown seconds when read.
+    #[serde(default)]
+    pub abilities: Vec<AbilityState>,
+}
+
+/// One lane structure's observed state.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct StructureState {
+    /// "Green" / "Blue" / "Yellow" (lane colour as on your minimap); None for base structures.
+    pub lane: Option<Lane>,
+    /// "guardian", "walker", "shrine" or "patron".
+    pub kind: String,
+    /// Your team's structure.
+    pub own: bool,
+    /// Standing (true) or destroyed (false).
+    pub alive: bool,
+}
+
+/// One ability slot on your HUD.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AbilityState {
+    /// 1-4 (4 = ultimate).
+    pub slot: u8,
+    /// Ready to cast (no cooldown number shown); None when unread.
+    pub ready: Option<bool>,
+    /// Cooldown seconds remaining when a number is shown.
+    pub cooldown_secs: Option<u32>,
 }
 
 /// A top-centre objective health banner.

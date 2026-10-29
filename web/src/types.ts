@@ -38,6 +38,10 @@ export interface Snapshot {
   status_effects?: string[];
   /** Top-centre boss health banner (a Patron under attack); own = your team's objective (null = layout unknown). */
   objective_banner?: ObjectiveBanner | null;
+  /** 'win' / 'loss' from the Victory / Defeat banner. */ match_result?: 'win' | 'loss' | null;
+  /** Observed lane structures (only those whose state was read). */ structures?: StructureState[];
+  /** Who took the last Midboss when evidence supports it. */ midboss_taken_by?: 'ally' | 'enemy' | null;
+  /** Own ability bar, slots 1-4 (4 = ultimate). */ abilities?: AbilityState[];
 }
 export interface ObjectiveBanner { name: 'HIDDEN KING' | 'ARCHMOTHER' | string; own?: boolean | null; health_ratio?: number | null }
 export interface DamageRow { source: string; hits?: number | null; damage: number }
@@ -82,3 +86,5 @@ export type WorkerReply = { type: 'progress'; message: string; fraction: number 
   | { type: 'result'; id: number; generation: number; analysis: Analysis; elapsed: number; pool?: PoolStatus }
   | { type: 'error'; message: string; id?: number };
 export type ProfileReply = { type: 'profile_ready'; requestId: number } | { type: 'profile_error'; requestId: number; message: string };
+export interface StructureState { lane?: 'Green' | 'Blue' | 'Yellow' | null; kind: 'guardian' | 'walker' | 'shrine' | 'patron' | string; own: boolean; alive: boolean }
+export interface AbilityState { slot: number; ready?: boolean | null; cooldown_secs?: number | null }
