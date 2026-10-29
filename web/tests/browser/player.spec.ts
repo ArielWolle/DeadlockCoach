@@ -35,7 +35,12 @@ test('replay results build a persistent player profile with export, import, rese
   await expect(page.locator('#player-weaknesses')).toContainText('Killed at close range');
   await expect(page.locator('#player-weaknesses')).toContainText('Unspent souls');
   await expect(page.locator('#player-weaknesses')).toContainText('Grey Talon is long-range');
-  await expect(page.locator('#player-strengths')).toContainText('Keeps lanes covered');
+  // Strengths come first, with evidence, and the last match's plays are tagged as such.
+  await expect(page.locator('#player-strengths')).toContainText('Kept your lane covered');
+  await expect(page.locator('#player-strengths')).toContainText('Last match');
+  await expect(page.locator('#player-strengths')).toContainText('Coach says: Keep it up');
+  await expect(page.locator('#player-improved')).toContainText('Shown once there are two matches');
+  expect(await page.locator('#player-strengths').evaluate(s => !!(s.compareDocumentPosition(document.getElementById('player-weaknesses')!) & Node.DOCUMENT_POSITION_FOLLOWING))).toBe(true);
   await expect(page.locator('#player-matches tr')).toHaveCount(1);
   await expect(page.locator('#player-matches')).toContainText('Grey Talon');
   await expect(page.locator('#player-matches')).toContainText('Victor x1');
