@@ -58,7 +58,7 @@ export class PlayerPage {
     select.value = all.heroes.some(h => h.hero === chosen) ? chosen : '';
     const s = select.value ? p.summary(select.value) : all;
     $('player-summary').textContent = s.matches
-      ? `${s.matches} match${s.matches === 1 ? '' : 'es'}${s.heroName ? ` · mostly ${s.heroName}` : ''} · ${s.observedMinutes} min observed (last 10 matches)${s.deadPct != null ? ` · ${s.deadPct}% dead · ${s.deathsPer10} deaths per 10 min` : ''}${s.farmPerMin != null ? ` · ${s.farmPerMin} souls/min` : ''}.`
+      ? `${s.matches} match${s.matches === 1 ? '' : 'es'}${s.heroName ? ` · mostly ${s.heroName}` : ''} · ${s.observedMinutes} min of game time observed (last 10 matches)${s.deadPct != null ? ` · dead ${s.deadPct}% of it · ${s.deathsPer10} deaths per 10 min` : ''}${s.farmPerMin != null ? ` · ${s.farmPerMin} souls/min` : ''}.`
       : 'No matches yet. Coach a match, or add a replay, to start learning your habits.';
     this.traits('player-weaknesses', s.weaknesses, 'No clear weaknesses in the evidence so far.');
     this.traits('player-strengths', s.strengths, 'No clear strengths yet: they appear as evidence builds up.');

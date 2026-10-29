@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { readFileSync } from 'node:fs';
 import assert from 'node:assert/strict';
 import { defaults, normalize } from '../src/settings.ts';
 import { snapshotLines } from '../src/storage.ts';
@@ -9,7 +10,7 @@ import {regionsFromReport} from '../src/region-overlays.ts';
 import {loadVerifiedAsset} from '../src/assets.ts';
 import {freshCue} from '../src/live-cues.ts';
 import {Speaker} from '../src/speech.ts';
-import {PlayerProfile, migrate, killerFamily, MAX_MATCHES, PLAYER_PROFILE_KEY, type MatchRecord} from '../src/player-profile.ts';
+import {PlayerProfile, migrate, killerFamily, respawnEstimate, deadOf, spanOf, FALLBACK_NAMES, MAX_MATCHES, PLAYER_PROFILE_KEY, type MatchRecord} from '../src/player-profile.ts';
 
 test('settings normalize corrupt input, finite numeric ranges and viewport bounds', () => {
   assert.deepEqual(normalize(null), defaults);
@@ -187,6 +188,8 @@ test('player profile aggregates deaths with their context, time shares and unspe
   assert.equal(a.alone,true,'the only ally was far away');assert.equal(a.souls,4000);assert.equal(a.evidence,true);
   assert.equal(b.family,'melee hits');assert.equal(b.alone,false);assert.equal(b.afterRespawnSecs,158,'last alive reading 158 s after the respawn');
   assert.ok(Math.abs(m.time.dead-70)<=4,`dead ${m.time.dead}`);assert.ok(m.time.lane>=500);assert.equal(m.time.jungle,0);
+  // Dead 800-840 and 1000-1030 (first death screen -> first alive frame) of 600-1198 observed.
+  assert.equal(m.deadSecs,70);assert.equal(m.spanSecs,598);assert.deepEqual(m.deaths.map(d=>d.deadSecs),[40,30]);
   assert.ok(m.souls.hoardSecs>=190&&m.souls.hoardSecs<=210,`hoard ${m.souls.hoardSecs}`);assert.equal(m.souls.peak,4000);
   assert.equal(m.lowHp.episodes,1);assert.equal(m.lowHp.died,1);
 });
@@ -216,16 +219,73 @@ test('player profile treats unreadable frames as no evidence and merges a misrea
   assert.equal(p.current,null,'menus never start a match');
   for(let c=600;c<700;c+=2)p.observe(frame(c) as never,null);
   for(let i=0;i<10;i++)p.observe({screen:'Unknown'} as never,null);
-  p.observe(frame(760,{dead:true,cause:'Hyper Beam'}) as never,null);
+  for(let c=750;c<=760;c+=5)p.observe(frame(c,{dead:true,cause:'Hyper Beam'}) as never,null);
   p.observe(frame(765,{screen:'Gameplay',you:null}) as never,null);
   p.observe(frame(768,{dead:true,cause:'Hyper Beam'}) as never,null);
   for(let c=800;c<900;c+=2)p.observe(frame(c) as never,null);
   const m=p.endMatch()!;
   assert.equal(m.deaths.length,1);const d=m.deaths[0];
+  assert.equal(d.deadSecs,28,'750 -> 10 s after the last death screen (768): no timer read, next alive frame 32 s later');
   assert.equal(d.evidence,false,'nothing readable in the 30 s before');assert.equal(d.alone,null);assert.equal(d.burst,null);
   assert.equal(d.family,"Bebop's Hyper Beam");
   assert.equal(killerFamily('Chimera Mkl')?.family,killerFamily('Chimera MKI')?.family);
   assert.equal(killerFamily('Stalkers MarkX')?.hero,'hero_drifter');assert.equal(killerFamily(''),null);
+});
+test('time dead is the respawn wait over observed game time: menus count as alive, timers bound the death',()=>{
+  // rec11-like: frames every 4 s from 20:00 to 25:00 (300 s), a minute in the shop alive, a scoreboard
+  // look, and one death 21:40 -> 22:34 (timer 54 read on a few frames, first alive frame 10 s late).
+  const p=new PlayerProfile({now:()=>1e12});
+  for(let c=1200;c<=1500;c+=4){
+    let f:Frame;
+    if(c>=1300&&c<1334){f=frame(c,{dead:true,cause:'Jar of Dead',souls:4700});f.respawn_secs=c%8===0?1354-c:null;}
+    else if(c>=1334&&c<1364)f=frame(c,{screen:'Scoreboard'});
+    else if(c>=1400&&c<1460)f=frame(c,{screen:'Shop'});
+    else f=frame(c);
+    p.observe(f as never,c*1000);
+  }
+  const m=p.endMatch()!;
+  assert.equal(m.spanSecs,300);assert.equal(m.deaths.length,1);assert.equal(m.deadSecs,54,'1300 -> 1354 (timer), not the 1364 alive frame');
+  const row=p.summary().rows[0];assert.equal(row.deadPct,18);assert.equal(row.minutes,5);
+  // Matches stored before the metric keep working from their sampled time.
+  const legacy={...m};delete legacy.spanSecs;delete legacy.deadSecs;assert.equal(spanOf(legacy),m.observedSecs);assert.equal(deadOf(legacy),m.time.dead);
+});
+test('respawn estimates survive dropped timer digits and the grey "Respawn in: 1" screen is not a death',()=>{
+  // rec4 30:52: 8, 5, 4, 2, 0 read for 68-60 (refuted by later death screens), then 48 / 40 / 39 / 35.
+  assert.equal(respawnEstimate([1860,1860,1860,1860,1860,1870,1920,1920,1921,1921,1911,1921,1921,1921,1921],1919),1921);
+  assert.equal(respawnEstimate([1761,1711,1711,1715,1761,1762,1762,1732,1762,1742,1742,1752,1762,1762,1762,1762]),1762);
+  assert.equal(respawnEstimate([3065,3045,3045,3046,3046,3046,3045,3045]),3045,'one high misread (rec8 49:42)');
+  assert.equal(respawnEstimate([]),null);
+  // rec11 25:12 alive, 25:17 grey screen "Respawn in: 1", 25:23 alive, 25:28 the real death (54 s).
+  const p=new PlayerProfile({now:()=>1e12});
+  for(let c=1400;c<=1700;c+=4){
+    let f:Frame;
+    if(c===1516){f=frame(c,{dead:true});}
+    else if(c>=1528&&c<1582){f=frame(c,{dead:true,cause:'Jar of Dead'});f.respawn_secs=1582-c;}
+    else f=frame(c);
+    p.observe(f as never,c*1000);
+  }
+  const m=p.endMatch()!;
+  assert.equal(m.deaths.length,1);assert.equal(m.deaths[0].clock,1528);assert.equal(m.deadSecs,54);
+  // Early game (before 10:00) a short death is real: respawns take ~8 s at 5:00.
+  const q=new PlayerProfile({now:()=>1e12});
+  for(let c=200;c<=500;c+=3)q.observe(frame(c,{dead:c>=300&&c<306}) as never,c*1000);
+  assert.equal(q.endMatch()!.deaths.length,1);
+});
+test('player profile names heroes by display name and states the time-based souls threshold',()=>{
+  const heroes=JSON.parse(readFileSync(new URL('../../data/heroes.json',import.meta.url),'utf8').replace(/^\uFEFF/,'')) as Array<{class_name:string;name:string}>;
+  const model=new PlayerProfile().model;
+  for(const h of heroes)assert.equal(model.heroName(h.class_name).toLowerCase(),h.name.toLowerCase(),h.class_name);
+  assert.equal(FALLBACK_NAMES.hero_artist,'Violet');
+  // Deaths at 10:08 (threshold 1,600) and 34:00 (3,200): the label names the range, not 1.2k.
+  const p=new PlayerProfile({now:()=>1e12});
+  for(let c=560;c<=2100;c+=4){
+    const dead=(c>=608&&c<624)||(c>=2040&&c<2110);
+    const f=frame(c,{dead,souls:c<1000?2200:4700});f.hero='hero_artist';p.observe(f as never,c*1000);
+  }
+  p.endMatch();
+  const s=p.summary();assert.equal(s.heroName,'Violet');assert.match(p.promptText()!,/mostly Violet/);
+  const u=s.weaknesses.find(t=>t.id==='unspent_souls')!;
+  assert.match(u.evidence,/half an item tier or more \(1\.6k-3\.2k by game time\) in 2 of 2 deaths/);assert.doesNotMatch(u.evidence,/1\.2k\+/);
 });
 test('player profile classifier finds weaknesses with trends, strengths, compact prompt text and focus lines',()=>{
   let now=1e12;const p=new PlayerProfile({now:()=>now});
@@ -235,7 +295,7 @@ test('player profile classifier finds weaknesses with trends, strengths, compact
   for(const id of ['dying','unspent_souls','close_range','repeat_killer'])assert.ok(ids.includes(id),`${id} in ${ids}`);
   assert.ok(!ids.includes('jungle_heavy'));
   const dying=s.weaknesses.find(t=>t.id==='dying')!;assert.equal(dying.trend,'same');assert.equal(dying.confidenceLabel,'high');
-  assert.match(dying.evidence,/\d+% of readable time dead/);assert.match(dying.tip,/Grey Talon is long-range/);
+  assert.match(dying.evidence,/^12% of the game dead \(4 min of 30 min observed\)/);assert.match(dying.tip,/Grey Talon is long-range/);
   assert.ok(s.strengths.some(t=>t.id==='lane_presence'));
   // Two clean matches: the death rate improves.
   for(let i=0;i<2;i++){feedMatch(p,600,now,{deaths:false,souls:800});p.endMatch();now+=3600e3;}
@@ -278,8 +338,9 @@ test('player profile on the reviewed recordings matches the human reviews',async
   for(const wall of [true,false]){
     const p=profileOf(files,wall);const [rec5,rec4]=p.matches;
     assert.equal(rec4.deaths.length,5);assert.equal(rec5.deaths.length,4);
-    const dead=(m:MatchRecord)=>m.time.dead*100/(m.time.lane+m.time.jungle+m.time.base+m.time.dead);
-    assert.ok(dead(rec4)>=18&&dead(rec4)<=28,`rec4 dead ${dead(rec4)}`);assert.ok(dead(rec5)>=15&&dead(rec5)<=24,`rec5 dead ${dead(rec5)}`);
+    // Ground truth (respawn timers, first alive frames): rec4 312 of 1,319 s, rec5 240 of 1,250 s.
+    const dead=(m:MatchRecord)=>deadOf(m)*100/spanOf(m);
+    assert.ok(Math.abs(dead(rec4)-23.7)<=1,`rec4 dead ${dead(rec4)}`);assert.ok(Math.abs(dead(rec5)-19.2)<=1,`rec5 dead ${dead(rec5)}`);
     assert.ok(rec4.deaths.filter(d=>d.souls!=null&&d.souls>=1376).length>=4);
     assert.ok(rec5.deaths.filter(d=>d.close).length>=3,'Victor x2 and Drifter');
     assert.ok(rec5.windows.unused>=1);
@@ -289,4 +350,28 @@ test('player profile on the reviewed recordings matches the human reviews',async
     for(const id of ['dying','close_range','repeat_killer','unused_windows'])assert.ok(ids.includes(id),`${id} in ${ids}`);
     assert.ok(!ids.includes('jungle_heavy'));
   }
+});
+test('time dead on the newest-pipeline recordings matches the respawn-timer ground truth',async()=>{
+  const {existsSync}=await import('node:fs');
+  const root='C:/Users/arielwolle/Documents/Github/DeadlockCoach/frames';
+  // Ground truth per match (docs/player-profile.md "Validation"): sum over deaths of first death
+  // screen -> respawn (timer reads, checked on the screenshots), observed game seconds.
+  const truth=[{file:'rec4/replay9',deaths:5,dead:312,span:1319},{file:'rec5/replay7',deaths:4,dead:241,span:1250},
+    {file:'rec8/replay2',deaths:6,dead:395,span:2271},{file:'rec11/replay1',deaths:7,dead:339,span:1976}];
+  const {profileOf}=await import('../scripts/player-profile-replay.ts');
+  for(const t of truth){
+    const file=`${root}/${t.file}.jsonl`;if(!existsSync(file))continue; // recordings are local
+    for(const wall of [true,false]){
+      // Without wall time rec5's 7-minute gap plus a re-read match id splits it (match boundaries).
+      if(!wall&&t.file.startsWith('rec5'))continue;
+      const m=profileOf([file],wall).matches[0];
+      assert.equal(m.deaths.length,t.deaths,`${t.file} deaths`);
+      assert.ok(Math.abs(spanOf(m)-t.span)<=10,`${t.file} span ${spanOf(m)}`);assert.ok(Math.abs(deadOf(m)-t.dead)<=6,`${t.file} dead ${deadOf(m)}`);
+      assert.ok(Math.abs(deadOf(m)*100/spanOf(m)-t.dead*100/t.span)<=0.5,`${t.file} ${deadOf(m)}/${spanOf(m)}`);
+    }
+  }
+  const rec11=`${root}/rec11/replay1.jsonl`;
+  if(existsSync(rec11)){const p=profileOf([rec11]);const s=p.summary();
+    assert.equal(s.heroName,'Violet');assert.equal(s.deadPct,17);assert.match(p.promptText()!,/^Player profile \(1 match, mostly Violet, 17% dead/);
+    assert.match(s.weaknesses.find(w=>w.id==='unspent_souls')!.evidence,/half an item tier or more \(1\.6k-3\.2k by game time\) in 7 of 7 deaths/);}
 });
