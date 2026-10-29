@@ -654,18 +654,70 @@ export function buildRequest(cfg: AiConfig, system: string, user: string, maxTok
   if (cfg.key) headers.authorization = `Bearer ${cfg.key}`;
   return { url: endpoint(cfg), init: { method: 'POST', headers, body: JSON.stringify({ model: cfg.model, messages: [{ role: 'system', content: system }, { role: 'user', content: user }], max_tokens: maxTokens, temperature: 0.3 }) } };
 }
+/** Text of content parts in any of the shapes gateways use ({type:'text'|'output_text', text}). */
+function partsText(content: unknown): string | null {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return null;
+  const t = content.map((c: unknown) => typeof c === 'string' ? c : (c as { text?: unknown })?.text).filter((x): x is string => typeof x === 'string').join('');
+  return t || null;
+}
+/** The model's answer text. Besides the two documented shapes it accepts what OpenAI-compatible
+ *  gateways actually send: content-part arrays, legacy `choices[0].text`, the Responses API
+ *  (`output_text`, `output[].content[]`), Ollama's native `message.content`, an Anthropic-shaped
+ *  reply behind an OpenAI URL, and reasoning models that put the answer in `reasoning_content`.
+ *  When nothing is found the error says why (finish_reason, refusal, empty content) and shows the
+ *  start of the reply; the whole reply is kept in the AI exchange log for the recording export. */
 export function extractText(provider: AiProvider, data: unknown): string {
   const d = data as Record<string, any> | null; // eslint-disable-line @typescript-eslint/no-explicit-any
   if (!d || typeof d !== 'object') throw new Error('Gateway reply is not a JSON object');
+  const snippet = () => ` Reply starts: ${JSON.stringify(d).slice(0, 300)}`;
+  if (d.error) throw new Error(`Gateway returned an error: ${JSON.stringify(d.error).slice(0, 300)}`);
+  const anthropic = Array.isArray(d.content) ? partsText(d.content.filter((c: { type?: string }) => !c?.type || c.type === 'text')) : null;
   if (provider === 'anthropic') {
-    if (!Array.isArray(d.content)) throw new Error(`Gateway reply has no "content" array${d.error ? `: ${JSON.stringify(d.error).slice(0, 160)}` : ''}`);
-    return d.content.filter((c: { type?: string }) => c?.type === 'text').map((c: { text?: string }) => c.text || '').join('');
+    if (anthropic != null) return anthropic;
+    if (d.stop_reason === 'max_tokens') throw new Error(`The model stopped at max_tokens before writing any text; raise "Max tokens".${snippet()}`);
+    throw new Error(`Gateway reply has no "content" text.${snippet()}`);
   }
-  const content = d.choices?.[0]?.message?.content;
-  if (typeof content === 'string') return content;
-  if (Array.isArray(content)) return content.map((c: { text?: string }) => c?.text || '').join('');
-  throw new Error(`Gateway reply has no choices[0].message.content${d.error ? `: ${JSON.stringify(d.error).slice(0, 160)}` : ''}`);
+  const choice = Array.isArray(d.choices) ? d.choices[0] : undefined;
+  const message = choice?.message ?? choice?.delta;
+  const direct = partsText(message?.content) ?? (typeof choice?.text === 'string' ? choice.text : null)
+    ?? (typeof d.output_text === 'string' ? d.output_text : null)
+    ?? (Array.isArray(d.output) ? partsText(d.output.flatMap((o: { content?: unknown }) => Array.isArray(o?.content) ? o.content : [])) : null)
+    ?? partsText(d.message?.content) ?? anthropic;
+  if (direct != null && direct.trim()) return direct;
+  // Reasoning models (DeepSeek-R1, o-series via proxies, Qwen) can leave content empty.
+  const reasoning = [message?.reasoning_content, message?.reasoning, message?.thinking].find((x): x is string => typeof x === 'string' && x.trim().length > 0);
+  const finish = choice?.finish_reason ?? d.stop_reason ?? d.status;
+  if (reasoning && /"speak"\s*:/.test(reasoning)) return reasoning;
+  if (message?.refusal) throw new Error(`The model refused: ${String(message.refusal).slice(0, 200)}`);
+  if (finish === 'length' || finish === 'max_tokens' || finish === 'incomplete')
+    throw new Error(`The model used all ${reasoning ? 'max tokens on reasoning' : 'max tokens'} before answering (finish_reason "${finish}"). Raise "Max tokens" in Settings${reasoning ? ' or turn reasoning off for this model' : ''}.${snippet()}`);
+  if (!choice) throw new Error(`Gateway reply has no "choices" array: this does not look like a chat-completions answer (check the base URL and provider).${snippet()}`);
+  throw new Error(`Gateway reply has an empty choices[0].message.content (finish_reason "${finish ?? 'none'}").${snippet()}`);
 }
+
+// ---------------------------------------------------------------------------------------
+// Exchange log: every gateway call with the whole reply, for diagnosis and recording exports.
+// Keys are redacted; the request body is kept as text (prompt only, never headers).
+// ---------------------------------------------------------------------------------------
+export interface AiExchange {
+  t: number; clock: number | null; trigger: string; url: string; model: string; status: number | null; ms: number;
+  /** The system prompt length and the full user prompt (game summary, no secrets). */
+  system_chars: number; prompt: string;
+  /** The whole reply body as received (redacted, truncated to 20,000 characters). */
+  reply: string; text: string | null; error: string | null;
+}
+const EXCHANGE_CAP = 60, REPLY_CAP = 20000;
+const exchanges: AiExchange[] = [];
+const exchangeListeners: ((x: AiExchange) => void)[] = [];
+/** The AI exchange log (newest last). */
+export function aiExchanges(): AiExchange[] { return exchanges.slice(); }
+export function clearAiExchanges() { exchanges.length = 0; }
+/** Restore a persisted log (e.g. after a reload while recording). */
+export function restoreAiExchanges(xs: unknown) { if (Array.isArray(xs)) { exchanges.length = 0; exchanges.push(...(xs as AiExchange[]).slice(-EXCHANGE_CAP)); } }
+/** Subscribe to new exchanges; returns an unsubscribe function. */
+export function onAiExchange(fn: (x: AiExchange) => void): () => void { exchangeListeners.push(fn); return () => { const i = exchangeListeners.indexOf(fn); if (i >= 0) exchangeListeners.splice(i, 1); }; }
+function logExchange(x: AiExchange) { exchanges.push(x); if (exchanges.length > EXCHANGE_CAP) exchanges.splice(0, exchanges.length - EXCHANGE_CAP); for (const fn of exchangeListeners) { try { fn(x); } catch { /* a listener must not break the call */ } } }
 
 /** Remove secrets from text that may be shown to the user (gateways sometimes echo keys). */
 export function redact(text: string, secrets: string[] = []): string {
@@ -693,18 +745,27 @@ export function validateConfig(cfg: AiConfig, pageProtocol = 'https:'): void {
   try { parseExtraHeaders(cfg.headers); } catch (e) { throw new GatewayError('config', (e as Error).message); }
 }
 
-export interface CallOptions { signal?: AbortSignal; maxTokens?: number; timeoutMs?: number; fetchImpl?: typeof fetch; pageProtocol?: string; now?: () => number }
+export interface CallOptions { signal?: AbortSignal; maxTokens?: number; timeoutMs?: number; fetchImpl?: typeof fetch; pageProtocol?: string; now?: () => number;
+  /** For the exchange log: what triggered the call and the game clock. */
+  trigger?: string; clock?: number | null }
 export interface CallResult { text: string; ms: number; model: string }
 export async function callGateway(cfg: AiConfig, system: string, user: string, opts: CallOptions = {}): Promise<CallResult> {
   validateConfig(cfg, opts.pageProtocol);
   const req = buildRequest(cfg, system, user, opts.maxTokens);
   const now = opts.now || (() => Date.now()), started = now();
+  const secrets = secretsOf(cfg);
+  const entry: AiExchange = { t: Date.now(), clock: opts.clock ?? null, trigger: opts.trigger || 'call', url: redact(req.url, secrets), model: cfg.model, status: null, ms: 0,
+    system_chars: system.length, prompt: redact(user, secrets), reply: '', text: null, error: null };
+  try { const r = await callGatewayInner(cfg, req, opts, secrets, entry, now, started); entry.text = r.text; entry.model = r.model; return r; }
+  catch (e) { entry.error = e instanceof Error ? e.message : String(e); throw e; }
+  finally { entry.ms = Math.round(now() - started); logExchange(entry); }
+}
+async function callGatewayInner(cfg: AiConfig, req: GatewayRequest, opts: CallOptions, secrets: string[], entry: AiExchange, now: () => number, started: number): Promise<CallResult> {
   const ctrl = new AbortController(); let timedOut = false;
   const timer = setTimeout(() => { timedOut = true; ctrl.abort(); }, opts.timeoutMs ?? 20000);
   const onAbort = () => ctrl.abort();
   opts.signal?.addEventListener('abort', onAbort, { once: true });
   if (opts.signal?.aborted) ctrl.abort();
-  const secrets = secretsOf(cfg);
   try {
     let res: Response;
     try { res = await (opts.fetchImpl || fetch)(req.url, { ...req.init, signal: ctrl.signal, credentials: 'omit', referrerPolicy: 'no-referrer' }); }
@@ -715,6 +776,7 @@ export async function callGateway(cfg: AiConfig, system: string, user: string, o
       throw new GatewayError('network', redact(`Network or CORS failure reaching ${origin}: the browser could not complete the request. Check the URL and that the gateway allows CORS from this page (preflight with Authorization/x-api-key/Content-Type headers). Browser detail: ${e instanceof Error ? e.message : String(e)}`, secrets));
     }
     const body = await res.text().catch(() => '');
+    entry.status = res.status; entry.reply = redact(body, secrets).slice(0, REPLY_CAP);
     if (!res.ok) throw new GatewayError('http', redact(`HTTP ${res.status}${res.statusText ? ` ${res.statusText}` : ''}: ${body.replace(/\s+/g, ' ').slice(0, 300) || '(empty body)'}`, secrets), res.status);
     let data: unknown;
     try { data = JSON.parse(body); } catch { throw new GatewayError('reply', redact(`Gateway answered HTTP ${res.status} but not JSON: ${body.slice(0, 160)}`, secrets)); }
@@ -868,7 +930,7 @@ export class AiCoach {
         if (ctrl.signal.aborted) return;
         const maxTokens = trigger === 'death' ? Math.round(settings.aiMaxTokens * 1.5) : settings.aiMaxTokens;
         const res = await callGateway(configFrom(settings), prompt.system, prompt.user, { signal: ctrl.signal, maxTokens, timeoutMs: trigger === 'manual' ? 45000 : STALE_MS,
-          fetchImpl: this.deps.fetchImpl, pageProtocol: this.deps.pageProtocol?.(), now: this.deps.now });
+          fetchImpl: this.deps.fetchImpl, pageProtocol: this.deps.pageProtocol?.(), now: this.deps.now, trigger: attempt ? `${trigger}:retry` : trigger, clock: num(this.latest.game_clock_secs) });
         if (ctrl.signal.aborted) return;
         const age = this.now() - started, sameGen = generation === this.deps.generation();
         if (!sameGen || (trigger !== 'manual' && (age > STALE_MS || !this.deps.isLive()))) {

@@ -1,6 +1,6 @@
 // DOM wiring for the optional AI coach: the Coach-page panel and the Settings fieldset.
 // All decisions live in ai-coach.ts; main.ts only calls the handle returned by mountAiCoach().
-import { AiCoach, PROVIDER_PRESETS, clockText, configFrom, parseExtraHeaders, testConnection, type Advice, type AdviceMeta, type AiSnapshot, type AiStatus } from './ai-coach';
+import { AiCoach, PROVIDER_PRESETS, aiExchanges, onAiExchange, clockText, configFrom, parseExtraHeaders, testConnection, type Advice, type AdviceMeta, type AiSnapshot, type AiStatus } from './ai-coach';
 import type { Cue, Knowledge, Settings } from './types';
 
 export interface AiUiDeps {
@@ -42,6 +42,17 @@ export function mountAiCoach(deps: AiUiDeps): AiUi {
     error.classList.toggle('error', s.state === 'error');
     deps.changed?.();
   }
+  // The last gateway exchange, raw, so a confusing reply can be diagnosed in the page.
+  onAiExchange(x => {
+    const box = el('ai-raw'); if (!box) return; box.hidden = false;
+    setText('ai-raw-meta', `${x.trigger} · ${clockText(x.clock)} · HTTP ${x.status ?? '—'} · ${x.ms} ms · ${x.model}${x.error ? ` · ${x.error.slice(0, 160)}` : ''}`);
+    let pretty = x.reply; try { pretty = JSON.stringify(JSON.parse(x.reply), null, 2); } catch { /* not JSON: show as is */ }
+    setText('ai-raw-reply', pretty || '(empty body)');
+  });
+  el('ai-log-download')?.addEventListener('click', () => {
+    const blob = new Blob([JSON.stringify({ schema: 1, exported: new Date().toISOString(), exchanges: aiExchanges() }, null, 2)], { type: 'application/json' });
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'deadlock-ai-log.json'; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  });
   const coach = new AiCoach({
     settings: deps.settings, isLive: deps.isLive, generation: deps.generation, knowledge: deps.knowledge, name: deps.name,
     pageProtocol: () => location.protocol, onStatus: render,

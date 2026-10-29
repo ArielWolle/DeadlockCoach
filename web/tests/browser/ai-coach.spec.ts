@@ -90,6 +90,9 @@ for (const provider of ['openai', 'anthropic'] as const) {
     // The AI cue is in the cue log and the recording export, and the key is in neither.
     const exported = await exportRecording(page);
     expect(exported).toContain(ADVICE); expect(JSON.parse(exported).spoken.some((c: { source: string }) => c.source === 'ai')).toBe(true);
+    // The whole gateway reply is exported for diagnosis, and shown in the panel.
+    const ai = JSON.parse(exported).ai as { reply: string; status: number; prompt: string }[];
+    expect(ai.length).toBeGreaterThan(0); expect(ai[ai.length - 1].status).toBe(200); expect(ai[ai.length - 1].reply).toContain('speak'); expect(ai[ai.length - 1].prompt).toContain('STATE');
     expect(exported).not.toContain(KEY);
     await page.locator('[data-page="settings"]').click();
     await expect(page.locator('#diagnostics')).toContainText('mock-model');

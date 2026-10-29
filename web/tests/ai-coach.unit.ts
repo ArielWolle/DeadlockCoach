@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { AiCoach, AiHistory, MAX_INPUT_CHARS, SUMMARY_MAX_CHARS, SYSTEM_PROMPT, COACH_BRIEF, buildPrompt, buildRequest, buildSummary, callGateway, cleanSpeech,
   endpoint, extractText, heroMatchup, parseAdvice, retrieve, sections, situationTerms, testConnection, upcomingObjectives, setProfileProvider, profileText,
-  checkAdvice, coachingAngles, overlap, soulsView, topicOf, TASKS,
+  checkAdvice, coachingAngles, overlap, soulsView, topicOf, TASKS, aiExchanges, clearAiExchanges, onAiExchange,
   type Advice, type AiConfig, type AiSnapshot } from '../src/ai-coach.ts';
 import { defaults, normalize } from '../src/settings.ts';
 import type { Knowledge, Settings } from '../src/types.ts';
@@ -124,7 +124,7 @@ test('request shapes for OpenAI-compatible and Anthropic gateways', () => {
   assert.throws(() => buildRequest({ ...base, headers: '[1]' }, 's', 'u'), /JSON object/);
   assert.equal(extractText('openai', { choices: [{ message: { content: 'hi' } }] }), 'hi');
   assert.equal(extractText('anthropic', { content: [{ type: 'text', text: 'a' }, { type: 'tool_use' }, { type: 'text', text: 'b' }] }), 'ab');
-  assert.throws(() => extractText('openai', { error: { message: 'bad' } }), /choices/);
+  assert.throws(() => extractText('openai', { error: { message: 'bad' } }), /returned an error.*bad/);
 });
 
 test('reply parsing handles JSON, fenced JSON, prose around JSON, PASS and garbage', () => {
@@ -330,4 +330,36 @@ test('controller: a model that always says "spend your souls" is gated, gets one
   assert.equal(delivered.length, 1, 'same focus within 3 minutes is not spoken');
   assert.match(JSON.parse(bodies.at(-1)!).messages[1].content, /RECENT AI ADVICE \(yours; do not reuse a focus within 3 min\):\n- \[40:00\] economy: Spend your souls now/);
   assert.match(coach.diagnostic(), /4 repeats skipped/);
+});
+test('AI replies in the shapes real gateways send are understood, and failures say why', () => {
+  const j = '{"speak":"Back off.","priority":"High","why":"w","focus":"health"}';
+  assert.equal(extractText('openai', { choices: [{ message: { content: [{ type: 'text', text: j }] } }] }), j);
+  assert.equal(extractText('openai', { choices: [{ message: { content: [{ type: 'output_text', text: j }] } }] }), j);
+  assert.equal(extractText('openai', { choices: [{ text: j }] }), j, 'legacy completions');
+  assert.equal(extractText('openai', { output_text: j }), j, 'Responses API');
+  assert.equal(extractText('openai', { output: [{ type: 'message', content: [{ type: 'output_text', text: j }] }] }), j);
+  assert.equal(extractText('openai', { message: { role: 'assistant', content: j } }), j, 'Ollama /api/chat');
+  assert.equal(extractText('openai', { content: [{ type: 'text', text: j }] }), j, 'Anthropic shape behind an OpenAI URL');
+  assert.equal(extractText('openai', { choices: [{ message: { content: null, reasoning_content: `thinking... ${j}` }, finish_reason: 'stop' }] }).includes('"speak"'), true);
+  assert.throws(() => extractText('openai', { choices: [{ message: { content: null, reasoning_content: 'long thoughts' }, finish_reason: 'length' }] }), /max tokens on reasoning.*Raise "Max tokens"/);
+  assert.throws(() => extractText('openai', { choices: [{ message: { content: '' }, finish_reason: 'length' }] }), /finish_reason "length"/);
+  assert.throws(() => extractText('openai', { choices: [{ message: { content: null, refusal: 'no' } }] }), /refused/);
+  assert.throws(() => extractText('openai', { id: 'x', object: 'list', data: [] }), /no "choices" array.*Reply starts: \{"id":"x"/);
+  assert.throws(() => extractText('anthropic', { content: [], stop_reason: 'max_tokens' }), /max_tokens/);
+});
+
+test('every gateway call is logged with the whole reply, keys redacted', async () => {
+  clearAiExchanges();
+  const cfg: AiConfig = { provider: 'openai', baseUrl: 'https://gw.example/v1', model: 'm', key: 'sk-secret-123456', headers: '', maxTokens: 100 };
+  const seen: unknown[] = []; const off = onAiExchange(x => seen.push(x));
+  const reply = { id: 'r1', choices: [{ message: { content: null }, finish_reason: 'length' }], echo: 'sk-secret-123456' };
+  const fake = (async () => new Response(JSON.stringify(reply), { status: 200 })) as typeof fetch;
+  await assert.rejects(callGateway(cfg, 'system', 'STATE: souls 100', { fetchImpl: fake, trigger: 'periodic', clock: 600 }), /finish_reason "length"/);
+  const [x] = aiExchanges();
+  assert.equal(x.trigger, 'periodic'); assert.equal(x.clock, 600); assert.equal(x.status, 200); assert.equal(x.prompt, 'STATE: souls 100');
+  assert.match(x.reply, /"id":"r1"/); assert.ok(!x.reply.includes('sk-secret-123456'), 'key redacted'); assert.match(x.error!, /length/);
+  const ok = (async () => new Response(JSON.stringify({ choices: [{ message: { content: '{"speak":null}' } }] }), { status: 200 })) as typeof fetch;
+  assert.equal((await callGateway(cfg, 's', 'u', { fetchImpl: ok })).text, '{"speak":null}');
+  assert.equal(aiExchanges().length, 2); assert.equal(aiExchanges()[1].error, null); assert.equal(seen.length, 2);
+  off(); clearAiExchanges();
 });

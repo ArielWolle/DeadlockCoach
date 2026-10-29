@@ -44,3 +44,6 @@
 .player-severity.s3{color:#ffbbb2;border-color:#955950}.player-tip{color:#d9e2dc}.player-tip strong{color:var(--amber)}
 .player-table-wrap{overflow-x:auto}.player-table{width:100%;border-collapse:collapse;font-size:13px}.player-table th,.player-table td{text-align:left;padding:8px 10px;border-bottom:1px solid #263134;white-space:nowrap}.player-table th{color:var(--muted);font-weight:600}
 #player-prompt{white-space:pre-wrap;font-size:12px}
+
+/* AI gateway raw exchange */
+.ai-raw{margin:8px 0}.ai-raw summary{cursor:pointer;font-size:12px;color:var(--muted)}.ai-raw pre{max-height:240px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font:11px/1.45 Consolas,ui-monospace,monospace;background:#0f191c;border:1px solid #344;border-radius:5px;padding:8px;margin:6px 0}

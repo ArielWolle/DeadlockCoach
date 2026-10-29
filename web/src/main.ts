@@ -11,7 +11,7 @@ import {regionsFromReport,drawRegions} from './region-overlays';
 import {QuickMonitor} from './quick';
 import {freshCue} from './live-cues';
 import { mountAiCoach, type AiUi } from './ai-coach-ui';
-import { setProfileProvider } from './ai-coach';
+import { setProfileProvider, aiExchanges, clearAiExchanges, restoreAiExchanges, onAiExchange } from './ai-coach';
 import { PlayerProfile } from './player-profile';
 import { PlayerPage } from './player-page';
 import { clearFrames, download, listFrames, recordFrame, snapshotLines } from './storage';
@@ -321,6 +321,10 @@ function schedule(delay = settings.interval * 1000) { clearTimeout(timer); if (r
 /** Every spoken cue from either analysis path, kept for recording exports (the fast path speaks
  *  most cues but its results are not stored as frames). Bounded; persisted only while recording. */
 const CUE_LOG_KEY='deadlock-coach-cue-log-v1';
+/** AI gateway exchanges (with raw replies) persisted while recording, so a reload keeps them for the export. */
+const AI_LOG_KEY='deadlock-coach-ai-log-v1';
+try{restoreAiExchanges(JSON.parse(localStorage.getItem(AI_LOG_KEY)||'[]'));}catch{/* ignore a corrupt log */}
+onAiExchange(()=>{if(settings.record)try{localStorage.setItem(AI_LOG_KEY,JSON.stringify(aiExchanges().map(x=>({...x,reply:x.reply.slice(0,8000)}))));}catch{/* quota: the export keeps the in-memory log */}});
 const cueLog:{t:number;clock:number|null;source:'fast'|'full'|'ai';key:string;text:string;priority:string;hp:number|null;max_hp:number|null}[]=(()=>{try{return JSON.parse(localStorage.getItem(CUE_LOG_KEY)||'[]');}catch{return [];}})();
 function logCue(cue:Cue,s:Snapshot,fast:boolean,aiCue=false){
   cueLog.push({t:Date.now(),clock:s.game_clock_secs??null,source:aiCue?'ai':fast?'fast':'full',key:cue.key,text:cue.text,priority:cue.priority,hp:s.hp??null,max_hp:s.max_hp??null});
@@ -964,10 +968,11 @@ button('export-recording').onclick = async () => {
   try {
     const frames = await recordings(); if (!frames.length) { notice('No recorded frames to export.'); return; }
     const rows = []; for (const f of frames) rows.push({ timestamp: f.timestamp, snapshot: f.snapshot, cues: f.cues, perception: f.perception, profile_id: f.profile_id, image: await blobDataURL(f.image) });
-    download('deadlock-recording.json', new Blob([JSON.stringify({ schema: 1, assetVersion, frames: rows, spoken: cueLog })], { type: 'application/json' }));
+    // `ai`: every AI gateway exchange (prompt, HTTP status, whole raw reply, error), keys redacted.
+    download('deadlock-recording.json', new Blob([JSON.stringify({ schema: 1, assetVersion, frames: rows, spoken: cueLog, ai: aiExchanges() })], { type: 'application/json' }));
   } catch (e) { notice(`Export failed: ${String(e)}`, true); }
 };
-button('clear-recordings').onclick = async () => { try { await clearFrames(); cueLog.length = 0; localStorage.removeItem(CUE_LOG_KEY); await recordings(); notice('Local recordings deleted.'); } catch (e) { notice(String(e), true); } };
+button('clear-recordings').onclick = async () => { try { await clearFrames(); cueLog.length = 0; localStorage.removeItem(CUE_LOG_KEY); clearAiExchanges(); localStorage.removeItem(AI_LOG_KEY); await recordings(); notice('Local recordings deleted.'); } catch (e) { notice(String(e), true); } };
 input('knowledge-search').oninput = renderKnowledge; $<HTMLSelectElement>('knowledge-category').onchange = renderKnowledge;
 $<HTMLFormElement>('settings-form').onsubmit = e => { e.preventDefault(); saveForm(); };
 input('rate').oninput = () => text('rate-value', `${Number(input('rate').value).toFixed(1)}×`);
