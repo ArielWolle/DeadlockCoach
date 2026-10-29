@@ -33,16 +33,48 @@ thresholds of `data/coaching/review.json`:
 
 | Metric | Definition |
 | --- | --- |
-| Time shares | Each sample stands for the time to the next one, capped at 10 s (wall time live, game clock in replays). Dead = death screen; base = minimap y > 0.86; lane = a lane estimate; jungle = located without a lane; unknown = anything unreadable. Unknown time is excluded from every share. |
-| Deaths | Entering the death screen, or a death screen more than 60 s after the previous one. A single gameplay frame between death screens is merged (rec4 26:37). The damage-panel cause is the latest read. |
+| Time shares | Each sample stands for the time to the next one, capped at 10 s (wall time live, game clock in replays). Dead = death screen; base = minimap y > 0.86; lane = a lane estimate; jungle = located without a lane; unknown = anything unreadable. Used for the lane / jungle / hoarding / low-health shares (unknown excluded); **not** for time dead (below). |
+| Time dead | See [Time dead](#time-dead): seconds dead / observed game seconds. |
+| Deaths | Entering the death screen, or a death screen more than 60 s after the previous one. A single gameplay frame between death screens is merged unless the next timer shows a fresh death. From 10:00 on, a death screen that turns into gameplay within 10 s without a longer timer is the grey "Respawn in: 1" screen, not a death (rec4 26:32, rec8 39:17, rec11 25:17: the scoreboard death count does not change). The damage-panel cause is the latest read. |
 | Death context | From the 15 s before the last alive reading (`death_window_secs`): fall speed from the healthiest reading >= 30% (burst = <= 15 s), souls held, alone (all of the last 4 located allies > 0.25 away), in the enemy half (y < 0.48) with >= 3 enemies without a top-bar health bar, teammates who died in the window, seconds since respawn (<= 90 s = soon), every HP read of the last 30 s under 60% (weak entry). Each is `null` when it could not be observed; a death with no readable frames before it is marked "no evidence". |
 | Killer family | Victor's Aura of Suffering / Still Life, Drifter's Stalker's Mark and melee hits count as melee range; Bebop's Hyper Beam, structures, troopers, gun damage and unknown abilities (grouped by first word, so OCR variants match) are named but range is not claimed. Optional `death_damage` / `death_killing_blow` are used when the reader provides them. |
 | Fights | A minimap cluster of >= 2 allies and >= 2 enemies within 0.13; joined if you were within 0.3 (a third of the map); a cluster absent for less than 10 s is the same fight. |
 | Enemy-dead windows | >= 2 enemies dead for >= 20 s while you are alive; *used* when you were in their half (y < 0.5) or the front of the lane you were on moved >= 0.15 toward them. Unknown frames keep a window open without adding time. |
-| Souls | Alive time over 3,000 unspent (`hoard_souls`), its peak, and souls at each death (`souls_at_death` 1,200). A missing souls read keeps the previous read for up to 10 s. |
+| Souls | Alive time over the usual tier for the clock (at least 3,000, `hoard_souls`), its peak, and souls at each death against the death-spend threshold `deathSpend(clock)` = half the usual tier (1,600 / 3,200 / 6,400 before 10:00 / 20:00 / after), at least 1,200 (`souls_at_death`), i.e. 1,200 / 1,600 / 3,200, as `economy.rs death_spend`. The label names that range ("half an item tier or more (1.6k-3.2k by game time)"), never a fixed 1.2k. A missing souls read keeps the previous read for up to 10 s. |
 | Low health | Alive time under 30%; episodes under 30% end *survived* (back to >= 50% or in base) or *died*. |
 | Deep waves | A wave deep on your side (front < 0.3, >= 2 enemy troopers) while you were in the jungle. |
 | Farm pace | Souls per minute from the own earned-souls label, when it was read twice >= 2 minutes apart. |
+
+## Time dead
+
+One metric everywhere (Player page summary and match table, the "Dying too often" trait, the AI
+prompt, and the engine's 5-minute summaries "you died N times and were dead for X" in
+`crates/engine/src/review.rs` `death_runs()`):
+
+**dead % = seconds dead / observed game seconds.**
+
+- *Observed game seconds* (`MatchRecord.spanSecs`): from the first to the last frame with a game
+  clock, every frame-to-frame interval up to 60 s (wall time live, game clock in replays); a longer
+  interval is a recording gap and is removed. Shop, scoreboard and unreadable frames count: you
+  are alive (or dead) in them, the game goes on. (The engine's summaries use their 5-minute
+  window.)
+- *Seconds dead* (`MatchRecord.deadSecs`, per death `DeathRecord.deadSecs`): for each death, from
+  its first death screen to the respawn. The respawn is the respawn-timer estimate (each read =
+  frame clock + timer; the largest group of reads within 2 s, its median; a read refuted by a later
+  death screen is dropped), never before the last death screen and never after the first alive
+  gameplay frame. Without any timer read it is the first alive gameplay frame, at most 10 s after
+  the last death screen. Menus while dead (shop, scoreboard, spectating) stay dead until the
+  respawn. Recording gaps inside a death are removed; a match that ends while you are dead counts
+  up to its last clock. A summary given while you are still dead counts the rest of the timer.
+
+Why the old numbers were high: the share divided by *readable* time only (lane + jungle + base +
+dead), leaving out alive time in the shop, on the scoreboard and on unreadable frames (rec11: 232 s
+of 1,976), and each death sample stood for the gap to the next frame, so the frame after the
+respawn (often 5-8 s later) and the grey "Respawn in: 1" screens were counted as dead. In the other
+direction, spectating frames while dead were "unknown" and the last timer read could be a dropped
+digit, which made some engine summaries short (rec4 27:00 said "3 times, 56 seconds" for 2
+deaths and 100 s).
+Matches stored before this metric fall back to their sampled dead time over all sampled time.
 
 ## Traits and thresholds
 
@@ -54,8 +86,8 @@ tuned on the reviewed recordings, not game rules.
 
 | Trait | Weakness when | Strength when | Source |
 | --- | --- | --- | --- |
-| Dying too often / Stays alive | >= 15% of readable time dead or >= 2 deaths per 10 min | < 7% dead and < 1 per 10 min (>= 15 min) | review.json `pattern_deaths` (>= 60 s dead in 5 min); recording-analysis-4 (~25% dead decided the game), -5 (17-21%) |
-| Unspent souls / Spends on time | >= 50% of deaths holding 1,500+ (>= 2 deaths) or >= 20% of alive time over 3,000 | <= 15% and <= 5% | common-mistakes.md #6; review.json `souls`, `pattern_hoard` (60 s of 5 min) |
+| Dying too often / Stays alive | >= 15% of observed game time dead or >= 2 deaths per 10 min of observed game time | < 7% dead and < 1 per 10 min (>= 15 min) | review.json `pattern_deaths` (>= 60 s dead in 5 min); timer ground truth rec4 24%, rec5 19%, rec8 / rec11 17% (recording-analysis-4: ~25% decided the game) |
+| Unspent souls / Spends on time | >= 50% of deaths holding the death-spend threshold for the clock (>= 2 deaths) or >= 20% of alive time over the usual tier | <= 15% and <= 5% | common-mistakes.md #6; review.json `souls`, `pattern_hoard` (60 s of 5 min) |
 | Dies alone | >= 2 and >= 35% of deaths | | #16 Fighting split; review.json `alone` |
 | Pushes in with enemies missing | >= 2 and >= 30% | | #22 Ignoring the minimap; `forward_missing` |
 | Stays in lost fights | >= 2 and >= 30% | | #19; `fight_lost` |
@@ -91,21 +123,49 @@ or `window.deadlockPlayerProfile.promptText()`.
 
 ## Validation on the reviewed recordings
 
+### Time dead against the respawn timers
+
+Ground truth per match: each death from its first death screen to the respawn read off the
+"Respawn in: N" timer (checked on the screenshots `frames/recN/img`, e.g. rec11 25:28 shows 54),
+capped by the first alive frame; observed time = first to last clocked frame minus recording gaps
+> 60 s. Newest-pipeline replays, profile with recorded wall time (clock-only replays agree within
+1 s, except rec5, which a re-read match id splits at its 7-minute gap):
+
+| Match | Truth: deaths, dead / observed | Truth % | Before | After (profile) |
+| --- | --- | --- | --- | --- |
+| rec4 `replay9` (Grey Talon) | 5, 312 / 1,319 s | 23.7% | 22% (189 s of 873 readable; spectating while dead was unknown) | 24% (313 / 1,319 s) |
+| rec5 `replay7` (Grey Talon) | 4, 241 / 1,250 s (447 s gap) | 19.3% | 21% (237 of 1,105 readable) | 19% (242 / 1,250 s) |
+| rec8 `replay2` (Grey Talon) | 6, 395 / 2,271 s | 17.4% | 18%, 7 deaths (grey screen at 39:17 counted) | 17% (393 / 2,271 s), 6 deaths |
+| rec11 `replay1` (Violet) | 7, 339 / 1,976 s | 17.2% | 20% (344 of 1,743 readable), "mostly artist" | 17% (339 / 1,976 s), "mostly Violet" |
+
+Per death, rec11: 16 / 22 / 33 / 53 / 61 / 75 / 79 s (truth 16 / 22 / 33 / 54 / 61 / 75 / 78). The
+engine's 5-minute summaries on the same replays (truth in brackets): rec11 12:24 "2 times, 36
+seconds" (38), 28:08 "2 times, 1.9 minutes" (1.9; before: the grey screen made it 2 deaths of 59 s
+at 25:49), 37:32 "2.6 minutes" (2.6); rec8 21:30 "1.7 minutes" (1.7; before 84 s), 50:26 "2.5
+minutes" (2.5); rec4 27:00 "2 times, 1.7 minutes" (2, 1.7; before "3 times, 56 seconds"), 31:12
+"3 times, 2.4 minutes" (3, 3.2: the timer of the death in progress was read 8 / 5 / 4 / 2 / 0 for
+68-60, so its rest is unknown until a correct read); rec5 39:09 "78 seconds" (78). The unit test
+`time dead on the newest-pipeline recordings matches the respawn-timer ground truth` checks the
+profile numbers when the recordings are present; `crates/engine/tests/review.rs` covers the
+summary cases.
+
+### Habits on the reviewed recordings
+
 `rec4/replay9.jsonl` then `rec5/replay4.jsonl` (Grey Talon), with recorded wall time:
 
 | | rec4 | rec5 | human review |
 | --- | --- | --- | --- |
 | Deaths | 5 | 4 | 5 / 4 |
-| Time dead | 22% | 21% | ~25% / 17-21% |
-| Unspent at death (1,500+) | 4 of 5 (1.4k-3k) | 1 of 4 | every rec4 death 1.4k-3k |
+| Time dead | 24% | 19% | ~25% / 17-21% |
+| Unspent at death (death-spend threshold) | 0 of 5 (1.4k-3k, thresholds 1.6k-3.2k) | 1 of 4 | every rec4 death 1.4k-3k |
 | Over 3k, alive time | 26% | 44% (peak 6.3k) | 30% / ~43% |
 | Killers | melee x2, Hyper Beam, Chimera | Victor's aura x2, Drifter, gun damage | rec5: every death in melee range (Victor, Drifter) |
 | Enemy-dead windows unused | 2 (20:28, 32:07) | 1 (38:21) | 20:24, 32:07 / 37:24-38:38 |
 | Jungle (alive) | 15% | 17% | 7-17% / ~11% (not a problem) |
 | Fights joined | 8 of 11 | 11 of 16 | 9 of 14 / 7 of 12 |
 
-Weaknesses produced: unspent souls, killed at close range (5 of 6), dying too often (21%, 2.8 per
-10 min), dies soon after respawning, enemy-dead windows unused (3 of 3), gets burst down, stays in
+Weaknesses produced: killed at close range (5 of 6), dying too often (21% of 43 observed minutes,
+2.1 per 10 min), dies soon after respawning, enemy-dead windows unused (3 of 3), gets burst down, stays in
 at low health, same killer again (Victor x2, melee x2). Strength: keeps lanes covered (76% lanes,
 16% jungle). No "too much jungle". The unit test `player profile on the reviewed recordings
 matches the human reviews` checks this when the recordings are present (with and without wall

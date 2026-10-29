@@ -53,7 +53,30 @@ export const LIMITS = {
   wall_gap_new_match_ms: 15 * 60_000, wall_gap_check_ms: 3 * 60_000,
   /** A match is kept only with this much readable gameplay (or at least one death). */
   min_match_secs: 120,
+  /** Time dead / observed game time: a frame-to-frame gap longer than this is a recording gap,
+   *  removed from both (rec5 recorded nothing for 7 minutes mid-match). */
+  recording_gap_secs: 60,
+  /** Respawn-timer reads that agree within this many seconds are one estimate (misreads drop a
+   *  digit: rec4 read 9 / 5 / 7 for 49 / 45 / 27). */
+  timer_cluster_secs: 2,
+  /** The grey "Respawn in: 1" screen (no "Shop & Upgrade" line, scoreboard death count
+   *  unchanged: rec4 26:32, rec8 39:17, rec11 25:17) is shorter than this; from this game clock
+   *  on, a real respawn wait is longer (wiki: ~18 s at 10:00, 38 s at 20:00). */
+  downed_secs: 10, downed_after_clock: 600,
 } as const;
+
+/** The respawn moment of one death from its timer reads (each = frame clock + timer): the
+ *  largest group of reads within 2 s of each other (latest on a tie), its median. A read refuted
+ *  by a later death screen (implied respawn before `lastDead`) is dropped: rec4 30:52 read 8, 5,
+ *  4, 2, 0 for 68-60 and was still dead at 31:06. Same as review.rs respawn_estimate(). */
+export function respawnEstimate(all: number[], lastDead = -Infinity): number | null {
+  const ends = all.filter(e => e + 1 >= lastDead);
+  if (!ends.length) return null;
+  let best = ends[0], n = 0;
+  for (const e of ends) { const c = ends.filter(f => Math.abs(f - e) <= LIMITS.timer_cluster_secs).length; if (c > n || (c === n && e > best)) { n = c; best = e; } }
+  const group = ends.filter(f => Math.abs(f - best) <= LIMITS.timer_cluster_secs).sort((a, b) => a - b);
+  return group[Math.floor(group.length / 2)];
+}
 
 export type Area = 'lane' | 'jungle' | 'base' | 'dead' | 'unknown';
 export interface DeathRecord {
@@ -64,12 +87,19 @@ export interface DeathRecord {
   souls: number | null; alone: boolean | null; forwardUnseen: boolean | null;
   teammatesDied: number | null; afterRespawnSecs: number | null; weakEntry: boolean | null;
   effects?: string[];
+  /** Seconds dead: first death screen -> respawn (timer estimate, at most the first alive frame). */
+  deadSecs?: number;
 }
 export interface MatchRecord {
   v: 1; id: string; source: 'live' | 'replay' | 'import'; startedAt: number; endedAt: number;
   hero: string | null; matchId: number | null; startClock: number | null; endClock: number | null;
   observedSecs: number; result: 'win' | 'loss' | null; partial?: boolean; fingerprint?: string;
+  /** Area shares: each sample stands for the gap to the next one, capped at 10 s. */
   time: Record<Area, number>;
+  /** The dead-share metric (docs/player-profile.md "Time dead"): observed game seconds (first to
+   *  last clocked frame, recording gaps > 60 s removed; menus and unreadable frames count) and
+   *  seconds dead in them. Absent on matches stored before it (see spanOf / deadOf). */
+  spanSecs?: number; deadSecs?: number;
   deaths: DeathRecord[];
   fights: { joined: number; missed: number; whileDead: number };
   windows: { used: number; unused: number; unusedAt: number[] };
@@ -115,7 +145,15 @@ export function killerFamily(cause: string | null | undefined): { family: string
 /** Hero archetypes for practice tips (docs/heroes/*). Only heroes whose range is unambiguous. */
 const LONG_RANGE = new Set(['hero_orion', 'hero_hornet']);
 const FRONTLINE = new Set(['hero_atlas', 'hero_krill', 'hero_viscous', 'hero_warden', 'hero_yamato', 'hero_shiv', 'hero_frank', 'hero_drifter', 'hero_werewolf']);
-const FALLBACK_NAMES: Record<string, string> = { hero_orion: 'Grey Talon', hero_hornet: 'Vindicta', hero_frank: 'Victor', hero_drifter: 'Drifter', hero_bebop: 'Bebop' };
+/** Display names whose class name differs (data/heroes.json; a unit test keeps them in sync), used
+ *  until the app has loaded assets/heroes.json and in scripts. Others are the capitalised id. */
+export const FALLBACK_NAMES: Record<string, string> = {
+  hero_inferno: 'Infernus', hero_gigawatt: 'Seven', hero_hornet: 'Vindicta', hero_ghost: 'Lady Geist', hero_atlas: 'Abrams', hero_forge: 'McGinnis',
+  hero_chrono: 'Paradox', hero_astro: 'Holliday', hero_nano: 'Calico', hero_orion: 'Grey Talon', hero_krill: 'Mo & Krill', hero_tengu: 'Ivy', hero_synth: 'Pocket',
+  hero_viper: 'Vyper', hero_magician: 'Sinclair', hero_vampirebat: 'Mina', hero_priest: 'Venator', hero_frank: 'Victor', hero_bookworm: 'Paige',
+  hero_doorman: 'The Doorman', hero_punkgoat: 'Billy', hero_necro: 'Graves', hero_fencer: 'Apollo', hero_deadpack: 'Deadman Danny', hero_familiar: 'Rem',
+  hero_werewolf: 'Silver', hero_unicorn: 'Celeste', hero_ratking: 'Rat King', hero_chessmaster: 'Solomon', hero_artist: 'Violet', hero_nurse: 'Nurse Harrow',
+};
 
 // ---------------------------------------------------------------------------------------------
 // Per-match aggregation
@@ -170,7 +208,8 @@ function reduce(s: Snapshot, t: number | null, wall: number | null): Sample {
   return { t, wall, area, hp, you, nearestAlly, unseen, alliesDead, enemiesDead, souls, fightAt, deepWave, push, lane: idx >= 0 ? idx as 0 | 1 | 2 : null };
 }
 
-interface OpenDeath { rec: DeathRecord; startT: number }
+/** A death being observed: `ends` = frame clock + respawn timer for each timer read. */
+interface OpenDeath { rec: DeathRecord; startT: number; lastDeadT: number; ends: number[]; lowDied: boolean }
 /** Aggregates one match. Keeps only a bounded window of recent samples plus running totals. */
 export class MatchAggregator {
   readonly startedAt: number; source: MatchRecord['source'];
@@ -180,7 +219,10 @@ export class MatchAggregator {
   clock: number | null = null; lastWall: number | null = null; private rejects = 0;
   startClock: number | null = null; private lastRead: number | null = null; result: MatchRecord['result'] = null;
   private time: Record<Area, number> = { lane: 0, jungle: 0, base: 0, dead: 0, unknown: 0 };
-  private deaths: DeathRecord[] = []; private open: OpenDeath | null = null;
+  private deaths: DeathRecord[] = []; private open: OpenDeath | null = null; private lastClosed: OpenDeath | null = null;
+  /** Observed game seconds (and its value at the last clocked frame), recording gaps (clock). */
+  private span = 0; private spanAtRead = 0; private spanAnchor: { wall: number | null; t: number | null } | null = null;
+  private gaps: Array<[number, number]> = [];
   private dead = false; private lastDeadT: number | null = null; private respawnedAt: number | null = null; private prevRespawn: number | null = null;
   private fights = { joined: 0, missed: 0, whileDead: 0 }; private fight: { lastSeen: number } | null = null;
   private windows = { used: 0, unused: 0, unusedAt: [] as number[] };
@@ -230,21 +272,26 @@ export class MatchAggregator {
     const p = this.prev;
     if (x.souls == null && p && p.souls != null && p.area !== 'dead' && x.area !== 'dead' && p.t != null && x.t != null && x.t - p.t <= 10) x.souls = p.souls;
     this.integrate(x);
+    this.observeSpan(wall, t, read != null);
     const events = { died: false, respawned: false };
+    const timer = finite(s.respawn_secs) && s.respawn_secs >= 0 && s.respawn_secs <= 120 ? s.respawn_secs : null;
     // Deaths (review.rs evaluate): entering the death screen, or a death screen > 60 s after the
     // previous one (rec5 merged a death across a 7-minute recording gap). Unknown frames between
     // death screens do not split or end a death.
     if (x.area === 'dead' && x.t != null) {
-      // A single gameplay frame inside a death screen is a misread, not a respawn (rec4 26:37
-      // between death screens at 26:32 and 26:40): reopen that death.
-      const last = this.deaths[this.deaths.length - 1];
-      if (!this.dead && last && this.respawnedAt != null && x.t - this.respawnedAt <= 8 && this.lastDeadT != null && this.respawnedAt - this.lastDeadT <= 10) {
-        this.deaths.pop(); this.open = { rec: last, startT: last.clock }; this.respawnedAt = this.prevRespawn; this.dead = true;
+      // A single gameplay frame inside a death screen is a misread, not a respawn: reopen that
+      // death, unless the new timer says a fresh death started.
+      const last = this.lastClosed, est = last ? respawnEstimate(last.ends, last.lastDeadT) : null;
+      if (!this.dead && last && this.deaths.at(-1) === last.rec && this.respawnedAt != null && x.t - this.respawnedAt <= 8 && this.respawnedAt - last.lastDeadT <= 10
+        && !(timer != null && est != null && x.t + timer > est + 15)) {
+        this.deaths.pop(); this.open = last; this.lastClosed = null; this.respawnedAt = this.prevRespawn; this.dead = true;
       }
-      if (!this.dead || (this.lastDeadT != null && x.t > this.lastDeadT + 60)) { this.closeDeath(); this.startDeath(x, s); events.died = true; }
+      if (!this.dead || (this.lastDeadT != null && x.t > this.lastDeadT + 60)) { this.closeDeath(null); this.startDeath(x, s); events.died = true; }
       this.dead = true; this.lastDeadT = x.t;
       const o = this.open;
       if (o) {
+        o.lastDeadT = x.t;
+        if (timer != null) o.ends.push(x.t + timer);
         // The damage panel fills in over a few seconds: the latest reading wins.
         const dd = (s as Snapshot & { death_damage?: Array<{ source?: string; damage?: number }> | null; death_killing_blow?: string | null });
         const top = Array.isArray(dd.death_damage) ? [...dd.death_damage].filter(d => d && typeof d.source === 'string').sort((a, b) => (b.damage || 0) - (a.damage || 0))[0]?.source : undefined;
@@ -253,7 +300,9 @@ export class MatchAggregator {
         if (o.rec.souls == null && x.souls != null) o.rec.souls = x.souls;
       }
     } else if (s.screen === 'Gameplay' && x.area !== 'dead' && this.dead) {
-      this.dead = false; this.closeDeath(); this.prevRespawn = this.respawnedAt; if (x.t != null) this.respawnedAt = x.t; events.respawned = true;
+      this.dead = false;
+      // The grey "Respawn in: 1" screen is not a death: no respawn either.
+      if (this.closeDeath(x.t)) { this.prevRespawn = this.respawnedAt; if (x.t != null) this.respawnedAt = x.t; events.respawned = true; }
     }
     this.samples.push(x);
     const keep = (x.t ?? 0) - 120;
@@ -345,15 +394,61 @@ export class MatchAggregator {
     }
     if (this.respawnedAt != null && end >= this.respawnedAt) rec.afterRespawnSecs = Math.round(end - this.respawnedAt);
     if (rec.souls == null && x.souls != null) rec.souls = x.souls;
-    this.open = { rec, startT: clock };
-    if (this.lowOpen != null) { this.lowHp.died++; this.lowOpen = null; }
+    const lowDied = this.lowOpen != null;
+    if (lowDied) { this.lowHp.died++; this.lowOpen = null; }
+    this.open = { rec, startT: clock, lastDeadT: clock, ends: [], lowDied };
   }
-  private closeDeath() { if (this.open) { this.deaths.push(this.open.rec); this.open = null; } }
+  /** Close the open death; `aliveT` = clock of the alive gameplay frame that ended it (null: a
+   *  new death or the end of the match). Returns false for the grey "Respawn in: 1" screen
+   *  (dropped: not a death, no time dead). */
+  private closeDeath(aliveT: number | null): boolean {
+    const o = this.open; if (!o) return false;
+    this.open = null;
+    const est = respawnEstimate(o.ends, o.lastDeadT);
+    if (aliveT != null && aliveT - o.startT < LIMITS.downed_secs && o.startT >= LIMITS.downed_after_clock && !(est != null && est - o.startT >= LIMITS.downed_secs)) {
+      if (o.lowDied) this.lowHp.died--;
+      return false;
+    }
+    o.rec.deadSecs = Math.round(this.deathSecs(o, aliveT));
+    this.deaths.push(o.rec); this.lastClosed = o;
+    return true;
+  }
+  /** Seconds dead in one death: first death screen -> the respawn-timer estimate, never before
+   *  the last death screen nor after the first alive gameplay frame; without a timer read, the
+   *  first alive frame (at most 10 s after the last death screen). Recording gaps are removed.
+   *  Never past the last observed clock (a match that ends while you are dead). */
+  private deathSecs(o: OpenDeath, aliveT: number | null): number {
+    const est = respawnEstimate(o.ends, o.lastDeadT);
+    let end = est != null ? (aliveT != null ? Math.min(est, aliveT) : est)
+      : aliveT != null ? Math.min(aliveT, o.lastDeadT + LIMITS.sample_cap_secs) : o.lastDeadT;
+    end = Math.max(end, o.lastDeadT);
+    if (aliveT == null && this.clock != null) end = Math.min(end, Math.max(o.lastDeadT, this.clock));
+    let secs = Math.max(0, end - o.startT);
+    for (const [a, b] of this.gaps) secs -= Math.max(0, Math.min(b, end) - Math.max(a, o.startT));
+    return Math.max(0, secs);
+  }
+  /** Observed game time: every frame-to-frame interval up to 60 s (wall time live, game clock in
+   *  replays), counted up to the last frame with a clock read; longer ones are recording gaps. */
+  private observeSpan(wall: number | null, t: number | null, clocked: boolean) {
+    const a = this.spanAnchor;
+    if (a) {
+      const raw = wall != null && a.wall != null ? (wall - a.wall) / 1000 : t != null && a.t != null ? t - a.t : null;
+      if (raw != null && raw > 0) {
+        if (raw <= LIMITS.recording_gap_secs) this.span += raw;
+        else if (a.t != null && t != null) { this.gaps.push([a.t, t]); if (this.gaps.length > 50) this.gaps.shift(); }
+      }
+    }
+    if (wall != null || t != null) this.spanAnchor = { wall, t: t ?? a?.t ?? null };
+    if (clocked) this.spanAtRead = this.span;
+  }
+  /** Seconds dead so far (an open death counts up to its respawn estimate). */
+  get deadSecs() { return this.deaths.reduce((a, d) => a + (d.deadSecs ?? 0), 0) + (this.open ? this.deathSecs(this.open, null) : 0); }
+  get spanSecs() { return this.spanAtRead; }
 
   /** The match so far (does not close it). */
   record(endedAt: number, partial = false): MatchRecord {
     const hero = [...this.heroVotes.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
-    const deaths = [...this.deaths, ...(this.open ? [this.open.rec] : [])].map(d => ({ ...d }));
+    const deaths = [...this.deaths, ...(this.open ? [{ ...this.open.rec, deadSecs: Math.round(this.deathSecs(this.open, null)) }] : [])].map(d => ({ ...d }));
     const windows = { ...this.windows, unusedAt: [...this.windows.unusedAt] };
     if (this.win && this.win.secs >= LIMITS.window_secs) { if (this.win.used) windows.used++; else { windows.unused++; windows.unusedAt.push(Math.round(this.win.start)); } }
     const w = this.worth; const span = w.first && w.last ? w.last.t - w.first.t : 0;
@@ -361,7 +456,8 @@ export class MatchAggregator {
     return { v: 1, id: `${this.startedAt.toString(36)}-${(this.startClock ?? 0).toString(36)}`, source: this.source, startedAt: this.startedAt, endedAt,
       hero, matchId: this.matchId, startClock: this.startClock, endClock: this.lastRead ?? (this.clock == null ? null : Math.round(this.clock)), observedSecs: Math.round(this.observedSecs), result: this.result,
       ...(partial ? { partial: true } : {}),
-      time: round(this.time) as Record<Area, number>, deaths, fights: { ...this.fights }, windows,
+      time: round(this.time) as Record<Area, number>, spanSecs: Math.round(this.spanSecs), deadSecs: Math.round(Math.min(this.deadSecs, Math.max(this.spanSecs, 0))),
+      deaths, fights: { ...this.fights }, windows,
       souls: round(this.souls) as MatchRecord['souls'], lowHp: round(this.lowHp) as MatchRecord['lowHp'], deepAwaySecs: Math.round(this.deepAwaySecs),
       farm: { perMin: span >= 120 ? Math.round((w.last!.v - w.first!.v) * 60 / span) : null }, kda: this.kda };
   }
@@ -391,6 +487,11 @@ const sum = (xs: number[]) => xs.reduce((a, b) => a + b, 0);
 const pct = (n: number, d: number) => d > 0 ? Math.round(n * 100 / d) : 0;
 const known = (m: MatchRecord) => m.time.lane + m.time.jungle + m.time.base + m.time.dead;
 const alive = (m: MatchRecord) => m.time.lane + m.time.jungle + m.time.base;
+/** The dead-share metric: seconds dead / observed game seconds (docs/player-profile.md). Matches
+ *  stored before it fall back to their sampled dead time over all sampled time (unknown included). */
+export const spanOf = (m: MatchRecord) => m.spanSecs ?? m.observedSecs;
+export const deadOf = (m: MatchRecord) => m.deadSecs ?? m.time.dead;
+const minutes = (secs: number) => `${Math.round(secs / 60)} min`;
 const k = (n: number) => n >= 1000 ? `${(n / 1000).toFixed(1).replace(/\.0$/, '')}k` : String(Math.round(n));
 /** Recency weight: the newest match counts 1, each older one 0.85 times the next. */
 const weight = (age: number) => Math.pow(0.85, age);
@@ -429,7 +530,9 @@ const severity = (value: number, threshold: number): 1 | 2 | 3 => { const r = th
 
 export class PlayerProfileModel {
   names: Record<string, string> = {};
-  heroName(id: string | null | undefined) { return id ? this.names[id] || FALLBACK_NAMES[id] || id.replace(/^hero_/, '').replaceAll('_', ' ') : 'Unknown hero'; }
+  heroName(id: string | null | undefined) {
+    return id ? this.names[id] || FALLBACK_NAMES[id] || id.replace(/^hero_/, '').split('_').map(w => w ? w[0].toUpperCase() + w.slice(1) : w).join(' ') : 'Unknown hero';
+  }
 
   /** Traits for matches (newest first). */
   traits(all: MatchRecord[]): { strengths: Trait[]; weaknesses: Trait[] } {
@@ -444,14 +547,15 @@ export class PlayerProfileModel {
       const { events, needed, ...rest } = t; out.push({ ...rest, ...confidence(events, needed, t.matches) });
     };
 
-    // 1. Dying: share of readable time spent dead (review.json pattern_deaths: >= 60 s dead in a
-    //    5-minute window; rec4 ~25% / rec5 17-21% were judged too much). Weak >= 15%, strong < 7%.
-    const deadF = (m: MatchRecord): Ratio | null => known(m) >= 300 ? { num: m.time.dead, den: known(m) } : null;
+    // 1. Dying: share of observed game time spent dead (review.json pattern_deaths: >= 60 s dead in
+    //    a 5-minute window; ground truth from the respawn timers: rec4 24%, rec5 19%, rec8 / rec11
+    //    17%, all judged too much). Weak >= 15%, strong < 7%.
+    const deadF = (m: MatchRecord): Ratio | null => spanOf(m) >= 300 ? { num: deadOf(m), den: spanOf(m) } : null;
     const dead = ratio(ms, deadF);
-    const per10 = ratio(ms, m => known(m) >= 300 ? { num: m.deaths.length, den: known(m) / 600 } : null);
+    const per10 = ratio(ms, m => spanOf(m) >= 300 ? { num: m.deaths.length, den: spanOf(m) / 600 } : null);
     if (dead && per10) {
       const v = dead.value * 100, d10 = per10.value;
-      const evidence = `${Math.round(v)}% of readable time dead; ${d10.toFixed(1)} deaths per 10 min (${per10.raw.num} deaths in ${Math.round(per10.raw.den * 10)} min, ${dead.n} match${dead.n === 1 ? '' : 'es'}).`;
+      const evidence = `${Math.round(v)}% of the game dead (${minutes(dead.raw.num)} of ${minutes(dead.raw.den)} observed); ${d10.toFixed(1)} deaths per 10 min (${per10.raw.num} deaths, ${dead.n} match${dead.n === 1 ? '' : 'es'}).`;
       if (v >= 15 || d10 >= 2) push({ id: 'dying', kind: 'weakness', label: 'Dying too often', evidence, severity: severity(Math.max(v / 15, d10 / 2), 1), value: Math.round(v), threshold: 15, matches: dead.n,
         trend: trend(ms, deadF, true), events: per10.raw.num, needed: 6,
         tip: `Play for zero deaths: fight from behind your front line and leave on the first big hit.${longRange ? ` ${heroName} is long-range: stay at max range and let the front line take space.` : ''}`,
@@ -465,19 +569,23 @@ export class PlayerProfileModel {
     const atDeathF = (m: MatchRecord): Ratio | null => { const d = m.deaths.filter(x => x.souls != null); return d.length ? { num: d.filter(x => x.souls! >= deathSpend(x.clock)).length, den: d.length } : null; };
     const hoardF = (m: MatchRecord): Ratio | null => m.souls.knownSecs >= 120 ? { num: m.souls.hoardSecs, den: m.souls.knownSecs } : null;
     const atDeath = ratio(ms, atDeathF), hoard = ratio(ms, hoardF);
-    const soulsAt = deathsAll.map(d => d.souls).filter(finite);
+    const withSouls = deathsAll.filter(d => d.souls != null);
+    const soulsAt = withSouls.map(d => d.souls!);
+    // The threshold depends on the game clock (half the usual tier, at least 1,200): name its range.
+    const needs = withSouls.map(d => deathSpend(d.clock));
+    const need = needs.length ? (Math.min(...needs) === Math.max(...needs) ? `${k(needs[0])}+ souls` : `half an item tier or more (${k(Math.min(...needs))}-${k(Math.max(...needs))} by game time)`) : `${k(REVIEW.souls_at_death)}+ souls`;
     const peak = Math.max(0, ...ms.map(m => m.souls.peak));
     const weakAt = atDeath && atDeath.raw.den >= 2 && atDeath.value >= 0.5, weakHoard = hoard && hoard.value >= 0.2;
     if (weakAt || weakHoard) {
       const parts: string[] = [];
-      if (atDeath) parts.push(`died holding ${k(REVIEW.souls_at_death)}+ souls in ${atDeath.raw.num} of ${atDeath.raw.den} deaths${soulsAt.length ? ` (${k(Math.min(...soulsAt))}-${k(Math.max(...soulsAt))})` : ''}`);
+      if (atDeath) parts.push(`died holding ${need} in ${atDeath.raw.num} of ${atDeath.raw.den} deaths${soulsAt.length ? ` (held ${k(Math.min(...soulsAt))}-${k(Math.max(...soulsAt))})` : ''}`);
       if (hoard) parts.push(`over ${k(REVIEW.hoard_souls)} unspent for ${pct(hoard.num, hoard.den)}% of alive time${peak ? `, peak ${k(peak)}` : ''}`);
       const v = Math.max(atDeath ? atDeath.value / 0.5 : 0, hoard ? hoard.value / 0.2 : 0);
       push({ id: 'unspent_souls', kind: 'weakness', label: 'Unspent souls', evidence: cap(parts.join('; ')) + '.', severity: severity(v, 1), value: Math.round((atDeath?.value ?? hoard!.value) * 100), threshold: 50,
         matches: Math.max(atDeath?.n ?? 0, hoard?.n ?? 0), trend: agree(atDeath ? trend(ms, atDeathF, true) : null, hoard ? trend(ms, hoardF, true) : null), events: (atDeath?.raw.den ?? 0) + (hoard ? hoard.raw.den / 300 : 0), needed: 6,
         tip: 'Spend at 3,000 souls: shop when your wave is safe, and never walk back into a fight with souls in your pocket.', focus: 'Profile focus: spend your souls at 3,000 before you go back in.' });
     } else if (atDeath && hoard && atDeath.raw.den >= 3 && atDeath.value <= 0.15 && hoard.value <= 0.05) {
-      push({ id: 'spending', kind: 'strength', label: 'Spends souls on time', evidence: `Only ${atDeath.raw.num} of ${atDeath.raw.den} deaths with ${k(REVIEW.souls_at_death)}+ souls; over ${k(REVIEW.hoard_souls)} for ${pct(hoard.num, hoard.den)}% of alive time.`,
+      push({ id: 'spending', kind: 'strength', label: 'Spends souls on time', evidence: `Only ${atDeath.raw.num} of ${atDeath.raw.den} deaths holding ${need}; over ${k(REVIEW.hoard_souls)} for ${pct(hoard.num, hoard.den)}% of alive time.`,
         severity: 1, value: Math.round(atDeath.value * 100), threshold: 15, matches: atDeath.n, trend: trend(ms, atDeathF, true), events: atDeath.raw.den, needed: 5, tip: 'Keep shopping on time.', focus: '' });
     }
 
@@ -598,12 +706,12 @@ export class PlayerProfileModel {
     const ms = hero ? all.filter(m => m.hero === hero) : all;
     const recent = ms.slice(0, 10);
     const heroes = [...all.reduce((m, r) => r.hero ? m.set(r.hero, (m.get(r.hero) || 0) + 1) : m, new Map<string, number>())].sort((a, b) => b[1] - a[1]).map(([h, n]) => ({ hero: h, name: this.heroName(h), matches: n }));
-    const kn = sum(recent.map(known)), deaths = sum(recent.map(m => m.deaths.length));
+    const kn = sum(recent.map(spanOf)), deaths = sum(recent.map(m => m.deaths.length));
     const farm = recent.map(m => m.farm.perMin).filter(finite);
     const { strengths, weaknesses } = this.traits(recent);
     const main = hero ?? mode(recent.map(m => m.hero));
-    return { matches: ms.length, hero: main, heroName: main ? this.heroName(main) : null, heroes, observedMinutes: Math.round(sum(recent.map(m => m.observedSecs)) / 60),
-      deathsPer10: kn >= 300 ? Math.round(deaths * 6000 / kn) / 10 : null, deadPct: kn >= 300 ? pct(sum(recent.map(m => m.time.dead)), kn) : null,
+    return { matches: ms.length, hero: main, heroName: main ? this.heroName(main) : null, heroes, observedMinutes: Math.round(kn / 60),
+      deathsPer10: kn >= 300 ? Math.round(deaths * 6000 / kn) / 10 : null, deadPct: kn >= 300 ? pct(sum(recent.map(deadOf)), kn) : null,
       farmPerMin: farm.length ? Math.round(sum(farm) / farm.length) : null, strengths, weaknesses, rows: ms.map(m => this.row(m)) };
   }
 
@@ -611,8 +719,8 @@ export class PlayerProfileModel {
     const withSouls = m.deaths.filter(d => d.souls != null);
     const fam = mode(m.deaths.map(d => d.family));
     const killer = fam ? (() => { const h = m.deaths.find(d => d.family === fam)?.killer; const n = m.deaths.filter(d => d.family === fam).length; return `${h ? this.heroName(h) : fam} x${n}`; })() : null;
-    return { id: m.id, date: m.startedAt, hero: m.hero, heroName: this.heroName(m.hero), source: m.source, result: m.result, minutes: Math.round(m.observedSecs / 6) / 10,
-      deaths: m.deaths.length, deadPct: known(m) >= 60 ? pct(m.time.dead, known(m)) : null, fightsJoined: m.fights.joined, fightsMissed: m.fights.missed,
+    return { id: m.id, date: m.startedAt, hero: m.hero, heroName: this.heroName(m.hero), source: m.source, result: m.result, minutes: Math.round(spanOf(m) / 6) / 10,
+      deaths: m.deaths.length, deadPct: spanOf(m) >= 60 ? pct(deadOf(m), spanOf(m)) : null, fightsJoined: m.fights.joined, fightsMissed: m.fights.missed,
       unspentAtDeath: withSouls.length ? `${withSouls.filter(d => d.souls! >= deathSpend(d.clock)).length}/${withSouls.length} · avg ${k(sum(withSouls.map(d => d.souls!)) / withSouls.length)}` : '—',
       topKiller: killer, partial: m.partial === true };
   }
@@ -660,14 +768,16 @@ export function sanitizeMatch(raw: unknown): MatchRecord | null {
     clock: num(d.clock), cause: str(d.cause), family: str(d.family), killer: str(d.killer, 40), close: bool(d.close), evidence: d.evidence !== false,
     fallSecs: numOrNull(d.fallSecs), fromPct: numOrNull(d.fromPct), burst: bool(d.burst), souls: numOrNull(d.souls), alone: bool(d.alone),
     forwardUnseen: bool(d.forwardUnseen), teammatesDied: numOrNull(d.teammatesDied), afterRespawnSecs: numOrNull(d.afterRespawnSecs), weakEntry: bool(d.weakEntry),
-    ...(Array.isArray(d.effects) ? { effects: d.effects.filter((e: unknown) => typeof e === 'string').slice(0, 6) } : {}) }));
+    ...(Array.isArray(d.effects) ? { effects: d.effects.filter((e: unknown) => typeof e === 'string').slice(0, 6) } : {}),
+    ...(finite(d.deadSecs) && d.deadSecs >= 0 ? { deadSecs: d.deadSecs } : {}) }));
   const o = (v: unknown) => v && typeof v === 'object' ? v as Record<string, unknown> : {};
   const f = o(m.fights), w = o(m.windows), s = o(m.souls), l = o(m.lowHp);
   return { v: 1, id: str(m.id, 40) || `import-${Math.random().toString(36).slice(2, 10)}`, source: m.source === 'replay' || m.source === 'import' ? m.source : 'live',
     startedAt: num(m.startedAt, Date.now()), endedAt: num(m.endedAt, num(m.startedAt, Date.now())), hero: typeof m.hero === 'string' && /^hero_[a-z_]+$/.test(m.hero) ? m.hero : null,
     matchId: numOrNull(m.matchId), startClock: numOrNull(m.startClock), endClock: numOrNull(m.endClock), observedSecs: num(m.observedSecs, Object.values(time).reduce((a, b) => a + b, 0)),
     result: m.result === 'win' || m.result === 'loss' ? m.result : null, ...(m.partial === true ? { partial: true } : {}), ...(typeof m.fingerprint === 'string' ? { fingerprint: m.fingerprint.slice(0, 80) } : {}),
-    time, deaths, fights: { joined: num(f.joined), missed: num(f.missed), whileDead: num(f.whileDead) },
+    time, ...(finite(m.spanSecs) && m.spanSecs >= 0 && finite(m.deadSecs) && m.deadSecs >= 0 ? { spanSecs: m.spanSecs, deadSecs: Math.min(m.deadSecs, m.spanSecs) } : {}),
+    deaths, fights: { joined: num(f.joined), missed: num(f.missed), whileDead: num(f.whileDead) },
     windows: { used: num(w.used), unused: num(w.unused), unusedAt: Array.isArray(w.unusedAt) ? w.unusedAt.filter(finite).slice(0, 20) : [] },
     souls: { knownSecs: num(s.knownSecs), hoardSecs: num(s.hoardSecs), peak: num(s.peak) },
     lowHp: { knownSecs: num(l.knownSecs), lowSecs: num(l.lowSecs), episodes: num(l.episodes), survived: num(l.survived), died: num(l.died) },

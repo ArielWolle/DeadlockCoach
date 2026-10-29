@@ -125,6 +125,59 @@ fn norm(s: &str) -> String { s.to_lowercase().replace(['\'', '\u{2019}'], "").tr
 fn and_list(v: &[String]) -> String {
     match v.len() { 0 => String::new(), 1 => v[0].clone(), n => format!("{} and {}", v[..n - 1].join(", "), v[n - 1]) }
 }
+/// The respawn moment of one death from its timer reads (frame clock + timer each): the largest
+/// group of reads within 2 s of each other (the latest on a tie), its median. Misreads drop a
+/// digit (rec4 read 9 / 5 / 7 for 49 / 45 / 27), so neither the first nor the last read is trusted.
+/// A read refuted by a later death screen (implied respawn before `last_dead`) is dropped: rec4
+/// 30:52 read 8, 5, 4, 2, 0 for 68-60 and was still dead at 31:06.
+fn respawn_estimate(ends: &[u32], last_dead: u32) -> Option<u32> {
+    let ends: Vec<u32> = ends.iter().copied().filter(|&e| e + 1 >= last_dead).collect();
+    let near = |a: u32, b: u32| a.abs_diff(b) <= 2;
+    let best = ends.iter().copied().max_by_key(|&e| (ends.iter().filter(|&&f| near(f, e)).count(), e))?;
+    let mut group: Vec<u32> = ends.iter().copied().filter(|&f| near(f, best)).collect();
+    group.sort_unstable();
+    Some(group[group.len() / 2])
+}
+
+/// Deaths and seconds dead in a window (`eff` = the area of each sample, menus inside a death
+/// already marked dead). The same definition as the player profile (docs/player-profile.md "Time
+/// dead"): a death is a run of death screens; it lasts from its first death screen to the respawn,
+/// i.e. the respawn-timer estimate, never before the last death screen nor after the first alive
+/// gameplay frame; without a timer read, the first alive frame (at most 10 s after the last death
+/// screen). A death still running at the end of the window counts up to the estimate (the rest of
+/// the timer is part of it). Recording gaps (> 60 s between frames) are not dead time. From 10:00
+/// on, a run that ends in gameplay within 10 s without a longer timer is the grey "Respawn in: 1"
+/// screen, not a death (the scoreboard count does not change: rec4 26:32, rec8 39:17, rec11 25:17).
+fn death_runs(w: &[&Sample], eff: &[Area]) -> (usize, u32) {
+    let (mut deaths, mut secs, mut i) = (0usize, 0u32, 0usize);
+    while i < w.len() {
+        if eff[i] != Area::Dead { i += 1; continue; }
+        let (start, mut j, mut ends, mut gaps) = (w[i].clock, i, vec![], 0u32);
+        while j < w.len() && eff[j] == Area::Dead {
+            if let Some(r) = w[j].respawn.filter(|r| *r <= 120) { ends.push(w[j].clock + r); }
+            if j > i { let d = w[j].clock.saturating_sub(w[j - 1].clock); if d > 60 { gaps += d; } }
+            j += 1;
+        }
+        // The last death screen (menus and unreadable frames inside the run prove nothing).
+        let last = (i..j).rev().find(|&k| w[k].area == Area::Dead).map_or(start, |k| w[k].clock);
+        let alive_at = w[j..].iter().find(|x| x.alive).map(|x| x.clock);
+        let est = respawn_estimate(&ends, last);
+        let downed = i > 0 && start >= 600 && alive_at.is_some_and(|a| a < start + 10) && !est.is_some_and(|e| e >= start + 10);
+        if !downed {
+            let end = match (est, alive_at) {
+                (Some(e), Some(a)) => e.min(a),
+                (Some(e), None) => e,
+                (None, Some(a)) => a.min(last + 10),
+                (None, None) => last,
+            }.max(last);
+            deaths += 1;
+            secs += end.saturating_sub(start).saturating_sub(gaps);
+        }
+        i = j;
+    }
+    (deaths, secs)
+}
+
 /// Coarse family of a death-panel cause, for "same killer again".
 fn cause_family(c: &str) -> String {
     let l = c.to_ascii_lowercase();
@@ -478,8 +531,8 @@ impl ReviewCoach {
             let next = w[i + 1..].iter().find(|x| known(x)).map(|x| x.area);
             if prev == Some(Area::Dead) && next.is_none_or(|n| n == Area::Dead) { Area::Dead } else { Area::Unknown }
         }).collect();
-        // Time per area: each sample stands for the gap to the next one (capped at 10 s, 30 s
-        // within a death: the death screen is sampled sparsely).
+        // Time per area (shares only; time dead is death_runs()): each sample stands for the gap
+        // to the next one (capped at 10 s, 30 s within a death).
         let mut time = [0u32; 5]; let mut hoard = 0u32; let mut deep_away = 0u32; let mut peak = 0u32;
         // The souls tier that applied while hoarding (the lowest one counted, so "held over N"
         // and "up to M" agree: rec8 said "over 6,400 ... up to 5,130").
@@ -511,13 +564,7 @@ impl ReviewCoach {
         }
         if let Some(w) = open.take() { windows.push(w); }
         let unused = windows.into_iter().filter(|w| w.1 >= 20 && !w.3).max_by_key(|w| w.1);
-        // Still dead now: the rest of the respawn timer is part of this death.
-        if eff.last() == Some(&Area::Dead) { time[Area::Dead as usize] += w.last().and_then(|x| x.respawn).unwrap_or(0); }
-        // Deaths = death-screen runs inside the window (a death just before it still counts).
-        // Menus between death screens do not split a death; a live gameplay frame does, even
-        // without your marker (rec8 counted 1 death of 2: 48:07-49:34 had no minimap).
-        let deaths = (0..w.len()).filter(|&i| eff[i] == Area::Dead
-            && (0..i).rev().find(|&j| eff[j] != Area::Unknown || w[j].alive).is_none_or(|j| eff[j] != Area::Dead)).count();
+        let (deaths, dead_secs) = death_runs(&w, &eff);
         let known = (time[Area::Lane as usize] + time[Area::Jungle as usize] + time[Area::Base as usize]).max(1);
         let pct = |a: Area| time[a as usize] * 100 / known;
         let min = (span + 30) / 60;
@@ -548,8 +595,8 @@ impl ReviewCoach {
             out.push(self.fill("pattern_close", &[("count", count), ("sources", and_list(&srcs)), ("you", you)]));
         }
         let about_deaths = !out.is_empty();
-        if deaths >= 2 || time[Area::Dead as usize] >= 60 {
-            out.push(self.fill("pattern_deaths", &[("min", min.to_string()), ("deaths", plural(deaths, "time", "times")), ("dead", minutes(time[Area::Dead as usize]))]));
+        if deaths >= 2 || dead_secs >= 60 {
+            out.push(self.fill("pattern_deaths", &[("min", min.to_string()), ("deaths", plural(deaths, "time", "times")), ("dead", minutes(dead_secs))]));
         }
         // A summary never repeats an item the previous summary already said (rec6 said "held over
         // 6,400 souls" in two summaries in a row; rec5 repeated the same 38:21 window).

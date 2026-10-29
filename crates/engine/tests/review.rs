@@ -331,3 +331,39 @@ fn going_back_in_at_half_health_is_called_out() {
     assert!(t.contains("under 50% health for the 30 seconds before"), "{t}");
     assert!(t.contains("shopping does not heal"), "{t}");
 }
+
+// Time dead = first death screen -> respawn (docs/player-profile.md "Time dead", shared with the
+// player profile; checked against the respawn timers of rec4 / rec5 / rec8 / rec11).
+#[test]
+fn the_grey_respawn_in_1_screen_is_not_a_death() {
+    // rec11 25:17: one grey "Respawn in: 1" frame between gameplay frames, then the real death at
+    // 25:28 (54 s). The scoreboard death count did not change for the grey screen.
+    let p = patterns(1300, 1700, &|t| match t {
+        1515 => dead(t, None),
+        1525..=1585 => { let mut d = dead(t, Some("Jar of Dead")); d.respawn_secs = Some(1590 - t); d }
+        _ => lane_frame(t, 500),
+    });
+    assert!(p.iter().any(|t| t.contains("you died 1 time and were dead for 65 seconds")), "{p:?}");
+    assert!(!p.iter().any(|t| t.contains("you died 2 times")), "{p:?}");
+}
+#[test]
+fn time_dead_ends_at_the_respawn_timer_not_at_the_next_frame() {
+    // The first alive frame comes a sampling gap after the respawn (rec11 10:22: respawn 10:24,
+    // next frame 10:30): the gap is alive time.
+    let p = patterns(1000, 1300, &|t| match t {
+        1100..=1160 => { let mut d = dead(t, Some("Gun Damage")); d.respawn_secs = Some(1162 - t); d }
+        _ => lane_frame(t, 500),
+    });
+    let dead: Vec<&String> = p.iter().filter(|t| t.contains("were dead for")).collect();
+    assert!(!dead.is_empty() && dead.iter().all(|t| t.contains("you died 1 time and were dead for 62 seconds")), "{p:?}");
+}
+#[test]
+fn dropped_timer_digits_do_not_shorten_the_rest_of_a_death() {
+    // rec4 read 8, 5, 4, 2, 0 for 68-60: two reads in three here drop the tens digit, including the
+    // last one (18 read as 8). Still dead at 1170 in a 1100-1188 death: 88 s.
+    let p = patterns(800, 1170, &|t| if t >= 1100 {
+        let mut d = dead(t, Some("Gun Damage")); let left = 1188 - t; d.respawn_secs = Some(if (t / 5) % 3 != 0 { left % 10 } else { left }); d
+    } else { lane_frame(t, 500) });
+    let dead: Vec<&String> = p.iter().filter(|t| t.contains("were dead for")).collect();
+    assert!(!dead.is_empty() && dead.iter().all(|t| t.contains("were dead for 88 seconds")), "{dead:?}");
+}

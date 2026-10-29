@@ -11,9 +11,17 @@ export function framesOf(text: string) {
     return v && typeof v === 'object' && v.snapshot ? { snapshot: v.snapshot, t: typeof v.t === 'number' ? v.t : null } : { snapshot: v, t: null };
   });
 }
+/** Hero display names from data/heroes.json (the app loads the same list as assets/heroes.json). */
+export function heroNames(): Record<string, string> {
+  try {
+    const list = JSON.parse(readFileSync(new URL('../../data/heroes.json', import.meta.url), 'utf8').replace(/^\uFEFF/, '')) as Array<{ class_name: string; name: string }>;
+    return Object.fromEntries(list.map(h => [h.class_name, h.name]));
+  } catch { return {}; }
+}
 export function profileOf(files: string[], wall = true, verbose = false) {
   let clock = 1_700_000_000_000;
   const profile = new PlayerProfile({ now: () => clock });
+  profile.setHeroNames(heroNames());
   for (const file of files) {
     const frames = framesOf(readFileSync(file, 'utf8'));
     const base = clock;
@@ -32,7 +40,7 @@ if (import.meta.url === `file:///${process.argv[1]?.replaceAll('\\', '/')}` || p
   const args = process.argv.slice(2);
   const profile = profileOf(args.filter(a => !a.startsWith('--')), !args.includes('--no-wall'), args.includes('--verbose'));
   const s = profile.summary();
-  for (const r of s.rows) console.log(`match ${r.heroName}: ${r.minutes} min, ${r.deaths} deaths, ${r.deadPct}% dead, fights ${r.fightsJoined}/${r.fightsJoined + r.fightsMissed}, unspent at death ${r.unspentAtDeath}, top killer ${r.topKiller}`);
+  for (const [i, r] of s.rows.entries()) console.log(`match ${r.heroName}: ${r.minutes} min, ${r.deaths} deaths, ${r.deadPct}% dead (${profile.matches[i]?.deadSecs} of ${profile.matches[i]?.spanSecs} s; per death ${profile.matches[i]?.deaths.map(d => d.deadSecs).join('/')}), fights ${r.fightsJoined}/${r.fightsJoined + r.fightsMissed}, unspent at death ${r.unspentAtDeath}, top killer ${r.topKiller}`);
   console.log('\nWEAKNESSES');
   for (const t of s.weaknesses) console.log(`- [${t.id}] ${t.label} (sev ${t.severity}, conf ${t.confidenceLabel} ${t.confidence}, ${t.trend}): ${t.evidence}\n    tip: ${t.tip}`);
   console.log('STRENGTHS');
