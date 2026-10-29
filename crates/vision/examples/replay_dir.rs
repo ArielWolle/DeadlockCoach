@@ -26,7 +26,7 @@ fn main() {
         let advice = coach_engine::positioning::PositionCoach::default().assess(&snap).map(|a| a.id);
         let lane = coach_engine::laning::LaneCoach::default().decide(&snap).map(|d| (format!("{:?}", d.action), d.speak));
         let row = serde_json::json!({"file": p.file_name().unwrap().to_string_lossy(), "t": ts - t0, "ms": ms, "snapshot": snap,
-            "cues": cues, "advice": advice, "lane": lane, "souls_box": souls_box});
+            "cues": cues, "advice": advice, "lane": lane, "souls_box": souls_box, "match_resets": auto.scanner().match_resets()});
         writeln!(out, "{row}").unwrap();
         eprint!(".");
     }

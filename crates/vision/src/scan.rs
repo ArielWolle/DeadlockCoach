@@ -86,6 +86,64 @@ pub struct Scanner {
     own_backdrop: [u32; 6],
     /// Per item slot: latched item (see latch_item).
     item_latch: [ItemLatch; 12],
+    /// A match-boundary screen (PostGame / Countdown) was seen since the last HUD frame with a clock.
+    between: bool,
+    /// The end-of-match banner was seen and no HUD frame continued the match since.
+    match_over: bool,
+    /// Wall time of the last HUD frame (gameplay, scoreboard, death screen).
+    last_hud_ms: Option<u64>,
+    /// Per-match resets so far.
+    resets: u32,
+}
+
+/// What a HUD frame says about the match boundary (see [`match_boundary`]).
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct BoundaryEvidence {
+    /// A PostGame or Countdown screen was seen since the last HUD frame with a clock.
+    pub between: bool,
+    /// Wall time since the last HUD frame (ms).
+    pub gap_ms: Option<u64>,
+    /// This frame's clock reading (probe vote, not yet verified).
+    pub raw_clock: Option<u32>,
+    /// The current match's clock extrapolated to now (wall time).
+    pub expected: Option<u32>,
+    /// The verified clock after this frame's verification.
+    pub verified: Option<u32>,
+    /// Highest verified clock of the current match.
+    pub clock_max: Option<u32>,
+}
+
+/// A new match starts on this frame: reset per-match memory before reading it (`Before`, the
+/// clock re-anchors too) or keep the clock that verified the restart (`Verified`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Boundary { Same, Before, Verified }
+
+/// A clock below this is the start of a match.
+pub const MATCH_START_SECS: u32 = 90;
+/// A match whose verified clock passed this can be told apart from a restart.
+pub const MATCH_RUNNING_SECS: u32 = 120;
+/// Wall time without any HUD frame after which a clock that went back means another match.
+pub const MATCH_GAP_MS: u64 = 300_000;
+
+/// Match boundary rule. The HUD match id is not needed: recorded sessions read the same id
+/// (127139499) in consecutive matches, and noisy id reads must not reset a running match.
+/// - PostGame / Countdown seen, then a HUD frame with a start-of-match clock (< 90 s) that does
+///   not continue the current clock: new match, reset before this frame is read.
+/// - No HUD frame for 5+ minutes, then a clock 2+ minutes behind the extrapolated one.
+/// - The verified clock restarted: from > 120 s to < 90 s (the verifier itself needs two
+///   consistent reads to go back, so a misread cannot do it).
+pub fn match_boundary(e: &BoundaryEvidence) -> Boundary {
+    let continues = |c: u32| e.expected.is_some_and(|x| x.abs_diff(c) <= 10);
+    if let Some(c) = e.raw_clock {
+        // "0:31" for 30:31 (a dropped tens-of-minutes digit) is a misread, not a restart.
+        let tens = e.expected.is_some_and(|x| coach_perception::track::tens_of_minutes_apart(c, x));
+        if e.between && c < MATCH_START_SECS && !continues(c) && !tens { return Boundary::Before; }
+        if e.gap_ms.is_some_and(|g| g >= MATCH_GAP_MS) && e.expected.is_some_and(|x| c + 120 < x) { return Boundary::Before; }
+    }
+    match (e.verified, e.clock_max) {
+        (Some(v), Some(m)) if m > MATCH_RUNNING_SECS && v < MATCH_START_SECS && v + 60 < m => Boundary::Verified,
+        _ => Boundary::Same,
+    }
 }
 
 /// Scoreboard columns whose hero-name line is probed on death screens (Tab over the death screen).
@@ -127,11 +185,13 @@ pub fn own_backdrop_slot(img: &image::DynamicImage) -> Option<usize> {
     match lit.as_slice() { [i] => Some(*i), _ => None }
 }
 
-/// Your slot from the backdrop votes: a clear leader (>= 6 votes, 3x the runner-up).
+/// Your slot from the backdrop votes: a clear leader (>= 6 votes, 3x the runner-up), or three
+/// unanimous votes (rec12 named you only at 0:50 of the new match while slot 4 had won every
+/// vote since 0:11; a wrong early latch is still taken over by 10 checks of another slot).
 pub fn own_from_votes(votes: &[u32; 6]) -> Option<usize> {
     let mut v: Vec<(usize, u32)> = votes.iter().copied().enumerate().collect();
     v.sort_by(|a, b| b.1.cmp(&a.1));
-    (v[0].1 >= 6 && v[0].1 >= 3 * v[1].1).then_some(v[0].0)
+    (v[0].1 >= 6 && v[0].1 >= 3 * v[1].1 || v[0].1 >= 3 && v[1].1 == 0).then_some(v[0].0)
 }
 
 /// Per-sample decay of the hero identity votes.
@@ -167,7 +227,7 @@ pub const LATCH_VOTES: f32 = 3.0;
 
 /// Latched identity of one top-bar slot and the contrary evidence against it.
 #[derive(Debug, Clone, Default)]
-pub struct HeroLatch { pub hero: Option<String>, challenge: HashMap<String, f32> }
+pub struct HeroLatch { pub hero: Option<String>, challenge: HashMap<String, f32>, named: bool }
 
 /// Per-slot hero identities latched for the match (0-5 ally, 6-11 enemy). A hero is in one slot
 /// only: a slot does not latch (or switch to) a hero another slot holds, except by a name read.
@@ -188,10 +248,12 @@ impl HeroLatches {
         self.holder(slot, hero).is_none_or(|j| v(slot) >= LATCH_VOTES && v(slot) >= 2.0 * v(j))
     }
     fn take(&mut self, slot: usize, hero: String) {
-        for (j, o) in self.slots.iter_mut().enumerate() { if j != slot && o.hero.as_ref() == Some(&hero) { o.hero = None; o.challenge.clear(); } }
+        for (j, o) in self.slots.iter_mut().enumerate() { if j != slot && o.hero.as_ref() == Some(&hero) { o.hero = None; o.challenge.clear(); o.named = false; } }
         let l = &mut self.slots[slot];
-        l.hero = Some(hero); l.challenge.clear();
+        l.hero = Some(hero); l.challenge.clear(); l.named = false;
     }
+    /// Whether the slot's identity was confirmed by a scoreboard name read.
+    pub fn named(&self, slot: usize) -> bool { self.slots.get(slot).is_some_and(|l| l.named) }
     /// One portrait sample of a live slot: its confident winner (if any) and margin over the
     /// runner-up; `votes` are all slots' identity votes.
     pub fn sample(&mut self, slot: usize, winner: Option<(&str, f32)>, votes: &[HashMap<String, f32>]) {
@@ -200,7 +262,11 @@ impl HeroLatches {
             let l = &mut self.slots[slot];
             match l.hero.as_deref() {
                 Some(cur) if cur == h => { for v in l.challenge.values_mut() { *v *= 0.5; } }
-                Some(_) if margin >= STRONG_MARGIN => { *l.challenge.entry(h.to_string()).or_default() += 1.0; }
+                // An identity a scoreboard name confirmed is not challenged by portraits: names are
+                // far more reliable (rec12 ally slot 0 read Billy on every scoreboard while its dark
+                // portrait on the amber backdrop matched Haze's silhouette and took the slot over).
+                // Only name reads switch it (see `board`).
+                Some(_) if margin >= STRONG_MARGIN && !l.named => { *l.challenge.entry(h.to_string()).or_default() += 1.0; }
                 _ => {}
             }
         }
@@ -219,6 +285,7 @@ impl HeroLatches {
             None => true,
         };
         if take { self.take(slot, hero.to_string()); }
+        if self.slots[slot].hero.as_deref() == Some(hero) { self.slots[slot].named = true; }
         for j in 0..self.slots.len() { if self.slots[j].hero.is_none() { self.settle(j, votes); } }
     }
     fn settle(&mut self, slot: usize, votes: &[HashMap<String, f32>]) {
@@ -452,7 +519,24 @@ impl Scanner {
             own_latched: None,
             own_backdrop: [0; 6],
             item_latch: Default::default(),
+            between: false,
+            match_over: false,
+            last_hud_ms: None,
+            resets: 0,
         }
+    }
+
+    /// A new match began (see [`match_boundary`]): per-match memory is reset and the match id
+    /// is read again. `keep_clock`: the verified clock already belongs to the new match.
+    fn new_match(&mut self, keep_clock: bool) {
+        let clock = self.clock_value.clone();
+        self.reset();
+        if keep_clock { self.clock_value = clock; }
+        self.match_id = None;
+        self.pending_match = None;
+        self.between = false;
+        self.match_over = false;
+        self.resets += 1;
     }
 
     /// Reset per-match memory (call when the clock goes back to the start).
@@ -488,6 +572,9 @@ impl Scanner {
         self.name_rects = vec![None; 12];
         self.clock_value.reset();
         self.clock_max = None;
+        self.between = false;
+        self.match_over = false;
+        self.last_hud_ms = None;
     }
 
     fn text(&self, img: &image::DynamicImage, r: crate::Region) -> Option<String> {
@@ -497,6 +584,10 @@ impl Scanner {
 
     /// Per-slot identity votes of this match (diagnostics).
     pub fn hero_votes(&self) -> &[HashMap<String, f32>] { &self.hero_votes }
+    /// Own-slot evidence (diagnostics): health-gap sums, backdrop votes, latched slot.
+    pub fn own_evidence(&self) -> ([(f32, u32); 6], [u32; 6], Option<usize>) { (self.own_slot, self.own_backdrop, self.own_latched.map(|(s, _)| s)) }
+    /// Per-match resets so far (diagnostics).
+    pub fn match_resets(&self) -> u32 { self.resets }
 
     /// Greedy global assignment of heroes to the 12 slots by mean score.
     pub fn hero_scores(&self) -> Vec<Option<(String, f32)>> {
@@ -589,9 +680,14 @@ impl Scanner {
         self.shop_seen = Some(now_ms);
         let mut snap = GameSnapshot { match_id: self.match_id, screen: Some("Shop".into()), ..Default::default() };
         // Your hero stays known in the shop (rec8 lost it on all 46 shop frames).
-        snap.hero = self.own_latched.and_then(|(s, _)| self.hero_latch.slots[s].hero.clone()).or_else(|| self.own_hero.clone());
+        // After the end-of-match banner the post-game menus (classified Shop: they have the same
+        // "ESC BACK" anchor) belong to no match: no hero, no clock (rec11/rec12 reported the
+        // finished match's Violet and its clock through minutes of menus).
+        if !self.match_over {
+            snap.hero = self.own_latched.and_then(|(s, _)| self.hero_latch.slots[s].hero.clone()).or_else(|| self.own_hero.clone());
+        }
         // The clock is not drawn in the shop: report the extrapolated clock only while recently confirmed.
-        if self.clock_value.confirmed_age_ms(now_ms).is_some_and(|a| a <= 60_000) { snap.game_clock_secs = self.clock_value.value(now_ms); }
+        if !self.match_over && self.clock_value.confirmed_age_ms(now_ms).is_some_and(|a| a <= 60_000) { snap.game_clock_secs = self.clock_value.value(now_ms); }
         let banner = { let b = death::SHOP_RESPAWN_LABEL; let rgb = img.crop_imm(b.x, b.y, b.w, b.h).to_rgb8();
             rgb.pixels().filter(|p| { let (h, s, v) = crate::minimap::hsv(p[0], p[1], p[2]); (h < 12.0 || h > 350.0) && s > 0.45 && v > 0.75 }).count() as f32 / (b.w * b.h) as f32 > 0.45 };
         let digits = banner.then(|| death::digit_glyphs(img, death::SHOP_RESPAWN_BOX)).flatten();
@@ -747,7 +843,22 @@ impl Scanner {
         self.was_dead = scr == Screen::Dead;
         let board_visible = scr == Screen::Scoreboard || scr == Screen::Dead && board_probe.clone().is_some_and(|r| lines[r].iter().filter(|l| crate::scoreboard::match_hero(l, &self.hero_names).is_some()).count() >= 2);
         self.was_board = board_visible;
+        if matches!(scr, Screen::PostGame | Screen::Countdown) { self.between = true; }
+        if scr == Screen::PostGame { self.match_over = true; }
         if !scr.has_hud() { self.laps = laps; return GameSnapshot { screen: Some(format!("{scr:?}")), ..Default::default() }; }
+        // New match? Decided before anything of this frame is read into the match's memory: a
+        // first scoreboard of the new match must not vote for the old match's slots.
+        let evidence = BoundaryEvidence { between: self.between, gap_ms: self.last_hud_ms.map(|t| now_ms.saturating_sub(t)),
+            raw_clock, expected, verified: None, clock_max: self.clock_max };
+        self.last_hud_ms = Some(now_ms);
+        // The boundary screen is forgotten once the clock continues the match (a false end banner).
+        if raw_clock.is_some_and(|c| expected.is_none_or(|x| x.abs_diff(c) <= 10)) { self.between = false; }
+        if raw_clock.is_some() { self.match_over = false; }
+        if match_boundary(&evidence) == Boundary::Before {
+            self.new_match(false);
+            self.clock_hint = hint;
+            return self.scan_inner(img, minimap, now_ms, located, source, no_map);
+        }
         // Max HP changes with levels: a level-up makes the remembered max stale, so the bar-only
         // HP estimate (bar x remembered max) must wait for a fresh max read (rec5 frame 481
         // reported 2786/3144 at a level-up to 3199/3199).
@@ -767,15 +878,13 @@ impl Scanner {
             (None, Some(n)) => self.match_id = Some(n),
             (Some(old), Some(n)) if digit_diff(old, n) >= 3 => {
                 if self.pending_match == Some(n) && restarted {
-                    self.reset();
+                    self.new_match(true);
                     self.match_id = Some(n);
-                    self.pending_match = None;
                 } else { self.pending_match = Some(n); }
             }
             (Some(_), Some(_)) => self.pending_match = None, // same id, or single-digit OCR noise
             _ => {}
         }
-        if let Some(c) = clock_now { self.clock_max = Some(self.clock_max.map_or(c, |m| m.max(c))); }
 
         laps.lap("match id");
         let mut snap = GameSnapshot { match_id: self.match_id, screen: Some(format!("{scr:?}")), ..Default::default() };
@@ -811,6 +920,17 @@ impl Scanner {
             self.clock_value.verify(verified.or(located.0), now_ms);
         }
         snap.game_clock_secs = self.clock_value.value(now_ms);
+        // The verified clock restarted (> 120 s to < 90 s): a new match even with the same id
+        // read (rec11 -> rec12). This frame is read again into the new match's memory.
+        let verified_now = snap.game_clock_secs;
+        if match_boundary(&BoundaryEvidence { verified: verified_now, clock_max: self.clock_max, ..Default::default() }) == Boundary::Verified {
+            self.new_match(true);
+            self.clock_max = verified_now;
+            self.last_hud_ms = Some(now_ms);
+            self.clock_hint = hint;
+            return self.scan_inner(img, minimap, now_ms, located, source, no_map);
+        }
+        if let Some(c) = verified_now { self.clock_max = Some(self.clock_max.map_or(c, |m| m.max(c))); }
         let raw_clock = snap.game_clock_secs.or(raw_clock);
         laps.lap("clock verify");
 
@@ -1060,7 +1180,9 @@ impl Scanner {
             // Once a slot clearly won it stays yours for the match (rec5 lost the hero for 35
             // frames after a respawn while the accumulated gaps were briefly ambiguous); another
             // slot takes over only after winning 10 checks in a row.
-            if let Some(i) = own_backdrop_slot(img) { self.own_backdrop[i] += 1; }
+            // Not while dead: the death screen spectates a teammate and lit slot 0 on rec11's
+            // death frames (your slot was 2), which would latch the wrong hero at match start.
+            if scr != Screen::Dead { if let Some(i) = own_backdrop_slot(img) { self.own_backdrop[i] += 1; } }
             // The health-bar correlation needs damage to separate full-HP slots (rec5: no answer for
             // the first 48 frames); the backdrop vote answers within seconds. Bars win when both exist.
             if let Some(slot) = own_slot(&self.own_slot).or_else(|| own_from_votes(&self.own_backdrop)) {
