@@ -1,6 +1,6 @@
 /** The Player page: strengths (last match's plays and profile habits), "Improved since last
  *  time", weaknesses, per-match history and profile management. */
-import type { PlayerProfile, Trait } from './player-profile';
+import type { MatchRow, PlayerProfile, Trait } from './player-profile';
 import type { Snapshot } from './types';
 
 export interface PlayerPageDeps {
@@ -65,19 +65,38 @@ export class PlayerPage {
     this.traits('player-strengths', s.strengths, 'No clear strengths yet: they appear as evidence builds up.');
     this.traits('player-improved', s.improvements, s.matches >= 2 ? 'No clear improvement over the matches before the last one.' : 'Shown once there are two matches to compare.');
     this.traits('player-weaknesses', s.weaknesses, 'No clear weaknesses in the evidence so far.');
+    this.goals(s.rows);
     const body = $('player-matches'); body.replaceChildren();
-    if (!s.rows.length) { const tr = el('tr'); const td = el('td', 'No matches recorded.'); td.colSpan = 8; tr.append(td); body.append(tr); }
+    if (!s.rows.length) { const tr = el('tr'); const td = el('td', 'No matches recorded.'); td.colSpan = 9; tr.append(td); body.append(tr); }
     for (const r of s.rows) {
       const tr = el('tr');
       const date = new Date(r.date);
       const cells = [`${date.toLocaleDateString()} ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}${r.source === 'replay' ? ' · replay' : ''}${r.partial ? ' · partial' : ''}${r.excluded ? ` · not counted: ${r.excluded}` : ''}`,
         `${r.heroName}${r.result ? ` · ${r.result}` : ''}`, `${r.minutes} min`, String(r.deaths), r.deadPct == null ? (r.legacy ? '— (older version)' : '—') : `${r.deadPct}%`,
-        `${r.fightsJoined} / ${r.fightsMissed}`, r.unspentAtDeath, r.topKiller || '—'];
+        `${r.fightsJoined} / ${r.fightsMissed}`, r.unspentAtDeath, r.topKiller || '—',
+        r.goals.length ? r.goals.map(g => `${g.met === true ? 'Met' : g.met === false ? 'Missed' : '?'}: ${g.text}`).join(' · ') : '—'];
       for (const c of cells) tr.append(el('td', c));
       body.append(tr);
     }
     $('player-prompt').textContent = p.promptText(select.value || null) || 'Nothing learned yet.';
     this.replayReady();
+  }
+  /** The match focus goal (this match's or the next one's) and its history: met / missed per match. */
+  private goals(rows: MatchRow[]) {
+    const next = this.deps.profile.nextGoals();
+    $('player-goal-next').textContent = next.goals.length
+      ? `${next.current ? 'This match' : 'Next match'}: ${next.goals.map(g => g.text).join(' · ')}. Said once at the match start, checked at each death, scored at the end.`
+      : 'No focus goal yet: it is chosen from the weaknesses of your last 3 matches.';
+    const list = $('player-goal-history'); list.replaceChildren();
+    const scored = rows.filter(r => r.goals.length).slice(0, 10);
+    if (!scored.length) { list.append(el('li', 'No scored goals yet: they are scored when a coached match ends.', 'empty-row')); return; }
+    for (const r of scored) for (const g of r.goals) {
+      const li = el('li', undefined, `player-goal ${g.met === true ? 'met' : g.met === false ? 'missed' : 'unknown'}`);
+      li.append(el('strong', g.met === true ? 'Met' : g.met === false ? 'Missed' : 'Not measurable'), document.createTextNode(` · ${new Date(r.date).toLocaleDateString()} ${r.heroName}: ${g.text} (${g.detail})`));
+      list.append(li);
+    }
+    const met = scored.flatMap(r => r.goals).filter(g => g.met === true).length, all = scored.flatMap(r => r.goals).filter(g => g.met != null).length;
+    if (all) list.prepend(el('li', `${met} of ${all} goals met in the last ${scored.length} scored match${scored.length === 1 ? '' : 'es'}.`, 'player-goal-total'));
   }
   private traits(id: string, traits: Trait[], empty: string) {
     const list = $(id); list.replaceChildren();

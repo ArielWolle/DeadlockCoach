@@ -3,7 +3,7 @@
 // checkbox and a sentence-by-sentence reader with Stop. main.ts feeds frames through the handle.
 import { configFrom, validateConfig } from './ai-coach';
 import { MatchTimeline, ReviewStore, ReviewTracker, autoReviewable, buildDigest, buildReviewPrompt, requestReview, reviewKey, sentencesOf, storedReview, type EndedMatch, type StoredReview } from './ai-review';
-import { spanOf, type MatchRecord } from './player-profile';
+import { spanOf, type MatchGoal, type MatchRecord } from './player-profile';
 import type { Cue, Knowledge, Settings, Snapshot } from './types';
 
 export interface ReviewUiDeps {
@@ -19,6 +19,8 @@ export interface ReviewUiDeps {
   isLive?: () => boolean;
   /** A live match was closed here (Stop, "Review my last match"): close it in the Player profile too. */
   finalized?: () => void;
+  /** The focus goals the Player profile set for a live match (scored in the digest), if any. */
+  goals?: (source: MatchRecord['source']) => MatchGoal[] | null;
 }
 export interface ReviewUi {
   /** A live full-scan frame (with its rule cues). */
@@ -109,7 +111,7 @@ export function mountMatchReviews(deps: ReviewUiDeps): ReviewUi {
     if (auto) coachText('Match over: writing your end-of-game review… it will appear on the Player page.');
     try {
       const docs = await deps.knowledge().catch(() => [] as Knowledge[]);
-      const digest = buildDigest({ match, previous: deps.previous(), name: deps.name, docs });
+      const digest = buildDigest({ match, previous: deps.previous(), name: deps.name, docs, goals: deps.goals?.(match.source) ?? null });
       const prompt = buildReviewPrompt(digest, s.aiMaxTokens);
       try {
         const r = await requestReview(configFrom(s), prompt, { pageProtocol: location.protocol, clock: match.record.endClock });
@@ -166,6 +168,18 @@ export function mountMatchReviews(deps: ReviewUiDeps): ReviewUi {
     d.append(sum);
     const body = el('div', undefined, 'review-body');
     const v = r.review;
+    // The match focus goal(s), scored from the digest (shown even when the model did not answer).
+    if (r.goals?.length) {
+      body.append(el('h4', r.goals.length > 1 ? 'Focus goals' : 'Focus goal'));
+      const ul = el('ul', undefined, 'review-goals');
+      for (const g of r.goals) {
+        const note = v?.focus_goals?.find(x => x.goal && (x.goal.toLowerCase().includes(g.text.toLowerCase().slice(0, 20)) || g.text.toLowerCase().includes(x.goal.toLowerCase().slice(0, 20))))?.note;
+        const li = el('li', undefined, `review-goal ${g.met === true ? 'met' : g.met === false ? 'missed' : 'unknown'}`);
+        li.append(el('strong', `${g.met === true ? 'Met' : g.met === false ? 'Missed' : 'Not measurable'}: `), document.createTextNode(`${g.text} (${g.detail})${note ? `. ${note}` : ''}`));
+        ul.append(li);
+      }
+      body.append(ul);
+    }
     if (v) {
       if (v.summary) body.append(el('p', v.summary, 'review-summary'));
       body.append(list('What went well', v.went_well));

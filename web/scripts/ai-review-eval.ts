@@ -13,6 +13,7 @@ import { ReviewTracker, buildDigest, buildReviewPrompt, requestReview, type Ende
 import type { AiConfig } from '../src/ai-coach.ts';
 import type { Cue, Knowledge, Snapshot } from '../src/types.ts';
 import { heroNames, profileOf } from './player-profile-replay.ts';
+import { chooseGoals } from '../src/player-profile.ts';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repo = path.resolve(here, '..', '..');
@@ -29,8 +30,9 @@ const names = heroNames();
 const name = (id: string) => names[id] || id.replace(/^hero_/, '').replaceAll('_', ' ');
 
 /** The last match of a live recording export, with the rule coach's spoken texts of its time span. */
-export function liveMatch(file: string): EndedMatch | null {
+export function liveMatch(file: string, patch?: (s: Snapshot, i: number) => Snapshot): EndedMatch | null {
   const rec = JSON.parse(readFileSync(file, 'utf8')) as { frames: Array<{ timestamp: number; snapshot: Snapshot }>; spoken?: Array<{ t: number; key: string; text: string; priority: string; clock: number | null }> };
+  if (patch) rec.frames.forEach((f, i) => { f.snapshot = patch(f.snapshot, i); });
   const spoken = (rec.spoken || []).filter(c => /^(death:review|review:pattern)/.test(c.key)).sort((a, b) => a.t - b.t);
   const tr = new ReviewTracker('live', () => rec.frames.at(-1)?.timestamp ?? 0);
   // Cues spoken before the first frame belong to earlier sessions in the persisted cue log.
@@ -62,6 +64,24 @@ for (const [label, file, previous] of [['rec11', rec11, prev11], ['rec12', rec12
     `digest ${digest.chars} chars (deterministic: ${again.text === digest.text}), ${match.timeline.points.length} frames, ${match.timeline.cues.length} rule texts, key ${digest.key}`);
   console.log(`  vs earlier: ${digest.comparisons.map(c => `${c.id} ${c.verdict}`).join(', ')}`);
   console.log(`  strengths ${digest.strengths.length} (${digest.strengths.map(s => s.id).join(', ') || 'none'}) · good game: ${digest.goodGame}`);
+}
+// rec13 (Grey Talon, a loss after a +46k lead): the earlier matches rec8, rec11 and rec12 give the
+// focus goals (as the live profile would have at its start). The live export predates the
+// match_result field: the Defeat banner the vision reads on frames 590-591 (over the death screen
+// and the scoreboard) is simulated there (--no-result skips it).
+const rec13 = path.join(framesRoot, 'rec13', 'recording.json'), rec12r = path.join(framesRoot, 'rec12', 'replay1.jsonl');
+if (existsSync(rec13)) {
+  const prev13 = profileOf([rec8, rec11r, rec12r].filter(f => existsSync(f))).matches;
+  const withResult = !args.includes('--no-result');
+  const match = liveMatch(rec13, (s, i) => withResult && i >= 590 && i <= 591 ? { ...s, match_result: 'loss' } : s);
+  if (match) {
+    const goals = chooseGoals(prev13);
+    const digest = buildDigest({ match, previous: [...prev13], name, docs, goals });
+    out.rec13 = { match, digest };
+    console.log(`rec13: ${digest.heroName}, result ${digest.result}${withResult ? ' (match_result simulated on frames 590-591)' : ''}, ${digest.minutes} min, ${match.record.deaths.length} deaths, digest ${digest.chars} chars, focus goals ${goals.map(g => g.id).join(', ') || 'none'}`);
+    const sec = (title: RegExp) => digest.text.split('\n\n').filter(p => title.test(p.trim().split('\n')[0])).join('\n\n');
+    console.log(`\n===== rec13 digest: new sections =====\n${digest.text.split('\n').filter(l => /^(Hero|K\/D\/A)/.test(l)).join('\n')}\n\n${sec(/^FOCUS GOAL/)}\n\n${sec(/^LEAD AND THROW/)}\n\n${sec(/^OBJECTIVES SEEN/)}`);
+  }
 }
 // The strengths the review must lead with (rec12: a win after a clean game).
 if (out.rec12) {

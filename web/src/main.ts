@@ -11,7 +11,7 @@ import {regionsFromReport,drawRegions} from './region-overlays';
 import {QuickMonitor} from './quick';
 import {freshCue} from './live-cues';
 import { mountAiCoach, type AiUi } from './ai-coach-ui';
-import { setProfileProvider, aiExchanges, clearAiExchanges, restoreAiExchanges, onAiExchange } from './ai-coach';
+import { setProfileProvider, setGoalProvider, aiExchanges, clearAiExchanges, restoreAiExchanges, onAiExchange } from './ai-coach';
 import { PlayerProfile } from './player-profile';
 import { PlayerPage } from './player-page';
 import { mountMatchReviews, type ReviewUi } from './ai-review-ui'; // end-of-game AI review
@@ -77,14 +77,16 @@ let replayCollect: Snapshot[] | null = null, lastReplay: { snapshots: Snapshot[]
 function playerFrame(analysis: Analysis, timestamp: number) {
   if (!settings.playerProfile || !isDeadlock(activeProfile)) return;
   const ev = playerProfile.observe(analysis.snapshot, timestamp);
-  if (ev.matchStarted || ev.respawned) { const cue = playerProfile.focusCue(); if (cue) analysis.cues = [...analysis.cues, cue]; }
+  if (ev.matchStarted || ev.respawned) { const cue = playerProfile.focusCue(ev.matchStarted ? 'start' : 'respawn'); if (cue) analysis.cues = [...analysis.cues, cue]; }
   if (ev.ended && location.hash === '#player') playerPage?.render();
 }
 /** Compact profile text for the AI coach prompt (null when off or empty): setProfileProvider(playerPromptText). */
 export function playerPromptText(): string | null { return settings.playerProfile ? playerProfile.promptText() : null; }
 // The AI coach adds the profile (strengths / weaknesses) to its prompt.
 setProfileProvider(playerPromptText);
-(window as unknown as { deadlockPlayerProfile?: unknown }).deadlockPlayerProfile = { promptText: playerPromptText, summary: () => playerProfile.summary(), focusTips: (n = 1) => playerProfile.focusTips(n) };
+// ...and the match focus goal with its progress so far (docs/player-profile.md "Match focus goal").
+setGoalProvider(() => settings.playerProfile ? playerProfile.goalText() : null);
+(window as unknown as { deadlockPlayerProfile?: unknown }).deadlockPlayerProfile = { promptText: playerPromptText, summary: () => playerProfile.summary(), focusTips: (n = 1) => playerProfile.focusTips(n), goalText: () => playerProfile.goalText() };
 
 function notice(message: string, error = false) {
   text('notice', message); $('notice').hidden = !message; $('notice').classList.toggle('error', error);
@@ -1042,7 +1044,7 @@ playerPage = new PlayerPage({ profile: playerProfile, notice, download, replay: 
 // --- End-of-game AI review hooks (logic: ai-review.ts, UI: ai-review-ui.ts) ---
 reviews = mountMatchReviews({ settings: () => settings, save: s => { settings = normalize(s); saveSettings(settings); }, previous: () => playerProfile.matches,
   knowledge: async () => { await loadKnowledge(); return knowledge; }, name: id => heroNames[id] || label(id, {}), notice, download, stopSpeech: () => speaker.cancel(),
-  isLive: () => running && !replaying,
+  isLive: () => running && !replaying, goals: source => source === 'live' && playerProfile.goals.length ? playerProfile.goals : null,
   // The review tracker closed the live match (Stop, "Review my last match"): the Player profile follows.
   finalized: () => { if (playerProfile.finishSession(0) && location.hash === '#player') playerPage?.render(); } });
 refreshGameLayout();

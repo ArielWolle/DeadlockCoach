@@ -54,6 +54,8 @@
 .review-item summary{cursor:pointer;font-weight:600}
 .review-body{line-height:1.5}.review-body h4{margin:12px 0 4px;color:var(--amber)}
 .review-body ul,.review-body ol{margin:0;padding-left:20px}.review-improvements li{margin-bottom:8px}.review-improvements p{margin:2px 0}
+.player-goals,.review-goals{list-style:none;margin:0;padding:0;display:grid;gap:6px}.player-goal,.review-goal{border-left:3px solid var(--border);padding:4px 10px;font-size:13px}
+.player-goal.met,.review-goal.met{border-left-color:#8fd18b}.player-goal.missed,.review-goal.missed{border-left-color:#e39a8e}.player-goal-total{font-size:13px;color:#a9b8bd}
 .review-focus{margin:12px 0}.review-raw{max-height:320px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font:12px/1.45 Consolas,ui-monospace,monospace}
 .review-status{min-height:1em;margin:8px 0}.review-status.error{color:var(--red)}
 .review-notice{margin:8px 0;padding:8px 10px;border-left:3px solid var(--teal);background:var(--panel)}.review-notice a{color:var(--teal)}

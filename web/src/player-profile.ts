@@ -79,6 +79,13 @@ export const LIMITS = {
   death_spend_min: 1500,
   /** A deathless stretch worth praising (6 minutes; respawns grow to 40+ s late), and the dead-share target spoken in the focus line. */
   deathless_secs: 360, dead_target_pct: 12,
+  /** "Low health after a won fight": 2+ enemies dead in the 20 s before the death, health under 35%. */
+  won_fight_secs: 20, won_fight_low_hp: 0.35,
+  /** Match focus goals: chosen from this many recent counted matches, a goal needs this many
+   *  events in them (or one in each of two matches), at most this many goals per match. */
+  goal_matches: 3, goal_events: 2, goal_max: 2,
+  /** A focus praise is never spoken this soon after a death. */
+  praise_after_death_secs: 60,
 } as const;
 
 /** The respawn moment of one death from its timer reads (each = frame clock + timer): the
@@ -107,7 +114,14 @@ export interface DeathRecord {
   deadSecs?: number;
   /** Souls spent from just before the death to the respawn (shopping on the death screen). */
   spentDead?: number;
+  /** Died under 35% health after a won fight (2+ enemies dead, more than ours, in the 20 s
+   *  before; a health read under 35% at least 4 s before the death). null = top bar not read. */
+  lowAfterWin?: boolean | null;
 }
+/** A match focus goal (docs/player-profile.md "Match focus goal"): measurable from the death and
+ *  match records, chosen from the last 3 counted matches' weaknesses. */
+export interface MatchGoal { id: string; text: string; target?: number }
+export interface GoalResult extends MatchGoal { met: boolean | null; detail: string }
 export interface MatchRecord {
   v: 1; id: string; source: 'live' | 'replay' | 'import'; startedAt: number; endedAt: number;
   hero: string | null; matchId: number | null; startClock: number | null; endClock: number | null;
@@ -133,6 +147,8 @@ export interface MatchRecord {
   deepAwaySecs: number;
   farm: { perMin: number | null };
   kda: { kills: number | null; deaths: number | null; assists: number | null } | null;
+  /** The match focus goals chosen at its start and how they were scored at its end. */
+  goals?: GoalResult[];
 }
 
 /** 'field' = alive in gameplay, location not read (kept out of the lane / jungle shares). */
@@ -301,6 +317,9 @@ export class MatchAggregator {
   get observedSecs() { return Object.values(this.time).reduce((a, b) => a + b, 0) + this.field; }
   get hasEvidence() { return this.time.lane + this.time.jungle + this.time.base + this.field + this.time.dead >= LIMITS.min_match_secs || this.deaths.length > 0; }
   get isDead() { return this.dead; }
+  /** The last death of this match (closed or still open). */
+  get lastDeath(): DeathRecord | null { return this.open?.rec ?? this.deaths.at(-1) ?? null; }
+  get deathClocks(): number[] { return [...this.deaths.map(d => d.clock), ...(this.open ? [this.open.rec.clock] : [])]; }
 
   add(s: Snapshot, wall: number | null): { died: boolean; respawned: boolean } {
     const read = finite(s.game_clock_secs) && s.game_clock_secs >= 0 && s.game_clock_secs <= 14400 ? Math.round(s.game_clock_secs) : null;
@@ -321,6 +340,13 @@ export class MatchAggregator {
     // up to 10 s (rec4 read the souls box on about half of the frames).
     const p = this.prev;
     if (x.souls == null && p && p.souls != null && p.area !== 'dead' && x.area !== 'dead' && p.t != null && x.t != null && x.t - p.t <= 10) x.souls = p.souls;
+    // One death = one event (rec13 41:05: gameplay frames without a health bar at 41:44 and 41:49,
+    // 10 s before a timer that read 55 s at 41:39 ran out, split one death into two): a frame with
+    // no health read while the respawn estimate is more than 5 s away is still the death screen.
+    if (this.dead && this.open && x.area !== 'dead' && x.hp == null && x.t != null) {
+      const est = respawnEstimate(this.open.ends, this.open.lastDeadT);
+      if (est != null && x.t < est - 5) x.area = 'dead';
+    }
     this.integrate(x);
     this.observeSpan(wall, t, read != null);
     if (x.t != null) this.trackUrn(x);
@@ -455,6 +481,12 @@ export class MatchAggregator {
       const minute = hist.filter(p => p.t! + LIMITS.weak_entry_secs >= end && p.t! <= end && p.hp != null).map(p => p.hp!);
       if (minute.length >= 3) rec.weakEntry = minute.every(h => h < LIMITS.weak_entry_ratio);
       rec.souls = [...before].reverse().find(p => p.souls != null)?.souls ?? null;
+      // Low health after a won fight (rec13 29:25: five enemies dead, you at 15% hitting their Walker).
+      const fightWin = hist.filter(p => p.area !== 'dead' && p.t! + LIMITS.won_fight_secs >= end && p.t! <= end && p.enemiesDead != null);
+      if (fightWin.length) {
+        const won = fightWin.find(p => p.enemiesDead! >= LIMITS.window_enemies && p.enemiesDead! > (p.alliesDead ?? 0));
+        rec.lowAfterWin = !!won && hist.some(p => p.area !== 'dead' && p.hp != null && p.hp < LIMITS.won_fight_low_hp && p.t! >= won.t! - 5 && p.t! <= clock - 4 && p.t! + LIMITS.won_fight_secs >= end);
+      }
       const effects = (s as Snapshot & { status_effects?: string[] }).status_effects;
       if (Array.isArray(effects) && effects.length) rec.effects = effects.filter(e => typeof e === 'string').slice(0, 6);
     }
@@ -556,6 +588,8 @@ export interface MatchRow {
   id: string; date: number; hero: string | null; heroName: string; source: MatchRecord['source']; result: MatchRecord['result'];
   minutes: number; deaths: number; deadPct: number | null; fightsJoined: number; fightsMissed: number;
   unspentAtDeath: string; topKiller: string | null; partial: boolean;
+  /** The match focus goals and whether they were met (absent before goals existed). */
+  goals: GoalResult[];
   /** Why the match is left out of the traits (null = it counts); `legacy` = stored before the
    *  time-dead metric (its time dead is not used). */
   excluded: string | null; legacy: boolean;
@@ -961,7 +995,7 @@ export class PlayerProfileModel {
     return { id: m.id, date: m.startedAt, hero: m.hero, heroName: this.heroName(m.hero), source: m.source, result: m.result, minutes: Math.round(spanOf(m) / 6) / 10,
       deaths: m.deaths.length, deadPct: !legacy && spanOf(m) >= 60 ? pct(deadOf(m), spanOf(m)) : null, fightsJoined: m.fights.joined, fightsMissed: m.fights.missed,
       unspentAtDeath: withSouls.length ? `${withSouls.filter(d => d.souls! >= deathSpend(d.clock)).length}/${withSouls.length} · avg ${k(sum(withSouls.map(d => d.souls!)) / withSouls.length)}` : '—',
-      topKiller: killer, partial: m.partial === true, excluded: excludedReason(m) ?? (legacy ? 'time dead from an older version: not used' : null), legacy };
+      topKiller: killer, partial: m.partial === true, goals: m.goals ?? [], excluded: excludedReason(m) ?? (legacy ? 'time dead from an older version: not used' : null), legacy };
   }
 
   /** Compact text for an AI prompt (<= 900 characters, ai-coach PROFILE_MAX_CHARS): weaknesses
@@ -1028,12 +1062,110 @@ function mode<T>(xs: Array<T | null | undefined>): T | null {
 const cap = (s: string) => s ? s[0].toUpperCase() + s.slice(1) : s;
 
 // ---------------------------------------------------------------------------------------------
+// Match focus goals (docs/coach-review-13.md item 13)
+// ---------------------------------------------------------------------------------------------
+interface GoalDef {
+  id: string; text: string; short: string;
+  /** Spoken at the respawn after a death that broke the goal (<= 15 words). */
+  respawn: string;
+  /** Death-based goal: the death breaks it (null = not measurable for this death). */
+  death?: (d: DeathRecord) => boolean | null;
+  /** Match-based goal: events (count) and whether it can be scored at all. */
+  match?: (m: MatchRecord) => { events: number; measurable: boolean; detail: string };
+  /** Practice tip for the Player page. */
+  tip: string;
+}
+/** Measurable goals, most specific first (the order breaks ties). */
+export const GOALS: GoalDef[] = [
+  { id: 'won_fight_low', text: 'No deaths below 35% health after a won fight', short: 'no deaths below 35% after a won fight',
+    respawn: 'Goal check: that was a low-health death after a won fight. Next time, heal first.', death: d => d.lowAfterWin ?? null,
+    tip: 'After a won fight, back off and heal before the objective; take it together at full health.' },
+  { id: 'close_range', text: 'No close-range deaths', short: 'no close-range deaths',
+    respawn: 'Goal check: that was a close-range death. Next life, hold max range behind the front line.', death: d => d.close,
+    tip: 'Fight from behind your front line and save your escape for the dive.' },
+  { id: 'unspent_souls', text: 'Spend at the usual buy (1,600 / 3,200 / 6,400): no death holding half an item tier', short: 'spend at the usual buy',
+    respawn: 'Goal check: you died holding an item\'s worth of souls. Spend before you walk out.', death: d => d.souls == null ? null : d.souls >= deathSpend(d.clock),
+    tip: 'Shop when your wave is safe, and never walk into a fight with an item in your pocket.' },
+  { id: 'respawn_deaths', text: 'No deaths within 60 s of a respawn', short: 'no deaths right after a respawn',
+    respawn: 'Goal check: that came right after a respawn. Walk out with a teammate this time.', death: d => d.afterRespawnSecs == null ? null : d.afterRespawnSecs <= 60,
+    tip: 'After a respawn, walk out with the next teammate or catch the closest safe wave.' },
+  { id: 'alone_deaths', text: 'No deaths with no ally near', short: 'no deaths alone',
+    respawn: 'Goal check: you died alone. Next life, stay within reach of a teammate.', death: d => d.alone,
+    tip: 'Farm the side of the map your team is on; rotate with someone.' },
+  { id: 'weak_entry', text: 'No deaths after going back in under 60% health', short: 'no going back in hurt',
+    respawn: 'Goal check: you went back in hurt. Heal to full before the next fight.', death: d => d.weakEntry,
+    tip: 'Heal to full before you rejoin; shopping does not heal.' },
+  { id: 'forward_unseen', text: 'No deaths in their half with 3+ enemies unseen', short: 'no deaths forward with enemies missing',
+    respawn: 'Goal check: you were forward with enemies missing. Hold back until they show.', death: d => d.forwardUnseen,
+    tip: 'When three enemies are missing, stay on your side of the wave.' },
+  { id: 'unused_windows', text: 'Push every enemy-dead window', short: 'push every enemy-dead window', respawn: '',
+    match: m => ({ events: m.windows.unused, measurable: m.windows.used + m.windows.unused > 0, detail: `${m.windows.used} of ${m.windows.used + m.windows.unused} enemy-dead windows used${m.windows.unusedAt.length ? ` (unused at ${m.windows.unusedAt.map(clockText).join(', ')})` : ''}` }),
+    tip: 'When two or more enemies are dead, group and hit the nearest standing structure.' },
+];
+const goalDef = (id: string) => GOALS.find(g => g.id === id) ?? null;
+const countedRecent = (matches: MatchRecord[]) => matches.filter(m => !excludedReason(m)).slice(0, LIMITS.goal_matches);
+/** 1-2 measurable goals from the weaknesses of the last 3 counted matches (newest first). */
+export function chooseGoals(matches: MatchRecord[], max: number = LIMITS.goal_max): MatchGoal[] {
+  const recent = countedRecent(matches);
+  if (!recent.length) return [];
+  const scored = GOALS.map((g, order) => {
+    let events = 0, inMatches = 0, score = 0, newestClean = false;
+    recent.forEach((m, age) => {
+      const n = g.death ? m.deaths.filter(d => g.death!(d) === true).length : g.match!(m).events;
+      // The newest match already got it right (measurably): not this match's goal (as focusLines' CONTRADICTS).
+      if (age === 0 && !n) newestClean = g.death ? m.deaths.some(d => g.death!(d) === false) : g.match!(m).measurable;
+      if (n) { events += n; inMatches++; score += n * Math.pow(0.85, age); }
+    });
+    return { g, order, events, inMatches, score, newestClean };
+  }).filter(x => !x.newestClean && (x.events >= LIMITS.goal_events || x.inMatches >= 2)).sort((a, b) => b.score - a.score || a.order - b.order);
+  const out: MatchGoal[] = scored.slice(0, max).map(x => ({ id: x.g.id, text: x.g.text }));
+  // Many deaths and no specific pattern: a death cap below the recent median.
+  if (!out.length) {
+    const ds = recent.map(m => m.deaths.length).sort((a, b) => a - b), median = ds[Math.floor(ds.length / 2)];
+    if (median >= 5) { const target = Math.max(2, Math.round(median * 0.7)); out.push({ id: 'deaths', text: `At most ${target} deaths`, target }); }
+  }
+  return out;
+}
+/** Score one goal on a (finished or running) match. */
+export function scoreGoal(goal: MatchGoal, m: MatchRecord, running = false): GoalResult {
+  if (goal.id === 'deaths') {
+    const n = m.deaths.length, t = goal.target ?? 0;
+    return { ...goal, met: n <= t ? (running ? null : true) : false, detail: `${n} death${n === 1 ? '' : 's'} (goal at most ${t})` };
+  }
+  const def = goalDef(goal.id);
+  if (!def) return { ...goal, met: null, detail: 'not measurable in this version' };
+  if (def.match) {
+    const r = def.match(m);
+    return { ...goal, met: !r.measurable ? null : r.events === 0 ? (running ? null : true) : false, detail: r.measurable ? r.detail : 'no enemy-dead window observed' };
+  }
+  const v = m.deaths.map(d => ({ d, v: def.death!(d) }));
+  const broke = v.filter(x => x.v === true), unknown = v.filter(x => x.v == null).length;
+  if (broke.length) return { ...goal, met: false, detail: `broken ${broke.length} time${broke.length === 1 ? '' : 's'} (${broke.map(x => clockText(x.d.clock)).join(', ')}) in ${m.deaths.length} death${m.deaths.length === 1 ? '' : 's'}` };
+  const met = running ? null : unknown === m.deaths.length && m.deaths.length > 0 ? null : true;
+  return { ...goal, met, detail: m.deaths.length ? `${m.deaths.length} death${m.deaths.length === 1 ? '' : 's'}, none broke it${unknown ? ` (${unknown} not measurable)` : ''}` : 'no deaths' };
+}
+export const scoreGoals = (goals: MatchGoal[], m: MatchRecord, running = false) => goals.map(g => scoreGoal(g, m, running));
+/** The goal(s) a death broke. */
+export function brokenBy(goals: MatchGoal[], d: DeathRecord): MatchGoal[] {
+  return goals.filter(g => goalDef(g.id)?.death?.(d) === true);
+}
+/** "Match focus" line spoken at the match start (<= 15 words). */
+export function goalStartLine(goals: MatchGoal[]): string | null {
+  const shorts = goals.map(goalShort).filter(Boolean);
+  return shorts.length ? `Profile focus: this match, ${shorts.join(' and ')}.` : null;
+}
+export function goalShort(g: MatchGoal): string { return g.id === 'deaths' ? g.text.toLowerCase() : goalDef(g.id)?.short ?? g.text.toLowerCase(); }
+export const goalTip = (id: string) => goalDef(id)?.tip ?? null;
+
+// ---------------------------------------------------------------------------------------------
 // Persistence + live API
 // ---------------------------------------------------------------------------------------------
 export interface KeyValueStore { getItem(key: string): string | null; setItem(key: string, value: string): void; removeItem(key: string): void }
 export interface StoredProfile { schema: number; matches: MatchRecord[]; current?: MatchRecord | null; lastFocusAt?: number | null;
   /** Focus rotation: cues said since the newest completed match `focusFor` (praise / fix alternate). */
-  focusTurn?: number; focusFor?: string | null }
+  focusTurn?: number; focusFor?: string | null;
+  /** Focus goals of the match in progress (chosen at its start). */
+  goals?: MatchGoal[] }
 
 const num = (v: unknown, fallback = 0) => finite(v) ? v : fallback;
 const numOrNull = (v: unknown) => finite(v) ? v : null;
@@ -1051,7 +1183,10 @@ export function sanitizeMatch(raw: unknown): MatchRecord | null {
     forwardUnseen: bool(d.forwardUnseen), teammatesDied: numOrNull(d.teammatesDied), afterRespawnSecs: numOrNull(d.afterRespawnSecs), weakEntry: bool(d.weakEntry),
     ...(Array.isArray(d.effects) ? { effects: d.effects.filter((e: unknown) => typeof e === 'string').slice(0, 6) } : {}),
     ...(finite(d.deadSecs) && d.deadSecs >= 0 ? { deadSecs: d.deadSecs } : {}),
-    ...(finite(d.spentDead) && d.spentDead > 0 ? { spentDead: d.spentDead } : {}) }));
+    ...(finite(d.spentDead) && d.spentDead > 0 ? { spentDead: d.spentDead } : {}),
+    ...(typeof d.lowAfterWin === 'boolean' ? { lowAfterWin: d.lowAfterWin } : {}) }));
+  const goals = Array.isArray(m.goals) ? m.goals.filter((g: unknown) => g && typeof g === 'object' && typeof (g as GoalResult).id === 'string').slice(0, 4).map((g: GoalResult) => ({
+    id: g.id.slice(0, 30), text: str(g.text, 120) || g.id.slice(0, 30), ...(finite(g.target) ? { target: g.target } : {}), met: typeof g.met === 'boolean' ? g.met : null, detail: str(g.detail, 160) || '' })) : null;
   const o = (v: unknown) => v && typeof v === 'object' ? v as Record<string, unknown> : {};
   const f = o(m.fights), w = o(m.windows), s = o(m.souls), l = o(m.lowHp), u = o(m.urn), tm = o(m.team);
   const pairs = (v: unknown) => Array.isArray(v) ? v.filter((p): p is [number, number] => Array.isArray(p) && p.length === 2 && finite(p[0]) && finite(p[1])).slice(0, 10).map(p => [p[0], p[1]] as [number, number]) : [];
@@ -1069,7 +1204,8 @@ export function sanitizeMatch(raw: unknown): MatchRecord | null {
     souls: { knownSecs: num(s.knownSecs), hoardSecs: num(s.hoardSecs), peak: num(s.peak) },
     lowHp: { knownSecs: num(l.knownSecs), lowSecs: num(l.lowSecs), episodes: num(l.episodes), survived: num(l.survived), died: num(l.died) },
     deepAwaySecs: num(m.deepAwaySecs), farm: { perMin: numOrNull(o(m.farm).perMin) },
-    kda: m.kda && typeof m.kda === 'object' ? { kills: numOrNull(m.kda.kills), deaths: numOrNull(m.kda.deaths), assists: numOrNull(m.kda.assists) } : null };
+    kda: m.kda && typeof m.kda === 'object' ? { kills: numOrNull(m.kda.kills), deaths: numOrNull(m.kda.deaths), assists: numOrNull(m.kda.assists) } : null,
+    ...(goals?.length ? { goals } : {}) };
 }
 /** Versioned schema. Schema 0 (pre-release) was a bare array of matches. */
 export function migrate(raw: unknown): StoredProfile {
@@ -1080,7 +1216,9 @@ export function migrate(raw: unknown): StoredProfile {
   const matches = (Array.isArray(r.matches) ? r.matches : []).map(sanitizeMatch).filter((m): m is MatchRecord => !!m);
   const current = r.current ? sanitizeMatch(r.current) : null;
   return { schema: PLAYER_PROFILE_SCHEMA, matches: matches.sort((a, b) => b.startedAt - a.startedAt).slice(0, MAX_MATCHES), current, lastFocusAt: numOrNull(r.lastFocusAt),
-    focusTurn: num(r.focusTurn), focusFor: str(r.focusFor, 40) };
+    focusTurn: num(r.focusTurn), focusFor: str(r.focusFor, 40),
+    goals: Array.isArray(r.goals) ? (r.goals as unknown[]).filter((g): g is MatchGoal => !!g && typeof g === 'object' && typeof (g as MatchGoal).id === 'string' && typeof (g as MatchGoal).text === 'string')
+      .slice(0, LIMITS.goal_max).map(g => ({ id: g.id.slice(0, 30), text: g.text.slice(0, 120), ...(finite(g.target) ? { target: g.target } : {}) })) : [] };
 }
 
 /** Ending a match without a result screen (docs/ai-coach.md "End-of-game review"). rec13 ended
@@ -1148,6 +1286,10 @@ export class PlayerProfile {
   lastFocusAt: number | null = null;
   /** Focus rotation (persisted): cues said since the newest completed match `focusFor`. */
   focusTurn = 0; focusFor: string | null = null;
+  /** Focus goals of the match in progress (chosen from the last 3 counted matches at its start). */
+  goals: MatchGoal[] = [];
+  /** Focus cues of the match in progress: the start line was said; deaths (clock) already followed up. */
+  private startSaidFor: MatchAggregator | null = null; private respawnSaid = new Set<number>(); private goalSaidAt: Record<string, number> = {};
   private store: KeyValueStore | null; private key: string; private now: () => number;
   private lastSave = 0; private resultSeen = false;
   /** The final clock and wall time of a match ended by its result screen (see after_result_secs). */
@@ -1163,15 +1305,15 @@ export class PlayerProfile {
     try {
       const text = this.store.getItem(this.key); if (!text) return this;
       const data = migrate(JSON.parse(text));
-      this.matches = data.matches; this.lastFocusAt = data.lastFocusAt ?? null; this.focusTurn = data.focusTurn ?? 0; this.focusFor = data.focusFor ?? null;
+      this.matches = data.matches; this.lastFocusAt = data.lastFocusAt ?? null; this.focusTurn = data.focusTurn ?? 0; this.focusFor = data.focusFor ?? null; this.goals = data.current ? data.goals ?? [] : [];
       // A match left open by a closed tab is kept as a partial match.
-      if (data.current && (known(data.current) >= LIMITS.min_match_secs || data.current.deaths.length)) this.addMatch({ ...data.current, partial: true }, false);
+      if (data.current && (known(data.current) >= LIMITS.min_match_secs || data.current.deaths.length)) this.addMatch({ ...data.current, partial: true, ...(this.goals.length ? { goals: scoreGoals(this.goals, data.current) } : {}) }, false);
     } catch { /* corrupt or newer data: keep it untouched in storage, start empty in memory */ this.store = null; }
     return this;
   }
   save(): boolean {
     if (!this.store) return false;
-    const data: StoredProfile = { schema: PLAYER_PROFILE_SCHEMA, matches: this.matches.slice(0, MAX_MATCHES), lastFocusAt: this.lastFocusAt, focusTurn: this.focusTurn, focusFor: this.focusFor,
+    const data: StoredProfile = { schema: PLAYER_PROFILE_SCHEMA, matches: this.matches.slice(0, MAX_MATCHES), lastFocusAt: this.lastFocusAt, focusTurn: this.focusTurn, focusFor: this.focusFor, goals: this.goals,
       current: this.current?.hasEvidence ? this.current.record(this.now(), true) : null };
     try { this.store.setItem(this.key, JSON.stringify(data)); this.lastSave = this.now(); return true; } catch { return false; }
   }
@@ -1181,6 +1323,8 @@ export class PlayerProfile {
     const ev: ObserveEvents = { matchStarted: false, respawned: false, died: false, ended: null };
     if (!s || typeof s !== 'object') return ev;
     const wall = finite(wallMs) ? wallMs : null;
+    // The Victory / Defeat banner read by the vision (also over a death screen or the scoreboard).
+    if (this.current && (s.match_result === 'win' || s.match_result === 'loss')) this.current.result = s.match_result;
     const result = resultOf(s.screen);
     if (result) {
       if (this.current && !this.resultSeen) {
@@ -1217,6 +1361,8 @@ export class PlayerProfile {
       const e = this.ended;
       if (e && e.clock != null && read >= 60 && Math.abs(read - e.clock) <= LIMITS.after_result_secs && !(wall != null && e.wall != null && wall - e.wall > LIMITS.wall_gap_check_ms)) return ev;
       this.current = new MatchAggregator(wall ?? this.now(), source); this.resultSeen = false; this.ended = null; this.endWatch.reset();
+      // The focus goals of this match: from the last 3 counted matches' weaknesses.
+      this.goals = chooseGoals(this.matches); this.respawnSaid = new Set(); this.goalSaidAt = {};
       ev.matchStarted = true;
     }
     const r = this.current.add(s, wall);
@@ -1238,6 +1384,7 @@ export class PlayerProfile {
     const cur = this.current; this.current = null;
     if (!cur || !cur.hasEvidence) return null;
     const rec = cur.record(this.now());
+    if (this.goals.length) rec.goals = scoreGoals(this.goals, rec);
     this.addMatch(rec);
     return rec;
   }
@@ -1272,20 +1419,56 @@ export class PlayerProfile {
   focusTips(n = 1, hero?: string | null): string[] {
     return interleave(this.model.focusLines(this.all(), hero)).slice(0, Math.max(0, n)).map(l => l.text);
   }
-  /** One reminder for a match start or a respawn, at most every 5 minutes. Learned from completed
-   *  matches only (the match in progress is not yet a pattern). The reminders rotate through
-   *  praise and fixes, restarting after each new completed match (praise first when it clearly
-   *  improved), so the coach never only lists what went wrong. */
-  focusCue(): FocusCue | null {
-    const now = this.now();
-    if (this.lastFocusAt != null && now - this.lastFocusAt < FOCUS_COOLDOWN_MS) return null;
-    const seq = interleave(this.model.focusLines(this.matches));
-    if (!seq.length) return null;
+  /** The goals of the match in progress, else the ones the next match will get. */
+  nextGoals(): { goals: MatchGoal[]; current: boolean } {
+    return this.current && this.goals.length ? { goals: this.goals, current: true } : { goals: chooseGoals(this.matches), current: false };
+  }
+  /** The focus goals of the match in progress with their progress so far (for the AI prompt), or null. */
+  goalText(): string | null {
+    if (!this.current || !this.goals.length) return null;
+    const rec = this.current.record(this.now(), true);
+    return scoreGoals(this.goals, rec, true).map(r => `${r.text} (so far: ${r.met === false ? r.detail : `on track, ${r.detail}`})`).join(' · ');
+  }
+  /** Focus cue (docs/player-profile.md "Live reminders"): at most once per match start and once per
+   *  respawn when relevant. Start: the match focus goals ("Match focus: no close-range deaths and
+   *  spend at the usual buy."), else one line of the praise / fix rotation learned from completed
+   *  matches. Respawn: only when the death broke a focus goal, and never praise (rec13 said "Keep it
+   *  up: last game you went 9 minutes without dying" 5 s after a death). Without a match in
+   *  progress (tests, the Player page) a start cue is limited to one per 5 minutes. */
+  focusCue(kind: 'start' | 'respawn' = 'start'): FocusCue | null {
+    const now = this.now(), cur = this.current;
+    if (kind === 'respawn') {
+      const d = cur?.lastDeath;
+      if (!cur || !d || this.respawnSaid.has(d.clock)) return null;
+      // Not when the death screen already fixed it (souls spent before the respawn), and one goal
+      // check per goal per 5 minutes of game time (rec11 would have heard the same line 7 times).
+      const broken = brokenBy(this.goals, d).find(g => !(g.id === 'unspent_souls' && (d.spentDead ?? 0) >= deathSpend(d.clock))
+        && !(this.goalSaidAt[g.id] != null && d.clock - this.goalSaidAt[g.id] < FOCUS_COOLDOWN_MS / 1000));
+      if (!broken) return null;
+      this.respawnSaid.add(d.clock); this.lastFocusAt = now; this.goalSaidAt[broken.id] = d.clock;
+      const text = GOALS.find(g => g.id === broken.id)?.respawn || `Goal check: that death broke our focus goal: ${goalShort(broken)}.`;
+      return { key: `player:focus:goal:${broken.id}`, text, priority: 'Normal', cooldown_secs: 60 };
+    }
+    if (cur) { if (this.startSaidFor === cur) return null; }
+    else if (this.lastFocusAt != null && now - this.lastFocusAt < FOCUS_COOLDOWN_MS) return null;
+    const goals = cur ? this.goals : chooseGoals(this.matches);
+    const goalLine = goalStartLine(goals);
+    let seq = interleave(this.model.focusLines(this.matches));
+    // Never praise within 60 s of a death of this match, nor contradict it ("no deaths" lines after one).
+    const deaths = cur?.deathClocks ?? [];
+    const lastDeath = deaths.at(-1);
+    if (lastDeath != null && cur?.clock != null && cur.clock - lastDeath < LIMITS.praise_after_death_secs) seq = seq.filter(l => l.kind === 'fix');
+    else if (deaths.length) seq = seq.filter(l => !(l.kind === 'praise' && /deathless|low_dead|improved_dead|improved_deaths/.test(l.id)));
+    const cue = (key: string, text: string): FocusCue => { this.lastFocusAt = now; this.startSaidFor = cur; return { key, text, priority: 'Normal', cooldown_secs: FOCUS_COOLDOWN_MS / 1000 }; };
+    if (!seq.length) return goalLine ? cue('player:focus:goal', goalLine) : null;
     const latest = this.matches.find(m => !excludedReason(m))?.id ?? null;
     if (latest !== this.focusFor) { this.focusFor = latest; this.focusTurn = 0; }
     const line = seq[this.focusTurn % seq.length];
-    this.focusTurn++; this.lastFocusAt = now;
-    return { key: `player:focus:${line.id}`, text: line.text, priority: 'Normal', cooldown_secs: FOCUS_COOLDOWN_MS / 1000 };
+    this.focusTurn++;
+    // The match focus goal is the fix of the match start, after one specific praise of the last
+    // matches when there is one (the coach never only lists what went wrong).
+    if (goalLine) { const praise = line.kind === 'praise' ? line : seq.find(l => l.kind === 'praise'); return cue('player:focus:goal', praise ? `${praise.text} ${goalLine}` : goalLine); }
+    return cue(`player:focus:${line.id}`, line.text);
   }
   exportJSON(): string { return JSON.stringify({ schema: PLAYER_PROFILE_SCHEMA, exported: new Date(this.now()).toISOString(), matches: this.matches }, null, 1); }
   /** Merge an export into this profile. Returns the number of matches added. */
@@ -1297,5 +1480,5 @@ export class PlayerProfile {
     this.save();
     return added;
   }
-  reset() { this.matches = []; this.current = null; this.lastFocusAt = null; this.focusTurn = 0; this.focusFor = null; try { this.store?.removeItem(this.key); } catch { /* ignore */ } }
+  reset() { this.matches = []; this.current = null; this.lastFocusAt = null; this.focusTurn = 0; this.focusFor = null; this.goals = []; try { this.store?.removeItem(this.key); } catch { /* ignore */ } }
 }

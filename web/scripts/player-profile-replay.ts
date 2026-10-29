@@ -68,7 +68,7 @@ export function liveProfileOf(files: string[]) {
     if (ev.ended) matches.push({ file: startFile, record: ev.ended });
     if (ev.matchStarted) startFile = f.file;
     if (ev.matchStarted || ev.respawned) {
-      const cue = p.focusCue();
+      const cue = p.focusCue(ev.matchStarted ? 'start' : 'respawn');
       if (cue) cues.push({ file: f.file, wall: f.wall, clock: typeof f.snapshot.game_clock_secs === 'number' ? f.snapshot.game_clock_secs : null, event: ev.matchStarted ? 'start' : 'respawn', key: cue.key, text: cue.text });
     }
   }
