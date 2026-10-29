@@ -137,7 +137,11 @@ export class MatchTimeline {
 // ---------------------------------------------------------------------------------------------
 // Match boundaries: a private profile segments matches like the Player profile does
 // ---------------------------------------------------------------------------------------------
-export interface EndedMatch { record: MatchRecord; timeline: TimelineData; byPostGame: boolean; source: MatchRecord['source'] }
+/** How a match was closed: its result screen, the end watch (loading / unknown screens after the
+ *  last live frame, MATCH_END), a boundary (clock reset, new match id, long gap), Stop / share
+ *  ended, or the end of a replay / a "Review my last match" request. */
+export type EndReason = 'postgame' | 'idle' | 'boundary' | 'stop' | 'finish';
+export interface EndedMatch { record: MatchRecord; timeline: TimelineData; byPostGame: boolean; source: MatchRecord['source']; endedBy?: EndReason }
 export class ReviewTracker {
   private profile: PlayerProfile; private timeline = new MatchTimeline(); private source: MatchRecord['source'];
   constructor(source: MatchRecord['source'] = 'live', now: () => number = () => Date.now()) { this.source = source; this.profile = new PlayerProfile({ store: null, now }); }
@@ -147,20 +151,31 @@ export class ReviewTracker {
     const ev = this.profile.observe(s, wall, this.source);
     let ended: EndedMatch | null = null;
     // The frame that ended a match is not part of it: the timeline still holds the old match here.
-    if (ev.ended) ended = { record: ev.ended, timeline: this.timeline.data(), byPostGame: resultOf(s.screen) != null, source: this.source };
+    if (ev.ended) {
+      const byPostGame = resultOf(s.screen) != null;
+      ended = { record: ev.ended, timeline: this.timeline.data(), byPostGame, source: this.source, endedBy: byPostGame ? 'postgame' : ev.endedBy === 'idle' ? 'idle' : 'boundary' };
+    }
     if (ev.ended || ev.matchStarted) this.timeline.reset();
-    if (this.profile.current) this.timeline.add(s, wall, cues);
+    if (this.profile.current && !this.profile.suspended) this.timeline.add(s, wall, cues);
     return ended;
   }
+  /** Observed game seconds of the match in progress (0 without one). */
+  get openSecs(): number { return this.profile.current?.spanSecs ?? 0; }
   /** The match in progress so far (null without evidence). */
   current(): EndedMatch | null {
     const cur = this.profile.current; if (!cur?.hasEvidence) return null;
     return { record: cur.record(Date.now(), true), timeline: this.timeline.data(), byPostGame: false, source: this.source };
   }
-  /** Close the match in progress (end of a replay). */
+  /** Close the match in progress (end of a replay, "Review my last match" after capture stopped). */
   finish(): EndedMatch | null {
     const timeline = this.timeline.data(); const rec = this.profile.endMatch(); this.timeline.reset();
-    return rec ? { record: rec, timeline, byPostGame: false, source: this.source } : null;
+    return rec ? { record: rec, timeline, byPostGame: false, source: this.source, endedBy: 'finish' } : null;
+  }
+  /** Capture stopped: close the match in progress when it was observed for >= MATCH_END.min_span_secs (else it stays open). */
+  stop(): EndedMatch | null {
+    const timeline = this.timeline.data(); const rec = this.profile.finishSession(); if (!rec) return null;
+    this.timeline.reset();
+    return { record: rec, timeline, byPostGame: false, source: this.source, endedBy: 'stop' };
   }
 }
 /** The last match of a replay (its snapshots in order, wall time unknown). */

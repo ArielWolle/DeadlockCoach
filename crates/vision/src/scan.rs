@@ -818,8 +818,17 @@ impl Scanner {
         // The end-of-match banner keeps the clock and top bar (rec5 570-572: classified Gameplay;
         // its red tint even passes the health-bar check). A pixel gate (a large cream text block)
         // runs the one-line read only when such text is present.
-        if matches!(scr, Screen::Gameplay | Screen::Unknown) && screen::post_game_gate(img)
+        // The banner is also drawn over the death screen and the Tab scoreboard (rec13 590: Dead
+        // with "Respawn in 1"; 591: Scoreboard): a match that ends while you are dead or holding
+        // Tab had no PostGame frame at all.
+        if matches!(scr, Screen::Gameplay | Screen::Unknown | Screen::Dead | Screen::Scoreboard) && screen::post_game_gate(img)
             && self.ocr.read_lines(&[screen::post_game_crop(img)]).ok().and_then(|l| l.into_iter().next()).is_some_and(|s| screen::says_post_game(&s)) {
+            scr = Screen::PostGame;
+        }
+        // The post-game summary has the shop's "ESC BACK" anchor; its "PLAY AGAIN" button tells
+        // (rec13 597-599 were Shop frames with the last clock and hero).
+        if scr == Screen::Shop && screen::play_again_gate(img)
+            && self.ocr.read_lines(&[screen::play_again_crop(img)]).ok().and_then(|l| l.into_iter().next()).is_some_and(|s| screen::says_play_again(&s)) {
             scr = Screen::PostGame;
         }
         if scr == Screen::Unknown && screen::looks_black(img) { scr = Screen::Loading; }

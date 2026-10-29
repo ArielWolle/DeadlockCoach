@@ -2,8 +2,8 @@
 // the "Match reviews" panel on the Player page, a short notice on the Coach page, the Settings
 // checkbox and a sentence-by-sentence reader with Stop. main.ts feeds frames through the handle.
 import { configFrom, validateConfig } from './ai-coach';
-import { ReviewStore, ReviewTracker, autoReviewable, buildDigest, buildReviewPrompt, requestReview, reviewKey, sentencesOf, storedReview, type EndedMatch, type StoredReview } from './ai-review';
-import type { MatchRecord } from './player-profile';
+import { MatchTimeline, ReviewStore, ReviewTracker, autoReviewable, buildDigest, buildReviewPrompt, requestReview, reviewKey, sentencesOf, storedReview, type EndedMatch, type StoredReview } from './ai-review';
+import { spanOf, type MatchRecord } from './player-profile';
 import type { Cue, Knowledge, Settings, Snapshot } from './types';
 
 export interface ReviewUiDeps {
@@ -15,10 +15,16 @@ export interface ReviewUiDeps {
   download: (name: string, data: Blob) => void;
   /** Stop the coach's own speech before a review is read aloud. */
   stopSpeech: () => void;
+  /** Whether live capture is running (a match in progress is then not closed by "Review my last match"). */
+  isLive?: () => boolean;
+  /** A live match was closed here (Stop, "Review my last match"): close it in the Player profile too. */
+  finalized?: () => void;
 }
 export interface ReviewUi {
   /** A live full-scan frame (with its rule cues). */
   live: (s: Snapshot, wall: number, cues: Cue[]) => void;
+  /** Live capture stopped (Stop button or the share ended): a match observed >= 10 min is over and reviewed. */
+  stopped: () => void;
   replayStart: () => void; replayFrame: (s: Snapshot, cues: Cue[]) => void; replayDone: (complete: boolean) => void;
   reviewLast: () => Promise<void>;
   populate: (s: Settings) => void; read: (next: Settings) => void; render: () => void;
@@ -76,6 +82,10 @@ export function mountMatchReviews(deps: ReviewUiDeps): ReviewUi {
   const liveTracker = new ReviewTracker('live');
   let replayTracker: ReviewTracker | null = null, replayEnded: EndedMatch | null = null;
   let last: EndedMatch | null = null; let busy = false; let open: string | null = null;
+  /** When `last` was set and when the live tracker last saw a frame (the newer one is "the last match"). */
+  let lastAt = 0, liveAt = 0;
+  /** Matches already handled automatically (one automatic review per match). */
+  const autoDone = new Set<string>();
   const reader = new ReviewReader(deps.settings);
   // Speak / Stop states update in place (a re-render would drop keyboard focus).
   reader.onChange = () => {
@@ -96,6 +106,7 @@ export function mountMatchReviews(deps: ReviewUiDeps): ReviewUi {
     if (busy) { if (!auto) status('A review is already being written. One moment.'); return; }
     busy = true; $<HTMLButtonElement>('review-last').disabled = true;
     status(`Writing your match review (${deps.name(match.record.hero || '') || 'your hero'})… this can take up to a minute.`);
+    if (auto) coachText('Match over: writing your end-of-game review… it will appear on the Player page.');
     try {
       const docs = await deps.knowledge().catch(() => [] as Knowledge[]);
       const digest = buildDigest({ match, previous: deps.previous(), name: deps.name, docs });
@@ -111,12 +122,37 @@ export function mountMatchReviews(deps: ReviewUiDeps): ReviewUi {
         const message = e instanceof Error ? e.message : String(e);
         store.put(storedReview(digest, match, { error: message })); open = digest.key;
         status(`The review request failed: ${message}`, true);
+        coachText(`The end-of-game review failed: ${message} `, 'Try again on the Player page');
       }
     } finally { busy = false; $<HTMLButtonElement>('review-last').disabled = false; render(); }
   }
+  /** The short notice on the Coach page (AI coach panel), with a link to the Player page. */
+  function coachText(text: string, link?: string) {
+    const p = $('review-notice'); p.hidden = false; p.replaceChildren(text);
+    if (link) { const a = el('a', link); a.href = '#player'; p.append(a); }
+  }
   function coachNotice(r: StoredReview) {
-    const p = $('review-notice'); p.hidden = false; p.replaceChildren(`Your end-of-game review is ready (${r.heroName}${r.result !== 'unknown' ? `, ${r.result}` : ''}). `);
-    const a = el('a', 'Read it on the Player page'); a.href = '#player'; p.append(a);
+    coachText(`Your end-of-game review is ready (${r.heroName}${r.result !== 'unknown' ? `, ${r.result}` : ''}). `, 'Read it on the Player page');
+  }
+  const minutes = (m: EndedMatch) => Math.round(spanOf(m.record) / 60);
+  /** A finished live match: review it automatically, or say why there is no review. */
+  function ended(m: EndedMatch) {
+    last = m; lastAt = Date.now();
+    const key = reviewKey(m.record); if (autoDone.has(key)) return; autoDone.add(key);
+    const set = deps.settings();
+    if (!autoReviewable(m)) {
+      if (m.endedBy === 'stop' || m.byPostGame) coachText(`Match over after ${minutes(m)} min observed: too short for an automatic review. `, 'Review it on the Player page');
+      return;
+    }
+    const problem = aiProblem(set);
+    const reason = !set.aiEnabled ? 'the AI coach is off (turn it on in Settings with a gateway and model)'
+      : !set.aiReview ? 'the end-of-game review is turned off in Settings' : problem?.replace(/\.$/, '') ?? null;
+    if (reason) {
+      coachText(`Match over (${minutes(m)} min observed). No AI review: ${reason}. `, 'Player page');
+      status(`No automatic review of the last match: ${reason}.`);
+      return;
+    }
+    void run(m, true);
   }
   function list(title: string, items: string[], ordered = false) {
     const frag = document.createDocumentFragment(); if (!items.length) return frag;
@@ -170,14 +206,30 @@ export function mountMatchReviews(deps: ReviewUiDeps): ReviewUi {
   }
   function render() {
     const ul = $('review-list'); ul.replaceChildren();
-    if (!store.reviews.length) ul.append(el('li', 'No match reviews yet. With the AI coach on, a review is written when a match ends; or press "Review my last match".', 'empty-row'));
+    if (!store.reviews.length) {
+      const s = deps.settings();
+      const why = !s.aiEnabled ? ' The AI coach is off: turn it on in Settings (with a gateway and model) to get them.' : !s.aiReview ? ' Automatic reviews are turned off in Settings.' : '';
+      ul.append(el('li', `No match reviews yet. With the AI coach on, a review is written when a match ends (a Victory / Defeat or post-game screen, the loading screens after it, or Stop after 10+ minutes); or press "Review my last match".${why}`, 'empty-row'));
+    }
     for (const r of store.reviews) ul.append(item(r));
     $<HTMLButtonElement>('review-export').disabled = !store.reviews.length;
   }
   $('review-last').onclick = () => { void reviewLast(); };
   $('review-export').onclick = () => deps.download('deadlock-match-reviews.json', new Blob([store.exportJSON()], { type: 'application/json' }));
   async function reviewLast() {
-    const match = last ?? liveTracker.current();
+    // The live match the tracker still holds open (no end screen seen, capture stopped < 10 min
+    // in, or never stopped) is the last match when it is newer than the last finished one: closed
+    // first when capture is no longer running, else reviewed as it is so far.
+    let match = last;
+    if (liveTracker.current() && liveAt >= lastAt) {
+      if (deps.isLive?.()) match = liveTracker.current();
+      else { const m = liveTracker.finish(); if (m) { match = m; last = m; lastAt = Date.now(); autoDone.add(reviewKey(m.record)); deps.finalized?.(); } }
+    }
+    if (!match) {
+      // After a reload the live timeline is gone; the Player profile still has the match.
+      const rec = deps.previous().find(r => r.source === 'live');
+      if (rec) match = { record: rec, timeline: MatchTimeline.empty(), byPostGame: false, source: 'live', endedBy: 'finish' };
+    }
     if (!match) { status('No match to review yet: coach a match, or run a replay in Replay lab first.'); return; }
     await run(match, false);
   }
@@ -185,16 +237,20 @@ export function mountMatchReviews(deps: ReviewUiDeps): ReviewUi {
   return {
     store, stop: () => reader.stop(), render, reviewLast,
     live(s, wall, cues) {
-      const ended = liveTracker.add(s, wall, cues); if (!ended) return;
-      last = ended;
-      const set = deps.settings();
-      if (set.aiEnabled && set.aiReview && autoReviewable(ended)) void run(ended, true);
+      liveAt = Date.now();
+      const m = liveTracker.add(s, wall, cues); if (m) ended(m);
+    },
+    stopped() {
+      const m = liveTracker.stop();
+      if (m) { deps.finalized?.(); ended(m); return; }
+      const cur = liveTracker.current();
+      if (cur) coachText(`Capture stopped after ${minutes(cur)} min of this match: it stays open (an automatic review needs 10 minutes). `, 'Review it on the Player page');
     },
     replayStart() { replayTracker = new ReviewTracker('replay'); replayEnded = null; },
     replayFrame(s, cues) { const e = replayTracker?.add(s, null, cues); if (e) replayEnded = e; },
     replayDone(complete) {
       const m = replayTracker?.finish() ?? replayEnded; replayTracker = null; replayEnded = null;
-      if (complete && m) last = m;
+      if (complete && m) { last = m; lastAt = Date.now(); }
     },
     populate(s) { $<HTMLInputElement>('ai-review').checked = s.aiReview; },
     read(next) { next.aiReview = $<HTMLInputElement>('ai-review').checked; },

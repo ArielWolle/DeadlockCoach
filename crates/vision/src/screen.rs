@@ -115,6 +115,25 @@ pub fn says_post_game(s: &str) -> bool {
     let t: String = s.chars().filter(|c| c.is_ascii_alphabetic()).collect::<String>().to_ascii_uppercase();
     ["DEFEAT", "VICTORY"].iter().any(|w| t == *w || (t.len() + 1 >= w.len() && t.len() <= w.len() + 1 && crate::death::levenshtein(&t, w) <= 1))
 }
+/// The post-game summary ("<Patron> Defeated", the six player cards, MVP badges) has an
+/// "ESC BACK" anchor like the shop (rec13 597-599 were Shop with the last clock and hero) and a
+/// "PLAY AGAIN" button bottom centre, which no in-match screen has.
+pub fn play_again_region() -> Region { px(715.0, 774.0, 170.0, 38.0) }
+pub fn play_again_crop(img: &DynamicImage) -> DynamicImage { hud::crop(img, play_again_region()) }
+/// Cheap gate for the button: cream letters on a dark field.
+pub fn play_again_gate(img: &DynamicImage) -> bool {
+    if img.width() != 1600 || img.height() != 900 { return false; }
+    let c = play_again_crop(img).thumbnail(85, 19).to_rgb8();
+    let n = c.pixels().count().max(1) as f32;
+    let (mut light, mut dark) = (0f32, 0f32);
+    for p in c.pixels() { let (_, s, v) = crate::minimap::hsv(p[0], p[1], p[2]); if v > 0.7 && s < 0.3 { light += 1.0 } else if v < 0.3 { dark += 1.0 } }
+    (0.04..=0.5).contains(&(light / n)) && dark / n >= 0.35
+}
+/// "PLAY AGAIN" (allowing two OCR edits).
+pub fn says_play_again(s: &str) -> bool {
+    let t: String = s.chars().filter(|c| c.is_ascii_alphabetic()).collect::<String>().to_ascii_uppercase();
+    t.contains("PLAYAGAIN") || (t.len() >= 7 && t.len() <= 11 && crate::death::levenshtein(&t, "PLAYAGAIN") <= 2)
+}
 /// Nearly black frame (map loading / transitions): mean luma below ~4% on a coarse grid, and no
 /// bright pixel anywhere on it except tiny cursors and loading icons.
 pub fn looks_black(img: &DynamicImage) -> bool {

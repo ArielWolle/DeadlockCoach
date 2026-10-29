@@ -359,8 +359,11 @@ test('time dead on the newest-pipeline recordings matches the respawn-timer grou
   const root='C:/Users/arielwolle/Documents/Github/DeadlockCoach/frames';
   // Ground truth per match (docs/player-profile.md "Validation"): sum over deaths of first death
   // screen -> respawn (timer reads, checked on the screenshots), observed game seconds.
+  // rec8 ends dead at 50:38 (frame 585), then black, MVP and the post-game summary (frames 593-598,
+  // read as Shop with an extrapolated 50:59-51:16 clock): those 38 s are not game time (MATCH_END),
+  // and the last death ends with the match at 50:38, not at its 50:45 respawn (they were alive frames).
   const truth=[{file:'rec4/replay9',deaths:5,dead:312,span:1319},{file:'rec5/replay7',deaths:4,dead:241,span:1250},
-    {file:'rec8/replay2',deaths:6,dead:395,span:2271},{file:'rec11/replay1',deaths:7,dead:339,span:1976}];
+    {file:'rec8/replay2',deaths:6,dead:386,span:2233},{file:'rec11/replay1',deaths:7,dead:339,span:1976}];
   const {profileOf}=await import('../scripts/player-profile-replay.ts');
   for(const t of truth){
     const file=`${root}/${t.file}.jsonl`;if(!existsSync(file))continue; // recordings are local

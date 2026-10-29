@@ -195,7 +195,7 @@ function request(message: Record<string, unknown>, transfer: Transferable[] = []
 
 function cancelMode() {
   clearTimeout(recoveryTimer);recoveringFull=false;recoveryAttempts=0;
-  playerProfile.save(); // a stopped session keeps its match open; a long gap or a new clock ends it
+  playerProfile.save(); // a stopped session keeps its match open (Stop after 10+ min closes it: endLiveSession); a long gap or a new clock ends it
   generation++; running = false; paused = false; replaying = false; clearTimeout(timer);
   cropEditor.cancel(); needsViewport = false; button('fix-viewport').hidden = true;
   capture.stop(); speaker.cancel();quick.reset(); button('cancel-replay').disabled = true; ai?.cancel();
@@ -412,6 +412,15 @@ async function tick() {
     if (current === generation) schedule(Math.max(50, settings.interval * 1000 - (performance.now() - begin)));
   }
 }
+/** An analyzed live frame for the match bookkeeping: Player profile, then the end-of-game review. */
+function liveMatchFrame(analysis:Analysis,timestamp:number){
+  playerFrame(analysis,timestamp);
+  if(isDeadlock(activeProfile))reviews?.live(analysis.snapshot,timestamp,analysis.cues); // end-of-game review
+}
+// Browser tests feed analyzed live frames (a whole match cannot be captured in a test): opt in by
+// defining window.__deadlockTestHooks = {} before the page loads (tests/browser/ai-review.spec.ts).
+{const hooks=(window as unknown as {__deadlockTestHooks?:Record<string,unknown>}).__deadlockTestHooks;
+  if(hooks&&typeof hooks==='object')hooks.liveFrame=(snapshot:Snapshot,timestamp:number)=>liveMatchFrame({snapshot,cues:[]},timestamp);}
 async function analyzeLiveFrame(pixels:Pixels,current:number){
   const timestamp=pixels.timestamp,recording=settings.record,preview=pixels.preview;
   try{
@@ -419,8 +428,7 @@ async function analyzeLiveFrame(pixels:Pixels,current:number){
     if(current!==generation||!running||paused)return;
     recoveryAttempts=0;
     if(result.analysis.perception)quick.seed(result.analysis.snapshot,result.analysis.perception);
-    playerFrame(result.analysis,timestamp);
-    if(isDeadlock(activeProfile))reviews?.live(result.analysis.snapshot,timestamp,result.analysis.cues); // end-of-game review
+    liveMatchFrame(result.analysis,timestamp);
     const delivered=deliver(result.analysis,timestamp);
     apply(delivered,result.elapsed);status('Coaching live');
     if(recording&&preview)try{await recordFrame({created:Date.now(),timestamp,snapshot:result.analysis.snapshot,cues:delivered.cues,image:preview,perception:result.analysis.perception,profile_id:activeProfile.id});}
@@ -934,7 +942,10 @@ async function runReference() {
 
 button('start').onclick = () => { void start(); };
 for (const key of ['edit-viewport', 'fix-viewport']) button(key).onclick = () => { void editLiveViewport(); };
-button('stop').onclick = () => { cancelMode(); status('Capture stopped', 'No further frames are being captured.'); };
+/** Live capture ended (Stop, or the shared window closed): a match observed for 10+ minutes is
+ *  over (closed in the Player profile and reviewed; ai-review-ui.ts). Not for replays. */
+function endLiveSession() { const live = (running || capture.active) && !replaying; cancelMode(); if (live && isDeadlock(activeProfile)) reviews?.stopped(); }
+button('stop').onclick = () => { endLiveSession(); status('Capture stopped', 'No further frames are being captured.'); };
 button('pause').onclick = async () => {
   if (!running) return;
   paused = !paused; generation++; speaker.cancel(); ai?.cancel();
@@ -942,7 +953,7 @@ button('pause').onclick = async () => {
   if (!paused && !ready) { try { await initialize(); } catch { paused = true; } }
   status(paused ? 'Coaching paused' : 'Coaching live'); if (!paused) schedule(0);
 };
-capture.onEnded = () => { cancelMode(); notice('Screen sharing ended. Choose Start coaching to share again.'); };
+capture.onEnded = () => { endLiveSession(); notice('Screen sharing ended. Choose Start coaching to share again.'); };
 button('mute').onclick = () => { settings.muted = !settings.muted; speaker.configure(settings); saveSettings(settings); populateSettings(); };
 $<HTMLSelectElement>('lane-focus').onchange=()=>{
   settings.laneFocus=$<HTMLSelectElement>('lane-focus').value as Settings['laneFocus'];saveSettings(settings);
@@ -1030,7 +1041,10 @@ profilePanel = new ProfilePanel({ current: () => activeProfile, apply: applyGame
 playerPage = new PlayerPage({ profile: playerProfile, notice, download, replay: () => lastReplay });
 // --- End-of-game AI review hooks (logic: ai-review.ts, UI: ai-review-ui.ts) ---
 reviews = mountMatchReviews({ settings: () => settings, save: s => { settings = normalize(s); saveSettings(settings); }, previous: () => playerProfile.matches,
-  knowledge: async () => { await loadKnowledge(); return knowledge; }, name: id => heroNames[id] || label(id, {}), notice, download, stopSpeech: () => speaker.cancel() });
+  knowledge: async () => { await loadKnowledge(); return knowledge; }, name: id => heroNames[id] || label(id, {}), notice, download, stopSpeech: () => speaker.cancel(),
+  isLive: () => running && !replaying,
+  // The review tracker closed the live match (Stop, "Review my last match"): the Player profile follows.
+  finalized: () => { if (playerProfile.finishSession(0) && location.hash === '#player') playerPage?.render(); } });
 refreshGameLayout();
 populateSettings(); renderSnapshot(latest); renderTactics(null,latest); diagnostics(); route(); void loadNames();
 if (import.meta.env.PROD && 'serviceWorker' in navigator) {

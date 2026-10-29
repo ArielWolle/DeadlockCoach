@@ -168,3 +168,91 @@ test('digest on the recorded matches: rec12 is only the last match and reads as 
   assert.equal(m11.record.deaths.length, 7); assert.match(d11.text, /Hero: Violet/); assert.match(d11.text, /DEATHS \(7\)/); assert.ok(d11.chars <= DIGEST_MAX_CHARS);
   assert.notEqual(d11.key, d12.key);
 });
+
+// ---- Match end without a result screen (MATCH_END in player-profile.ts) ----
+type F = { snapshot: Snapshot; cues: Cue[]; wall: number };
+const BASE = 1_800_000_000_000;
+/** After `match()` (gameplay to `to`, wall = BASE + clock): append frames `ms` after the last one. */
+function tail(frames: F[], ms: number, s: Snapshot) { frames.push({ snapshot: s, cues: [], wall: frames.at(-1)!.wall + ms }); return frames; }
+function feed(frames: F[]) {
+  const tr = new ReviewTracker('live', () => BASE); const out: Array<{ i: number; m: EndedMatch }> = [];
+  frames.forEach((f, i) => { const m = tr.add(f.snapshot, f.wall, f.cues); if (m) out.push({ i, m }); });
+  return { tr, out };
+}
+/** rec13: dies at 25:00 (respawn 71 -> 1), "Defeat" read as Dead / Scoreboard, a black frame, the
+ *  MVP screens (Unknown), then the post-game summary read as Shop with an extrapolated clock. */
+function rec13Like() {
+  const f = match('hero_orion', 30, 1500, [400, 900]);
+  for (let c = 1505, r = 71; r >= 1; c += 7, r -= 7) tail(f, 7000, { game_clock_secs: c, screen: 'Dead', dead: true, hero: 'hero_orion', respawn_secs: Math.max(1, r) });
+  const board = tail(f, 5000, { game_clock_secs: 1580, screen: 'Scoreboard', dead: false, hero: 'hero_orion' }).length - 1;
+  tail(f, 5000, { screen: 'Loading' });
+  for (let i = 0; i < 4; i++) tail(f, 2500, { screen: 'Unknown' });
+  for (let i = 0; i < 3; i++) tail(f, 4000, { game_clock_secs: 1598 + i * 4, screen: 'Shop', dead: false, hero: 'hero_orion', souls: null });
+  return { f, board };
+}
+test('match end: rec13-like (dead -> scoreboard -> loading -> MVP -> summary as Shop) ends the match once, 20 s after the last live frame', () => {
+  const { f, board } = rec13Like();
+  const { tr, out } = feed(f);
+  assert.equal(out.length, 1); const { i, m } = out[0];
+  assert.equal(m.endedBy, 'idle'); assert.equal(m.byPostGame, false); assert.ok(autoReviewable(m));
+  assert.ok(f[i].wall - f[board].wall >= 20_000 && f[i].wall - f[board].wall < 25_000, `ended ${(f[i].wall - f[board].wall) / 1000} s after the scoreboard`);
+  assert.equal(m.record.endClock, 1580); assert.equal(m.record.deaths.length, 3);
+  // The summary frames are not game time.
+  assert.ok(m.timeline.points.every(p => p.t == null || p.t <= 1585), String(m.timeline.points.at(-1)?.t));
+  // Nothing more: the rest of the summary and the end-of-game camera at the final clock start no match.
+  for (const s of [{ game_clock_secs: 1610, screen: 'Shop', hero: 'hero_orion' }, { game_clock_secs: 1582, screen: 'Gameplay', hero: 'hero_orion' }, { screen: 'Unknown' }] as Snapshot[]) assert.equal(tr.add(s, f.at(-1)!.wall + 3000), null);
+  assert.equal(tr.current(), null); assert.equal(tr.finish(), null);
+  // The same frames without wall time (a replay): the match also ends at the loading screens.
+  const replay = new ReviewTracker('replay', () => BASE); let ended: EndedMatch | null = null;
+  for (const x of f) ended ??= replay.add(x.snapshot, null, x.cues);
+  assert.equal(ended?.endedBy, 'idle'); assert.equal(ended?.record.endClock, 1580);
+  // With the vision fix the banner over the death screen is a PostGame frame: ended at once, a loss.
+  const pg = match('hero_orion', 30, 1500, [400]); tail(pg, 7000, { game_clock_secs: 1507, screen: 'Dead', dead: true, respawn_secs: 1 }); tail(pg, 5000, { screen: 'PostGame' });
+  const r = feed(pg).out; assert.equal(r.length, 1); assert.equal(r[0].i, pg.length - 1); assert.equal(r[0].m.endedBy, 'postgame'); assert.ok(r[0].m.byPostGame);
+});
+test('match end: never during gameplay: long death screens, alt-tab while dead, pauses, menus, short matches', () => {
+  // A 90 s respawn shown in full, with the shop open while dead (no souls read on some frames).
+  const longDeath = match('hero_orion', 30, 1500, []);
+  for (let c = 1505, r = 90; r > 0; c += 5, r -= 5) tail(longDeath, 5000, c % 15 ? { game_clock_secs: c, screen: 'Dead', dead: true, respawn_secs: r } : { game_clock_secs: c, screen: 'Shop', dead: true, respawn_secs: r, souls: null });
+  for (let c = 1600; c <= 1700; c += 5) tail(longDeath, 5000, { game_clock_secs: c, screen: 'Gameplay', hero: 'hero_orion', souls: 900 });
+  assert.equal(feed(longDeath).out.length, 0);
+  // Dead with an 80 s timer, then alt-tab (a black frame, other windows) for 60 s, then back.
+  const altTab = match('hero_orion', 30, 1500, []);
+  tail(altTab, 5000, { game_clock_secs: 1505, screen: 'Dead', dead: true, respawn_secs: 80 }); tail(altTab, 3000, { screen: 'Loading' });
+  for (let i = 0; i < 12; i++) tail(altTab, 5000, { screen: 'Unknown' });
+  tail(altTab, 5000, { game_clock_secs: 1573, screen: 'Dead', dead: true, respawn_secs: 12 });
+  for (let c = 1590; c <= 1650; c += 5) tail(altTab, 5000, { game_clock_secs: c, screen: 'Gameplay', hero: 'hero_orion' });
+  const a = feed(altTab); assert.equal(a.out.length, 0); assert.equal(a.tr.current()?.record.endClock, 1650);
+  // A death screen without any timer read waits 90 s.
+  const noTimer = match('hero_orion', 30, 1500, []);
+  tail(noTimer, 5000, { game_clock_secs: 1505, screen: 'Dead', dead: true }); tail(noTimer, 3000, { screen: 'Loading' });
+  for (let i = 0; i < 10; i++) tail(noTimer, 5000, { screen: 'Unknown' });
+  assert.equal(feed(noTimer).out.length, 0);
+  // A pause: the HUD with a frozen clock and the Esc menu for 3 minutes, then play resumes.
+  const pause = match('hero_orion', 30, 1500, []);
+  for (let i = 0; i < 36; i++) tail(pause, 5000, i % 3 ? { game_clock_secs: 1500, screen: 'Gameplay', hero: 'hero_orion' } : { screen: 'Menu' });
+  for (let c = 1505; c <= 1600; c += 5) tail(pause, 5000, { game_clock_secs: c, screen: 'Gameplay', hero: 'hero_orion' });
+  assert.equal(feed(pause).out.length, 0);
+  // Unknown frames alone (alt-tab, a vision miss) never end a match, however long.
+  const unknown = match('hero_orion', 30, 1500, []);
+  for (let i = 0; i < 40; i++) tail(unknown, 5000, { screen: 'Unknown' });
+  for (let c = 1700; c <= 1750; c += 5) tail(unknown, 5000, { game_clock_secs: c, screen: 'Gameplay', hero: 'hero_orion' });
+  assert.equal(feed(unknown).out.length, 0);
+  // A short match (under 10 minutes observed) is not ended by loading screens.
+  const short = match('hero_orion', 30, 400, [200]); tail(short, 5000, { screen: 'Loading' });
+  for (let i = 0; i < 10; i++) tail(short, 4000, { screen: 'Unknown' });
+  const s = feed(short); assert.equal(s.out.length, 0); assert.ok(s.tr.current());
+  // A black frame mid-match followed by live play within 20 s changes nothing.
+  const blink = match('hero_orion', 30, 1500, []); tail(blink, 5000, { screen: 'Loading' }); tail(blink, 4000, { screen: 'Unknown' }); tail(blink, 4000, { screen: 'Unknown' });
+  for (let c = 1515; c <= 1600; c += 5) tail(blink, 5000, { game_clock_secs: c, screen: 'Gameplay', hero: 'hero_orion' });
+  assert.equal(feed(blink).out.length, 0);
+});
+test('match end on Stop: a match observed for 10+ minutes is closed and reviewable; a shorter one stays open', () => {
+  const long = feed(match('hero_orion', 30, 1500, [400])).tr;
+  const m = long.stop(); assert.equal(m?.endedBy, 'stop'); assert.ok(m && autoReviewable(m)); assert.equal(m!.record.endClock, 1500);
+  assert.equal(long.current(), null); assert.equal(long.stop(), null);
+  const short = feed(match('hero_orion', 30, 500, [200])).tr;
+  assert.equal(short.stop(), null); assert.ok(short.current()); assert.ok(short.openSecs > 400 && short.openSecs < 600);
+  // "Review my last match" closes it explicitly.
+  assert.equal(short.finish()?.endedBy, 'finish');
+});
