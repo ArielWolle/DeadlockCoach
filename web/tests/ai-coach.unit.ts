@@ -39,7 +39,7 @@ const settings = (patch: Partial<Settings> = {}): Settings => normalize({ ...def
 test('ai settings are top-level, off by default, normalized and never inside engine options', () => {
   assert.equal(defaults.aiEnabled, false); assert.equal(defaults.aiInterval, 40);
   const s = normalize({ aiEnabled: true, aiProvider: 'evil', aiInterval: 2, aiMaxTokens: 1e9, aiKey: '  k  ', options: { aiKey: 'x' } });
-  assert.equal(s.aiProvider, 'openai'); assert.equal(s.aiInterval, 15); assert.equal(s.aiMaxTokens, 4096); assert.equal(s.aiKey, 'k');
+  assert.equal(s.aiProvider, 'openai'); assert.equal(s.aiInterval, 15); assert.equal(s.aiMaxTokens, 8192); assert.equal(s.aiKey, 'k');
   assert.ok(!('aiKey' in s.options));
 });
 
@@ -362,4 +362,22 @@ test('every gateway call is logged with the whole reply, keys redacted', async (
   assert.equal((await callGateway(cfg, 's', 'u', { fetchImpl: ok })).text, '{"speak":null}');
   assert.equal(aiExchanges().length, 2); assert.equal(aiExchanges()[1].error, null); assert.equal(seen.length, 2);
   off(); clearAiExchanges();
+});
+test('max reply tokens default to 1,024, an old 200 is raised, and a cut-off reply is retried with double the limit', async () => {
+  assert.equal(defaults.aiMaxTokens, 1024);
+  assert.equal(normalize({ ...defaults, aiMaxTokens: 200 } as Settings).aiMaxTokens, 1024);
+  assert.equal(normalize({ ...defaults, aiMaxTokens: 2048 } as Settings).aiMaxTokens, 2048);
+  const cfg: AiConfig = { provider: 'openai', baseUrl: 'https://openrouter.ai/api/v1', model: 'anthropic/claude-haiku-4.5', key: 'k', headers: '', maxTokens: 1024 };
+  const cut = (async () => new Response(JSON.stringify({ choices: [{ message: { content: '{"speak":"Hold max range behind your' }, finish_reason: 'length' }] }), { status: 200 })) as typeof fetch;
+  await assert.rejects(callGateway(cfg, 's', 'u', { fetchImpl: cut }), (e: Error & { kind?: string }) => e.kind === 'truncated' && /1024-token limit/.test(e.message));
+  const sent: number[] = [];
+  const later = (async (_u: string, init: RequestInit) => { const body = JSON.parse(String(init.body)); sent.push(body.max_tokens);
+    return new Response(JSON.stringify(sent.length === 1 ? { choices: [{ message: { content: '{"speak":"Hold' }, finish_reason: 'length' }] }
+      : { choices: [{ message: { content: '{"speak":"Hold max range behind your front line.","priority":"Normal","why":"melee diver near","focus":"positioning"}' }, finish_reason: 'stop' }] }), { status: 200 }); }) as unknown as typeof fetch;
+  const settings = normalize({ ...defaults, aiEnabled: true, aiBaseUrl: cfg.baseUrl, aiModel: cfg.model, aiKey: 'k' } as Settings);
+  const spoken: string[] = [];
+  const coach = new AiCoach({ settings: () => settings, isLive: () => true, generation: () => 1, knowledge: async () => [], name: (x: string) => x,
+    fetchImpl: later, pageProtocol: () => 'https:', onAdvice: (c: { text: string }) => spoken.push(c.text) } as never);
+  await coach.ask('manual');
+  assert.deepEqual(sent, [1024, 2048]); assert.equal(spoken[0], 'Hold max range behind your front line.');
 });

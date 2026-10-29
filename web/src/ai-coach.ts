@@ -729,7 +729,7 @@ function secretsOf(cfg: AiConfig): string[] {
   try { return [cfg.key, ...Object.values(parseExtraHeaders(cfg.headers))]; } catch { return [cfg.key]; }
 }
 
-export type GatewayErrorKind = 'config' | 'network' | 'http' | 'timeout' | 'aborted' | 'reply';
+export type GatewayErrorKind = 'config' | 'network' | 'http' | 'timeout' | 'aborted' | 'reply' | 'truncated';
 export class GatewayError extends Error {
   kind: GatewayErrorKind; status?: number;
   constructor(kind: GatewayErrorKind, message: string, status?: number) { super(message); this.kind = kind; this.status = status; this.name = 'GatewayError'; }
@@ -782,6 +782,10 @@ async function callGatewayInner(cfg: AiConfig, req: GatewayRequest, opts: CallOp
     try { data = JSON.parse(body); } catch { throw new GatewayError('reply', redact(`Gateway answered HTTP ${res.status} but not JSON: ${body.slice(0, 160)}`, secrets)); }
     let text: string;
     try { text = extractText(cfg.provider, data); } catch (e) { throw new GatewayError('reply', redact((e as Error).message, secrets)); }
+    // A reply cut off by the token limit (OpenRouter + Claude Haiku at 200 tokens stopped mid-JSON).
+    { const dd = data as Record<string, any>; const fin = dd?.choices?.[0]?.finish_reason ?? dd?.stop_reason ?? dd?.incomplete_details?.reason; // eslint-disable-line @typescript-eslint/no-explicit-any
+      if ((fin === 'length' || fin === 'max_tokens' || fin === 'max_output_tokens') && parseAdvice(text).ok === false)
+        throw new GatewayError('truncated', `The reply was cut off at the ${opts.maxTokens ?? cfg.maxTokens}-token limit (finish_reason "${fin}"). Raise "Max reply tokens" in Settings.`); }
     const model = typeof (data as { model?: unknown }).model === 'string' ? (data as { model: string }).model : cfg.model;
     return { text, ms: Math.round(now() - started), model };
   } finally { clearTimeout(timer); opts.signal?.removeEventListener('abort', onAbort); }
@@ -925,12 +929,20 @@ export class AiCoach {
     this.set({ state: 'thinking', message: `Asking ${settings.aiModel || 'the model'} (${trigger})…`, requests: this.status.requests + 1 });
     try {
       let retry: PromptInput['retry'] = null;
+      let truncated = false;
       for (let attempt = 0; attempt < 2; attempt++) {
         const prompt = await this.prompt(trigger, retry);
         if (ctrl.signal.aborted) return;
-        const maxTokens = trigger === 'death' ? Math.round(settings.aiMaxTokens * 1.5) : settings.aiMaxTokens;
-        const res = await callGateway(configFrom(settings), prompt.system, prompt.user, { signal: ctrl.signal, maxTokens, timeoutMs: trigger === 'manual' ? 45000 : STALE_MS,
-          fetchImpl: this.deps.fetchImpl, pageProtocol: this.deps.pageProtocol?.(), now: this.deps.now, trigger: attempt ? `${trigger}:retry` : trigger, clock: num(this.latest.game_clock_secs) });
+        const base = trigger === 'death' ? Math.round(settings.aiMaxTokens * 1.5) : settings.aiMaxTokens;
+        const maxTokens = Math.min(8192, base * (truncated ? 2 : 1));
+        let res: CallResult;
+        try { res = await callGateway(configFrom(settings), prompt.system, prompt.user, { signal: ctrl.signal, maxTokens, timeoutMs: trigger === 'manual' ? 45000 : STALE_MS,
+          fetchImpl: this.deps.fetchImpl, pageProtocol: this.deps.pageProtocol?.(), now: this.deps.now, trigger: attempt ? `${trigger}:retry` : trigger, clock: num(this.latest.game_clock_secs) }); }
+        catch (err) {
+          // Cut off by the token limit: one retry with double the limit, then report it.
+          if (err instanceof GatewayError && err.kind === 'truncated' && attempt === 0 && !truncated) { truncated = true; continue; }
+          throw err;
+        }
         if (ctrl.signal.aborted) return;
         const age = this.now() - started, sameGen = generation === this.deps.generation();
         if (!sameGen || (trigger !== 'manual' && (age > STALE_MS || !this.deps.isLive()))) {
@@ -992,7 +1004,7 @@ export async function testConnection(cfg: AiConfig, opts: CallOptions = {}): Pro
     return { ok: true, message: `Connected · ${res.model} · ${res.ms} ms · ${parsed.ok ? 'reply is valid coach JSON' : `reply received but not coach JSON: "${redact(res.text, secretsOf(cfg)).replace(/\s+/g, ' ').slice(0, 100)}"`}` };
   } catch (e) {
     const kind = e instanceof GatewayError ? e.kind : 'error';
-    const label: Record<string, string> = { config: 'Configuration', network: 'Network/CORS', http: 'Gateway error', timeout: 'Timeout', aborted: 'Canceled', reply: 'Unexpected reply', error: 'Error' };
+    const label: Record<string, string> = { config: 'Configuration', network: 'Network/CORS', http: 'Gateway error', timeout: 'Timeout', aborted: 'Canceled', reply: 'Unexpected reply', truncated: 'Reply cut off', error: 'Error' };
     return { ok: false, message: `${label[kind] || 'Error'}: ${e instanceof Error ? e.message : String(e)}` };
   }
 }

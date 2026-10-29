@@ -33,7 +33,7 @@ top of the rule-based calls and does not change them.
 
 Other settings:
 - **Advice interval:** default 40 s, minimum 15 s.
-- **Max reply tokens:** default 200. Reasoning models may need more.
+- **Max reply tokens:** default 1,024 (range 512-8,192), changeable in Settings at any time with no rebuild. 200 (the old default) cut Claude Haiku replies off mid-JSON on OpenRouter; saved values below 512 are raised to 1,024. Use 2,048+ for reasoning models. A reply cut off by the limit (`finish_reason: "length"`) is retried once with double the limit, then reported as "Reply cut off".
 - **Speak AI advice:** respects **Mute voice**.
 - **Extra request headers:** a JSON object, for example `{"HTTP-Referer": "https://example.com"}`
   for OpenRouter, or `{"api-key": "…"}` for an Azure-style proxy. These header values are

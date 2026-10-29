@@ -86,7 +86,7 @@ for (const provider of ['openai', 'anthropic'] as const) {
       expect(seen[0].headers['anthropic-dangerous-direct-browser-access']).toBe('true');
       expect(body.system).toContain('elite Deadlock coach'); expect(body.messages[0].content).toContain('You: Haze');
     }
-    expect(body.max_tokens).toBe(200);
+    expect(body.max_tokens).toBe(1024);
     // The AI cue is in the cue log and the recording export, and the key is in neither.
     const exported = await exportRecording(page);
     expect(exported).toContain(ADVICE); expect(JSON.parse(exported).spoken.some((c: { source: string }) => c.source === 'ai')).toBe(true);

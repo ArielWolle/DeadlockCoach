@@ -7,7 +7,7 @@ export const defaults: Settings = {
   playerProfile:true,
   crop: { x: 0, y: 0, w: 1, h: 1 },
   // Optional AI coach: off by default.
-  aiEnabled: false, aiProvider: 'openai', aiBaseUrl: '', aiModel: '', aiKey: '', aiInterval: 40, aiMaxTokens: 200, aiSpeak: true, aiHeaders: '',
+  aiEnabled: false, aiProvider: 'openai', aiBaseUrl: '', aiModel: '', aiKey: '', aiInterval: 40, aiMaxTokens: 1024, aiSpeak: true, aiHeaders: '',
 };
 const number = (n: unknown, lo: number, hi: number, fallback: number) => typeof n === 'number' && Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : fallback;
 export function normalize(input: unknown): Settings {
@@ -28,7 +28,10 @@ export function normalize(input: unknown): Settings {
   s.aiKey = typeof value.aiKey === 'string' ? value.aiKey.trim().slice(0, 500) : '';
   s.aiHeaders = typeof value.aiHeaders === 'string' ? value.aiHeaders.slice(0, 2000) : '';
   s.aiInterval = Math.round(number(value.aiInterval, 15, 600, defaults.aiInterval));
-  s.aiMaxTokens = Math.round(number(value.aiMaxTokens, 32, 4096, defaults.aiMaxTokens));
+  // 200 was the old default and cut replies off (OpenRouter + Claude Haiku stopped mid-JSON): saved
+  // values below 512 are raised to the new default. Still editable in Settings (512-8192).
+  const tokens = Math.round(number(value.aiMaxTokens, 32, 8192, defaults.aiMaxTokens));
+  s.aiMaxTokens = tokens < 512 ? defaults.aiMaxTokens : tokens;
   s.playerProfile=value.playerProfile!==false;
   for (const key of Object.keys(s.options) as Array<keyof Settings['options']>) if (typeof value.options?.[key] === 'boolean') s.options[key] = value.options[key];
   const c = value.crop;
