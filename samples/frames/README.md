@@ -24,4 +24,5 @@ Only the explicit fixture allow-list in `web/scripts/assets.mjs` is included in 
 website artifact. This directory is not a recording destination.
 | `00530`-`00531` | rec6: death screen whose spectator minimap is ~2% smaller, then gameplay; the latched smaller box made every later frame Unknown (`crates/vision/tests/automatic.rs`) |
 | `00550`-`00554` | rec8 ground-truth review (`crates/vision/tests/rec8_review.rs`): clock 15:31 whose leftmost box reads 5:31, "DELIVER THE URN" with no minimap vase, AFFLICTED, Frost Grenade slow badges (-1.0 m), Hidden King health banner at ~50% |
+| `00560`-`00561` | Match boundary pair (`crates/vision/tests/match_boundary.rs`): rec11 match A at 36:58 (Violet, ally slot 2) and rec12 match B at 0:22 (Grey Talon, ally slot 4; Billy's dark portrait in slot 0); both matches read the same HUD match id |
 | `00540`-`00542` | rec8 top-bar strips (1920x84, top of the frame; `crates/vision/tests/hero_identity.rs`): Grey Talon carrying the urn (mint square, other art; read Silver), Baba carrying the urn (read Solomon) and Bebop's turned portrait (read Solomon) |

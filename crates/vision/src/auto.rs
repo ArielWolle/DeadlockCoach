@@ -49,7 +49,9 @@ pub struct AutoScanner {legacy:Scanner,reader:Reader,map:MapLocator,clock:crate:
     /// When the tracked minimap box is next re-checked by a fresh search (ms).
     relocate_at:u64,
     /// A differently sized minimap find and how many searches in a row found it (see `scan`).
-    map_contender:Option<(Bounds,u32)>}
+    map_contender:Option<(Bounds,u32)>,
+    /// Match resets of the scene scanner already applied to this adapter's per-match state.
+    resets_seen:u32}
 
 /// Canonical 1600x900 image of a context rectangle (pixel-exact when within 2% of 1:1; a ~0.1%
 /// resample blurred the small HUD digits enough to read 5:13 as 6:13 on a letterboxed shot).
@@ -85,7 +87,7 @@ fn contend(c:&mut Option<(Bounds,u32)>,f:Bounds)->u32{
 }
 impl AutoScanner {
     pub fn new(legacy:Scanner,reader:Reader)->Self{Self{legacy,reader,map:MapLocator::default(),clock:Default::default(),regions:vec![],previous_map:None,
-        clock_box:Tracked::default(),currency_box:Tracked::default(),map_tracker:Default::default(),laps:Default::default(),had_context:false,verified_map:None,relocate_at:0,last_context:None,map_contender:None}}
+        clock_box:Tracked::default(),currency_box:Tracked::default(),map_tracker:Default::default(),laps:Default::default(),had_context:false,verified_map:None,relocate_at:0,last_context:None,map_contender:None,resets_seen:0}}
     pub fn reset(&mut self){self.legacy.reset();self.clock=Default::default();self.regions.clear();self.previous_map=None;self.clock_box.reset();self.currency_box.reset();self.map_tracker=Default::default();self.had_context=false;self.verified_map=None;self.last_context=None;self.map_contender=None;}
     /// A frame without a located minimap is scanned in the last context rectangle of this frame
     /// size (the HUD does not move within a match), or the whole frame when it is 16:9. The
@@ -104,6 +106,9 @@ impl AutoScanner {
     /// The scene scanner (diagnostics, e.g. identity votes).
     pub fn scanner(&self)->&Scanner{&self.legacy}
     pub fn scan(&mut self,frame:&DynamicImage,now:u64)->GameSnapshot{
+        // The scene scanner detected a new match (see scan::match_boundary): the independent clock
+        // and lane layout belong to the previous one. The located boxes stay (same window).
+        if self.legacy.match_resets()!=self.resets_seen{self.resets_seen=self.legacy.match_resets();self.clock=Default::default();self.map_tracker=Default::default();}
         self.regions.clear();
         let mut laps=coach_perception::track::Laps::default();
         let dims=(frame.width(),frame.height());
