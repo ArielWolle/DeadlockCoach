@@ -538,8 +538,11 @@ impl ReviewCoach {
         // and "up to M" agree: rec8 said "over 6,400 ... up to 5,130").
         let mut hoard_tier = u32::MAX;
         // Enemy-dead windows: (start, length, most dead, ever in their half).
-        let mut windows: Vec<(u32, u32, usize, bool)> = vec![]; let mut open: Option<(u32, u32, usize, bool)> = None;
+        let mut windows: Vec<(u32, u32, usize, bool, bool)> = vec![]; let mut open: Option<(u32, u32, usize, bool, bool)> = None;
         let mut fights_missed = 0u32; let mut fights_joined = 0u32; let mut in_fight: Option<bool> = None;
+        // Clearly in their half (a mid-lane front sits at y 0.45-0.5) with a teammate beside you: a
+        // window used together, not a solo dive (the praise coach uses the same line).
+        let grouped = |a: &Sample| a.you.is_some_and(|p| p.y < 0.38) && a.nearest_ally.is_some_and(|d| d <= 0.15);
         for (i, (a, b)) in w.iter().zip(w.iter().skip(1)).enumerate() {
             let area = eff[i];
             let cap = if area == Area::Dead && eff[i + 1] == Area::Dead { 30 } else { 10 };
@@ -551,8 +554,8 @@ impl ReviewCoach {
             if a.deep_wave && a.area == Area::Jungle { deep_away += dt; }
             let alive = matches!(a.area, Area::Lane | Area::Jungle | Area::Base);
             match (a.enemies_dead.filter(|n| *n >= 2), alive, open.as_mut()) {
-                (Some(n), true, Some(w)) => { w.1 += dt; w.2 = w.2.max(n); w.3 |= a.you.is_some_and(|p| p.y < 0.5); }
-                (Some(n), true, None) => open = Some((a.clock, dt, n, a.you.is_some_and(|p| p.y < 0.5))),
+                (Some(n), true, Some(w)) => { w.1 += dt; w.2 = w.2.max(n); w.3 |= a.you.is_some_and(|p| p.y < 0.5); w.4 |= grouped(a); }
+                (Some(n), true, None) => open = Some((a.clock, dt, n, a.you.is_some_and(|p| p.y < 0.5), grouped(a))),
                 _ => if let Some(w) = open.take() { windows.push(w); },
             }
             // A fight episode starts when a cluster appears; it counts once, joined if you were close.
@@ -563,8 +566,13 @@ impl ReviewCoach {
             }
         }
         if let Some(w) = open.take() { windows.push(w); }
+        let used = windows.iter().filter(|w| w.1 >= 10 && w.4).max_by_key(|w| (w.2, w.1)).copied();
         let unused = windows.into_iter().filter(|w| w.1 >= 20 && !w.3).max_by_key(|w| w.1);
         let (deaths, dead_secs) = death_runs(&w, &eff);
+        // Purchases: souls falling by an item's worth and staying down on the next reading (one
+        // misread is not a purchase: rec12 3:52 read 7 souls between 978 and 1,007).
+        let souls: Vec<u32> = w.iter().filter_map(|x| x.souls).collect();
+        let purchases = souls.windows(3).filter(|v| v[0] >= v[1] + 800 && v[0] >= v[2] + 800).count();
         let known = (time[Area::Lane as usize] + time[Area::Jungle as usize] + time[Area::Base as usize]).max(1);
         let pct = |a: Area| time[a as usize] * 100 / known;
         let min = (span + 30) / 60;
@@ -605,8 +613,15 @@ impl ReviewCoach {
         let previous = st.last_pattern.as_ref().filter(|(k, _)| !k.ends_with(&block)).map(|(_, text)| text).or(st.prev_pattern.as_ref());
         let said_before = |needle: &str| previous.is_some_and(|text| text.contains(needle));
         let unused = unused.filter(|(start, ..)| !said_before(&format!("At {}:{:02},", start / 60, start % 60)));
+        // What went well, named as specifically as the frames allow (said with the criticism, or
+        // alone when there is none): rec12 asked to point out what made the match go well.
+        let mut good: Vec<String> = vec![];
+        if deaths == 0 && known >= 120 { good.push("no deaths".into()); }
+        if let Some((start, _, n, _, _)) = used { good.push(format!("at {}:{:02}, with {} dead, you pushed into their half", start / 60, start % 60, plural(n, "enemy", "enemies"))); }
+        if fights_joined > 0 { good.push(format!("you were with your team for {}", plural(fights_joined as usize, "fight", "fights"))); }
+        if purchases > 0 && hoard == 0 { good.push(format!("you spent your souls on time ({})", plural(purchases, "purchase", "purchases"))); }
         let hoard = if said_before("souls for") { 0 } else { hoard };
-        if let Some((start, secs, n, _)) = unused {
+        if let Some((start, secs, n, _, _)) = unused {
             out.push(self.fill("pattern_window", &[("time", format!("{}:{:02}", start / 60, start % 60)), ("count", plural(n, "enemy", "enemies")), ("secs", secs.to_string())]));
         }
         if fights_missed >= 2 { out.push(self.fill("pattern_missed", &[("fights", plural(fights_missed as usize, "time", "times"))])); }
@@ -615,10 +630,15 @@ impl ReviewCoach {
         if hoard >= 60 { out.push(self.fill("pattern_hoard", &[("hoard", num(hoard_tier)), ("secs", hoard.to_string()), ("peak", num(peak))])); }
         if out.is_empty() {
             if deaths > 0 || known < 120 { return None; }
-            out.push(self.fill("pattern_good", &[("min", min.to_string()), ("lane", pct(Area::Lane).to_string()), ("jungle", pct(Area::Jungle).to_string()), ("joined", if fights_joined > 0 { format!(", with your team for {}", plural(fights_joined as usize, "fight", "fights")) } else { String::new() })]));
+            // Lane / jungle split as context after the specific items.
+            good.push(format!("a {}/{} split between lanes and jungle", pct(Area::Lane), pct(Area::Jungle)));
+            out.push(self.fill("pattern_good", &[("min", min.to_string()), ("good", and_list(&good))]));
+            good.clear();
         }
-        let picked: Vec<_> = out.into_iter().take(3).collect();
-        let text = picked.iter().map(|(a, b)| format!("{a} {b}")).collect::<Vec<_>>().join(" ");
+        let mut picked: Vec<_> = out.into_iter().take(3).collect();
+        // A balanced summary: the criticism, then what went well.
+        if !good.is_empty() { picked.push(self.fill("pattern_balance", &[("good", and_list(&good))])); }
+        let text = picked.iter().map(|(a, b)| format!("{a} {b}").trim_end().to_string()).collect::<Vec<_>>().join(" ");
         Some((text, about_deaths))
     }
 }

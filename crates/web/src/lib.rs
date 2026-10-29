@@ -111,6 +111,10 @@ impl Coach {
         // Death review (why you died, from the minutes before), play-pattern summaries and the
         // fight-lost / walking-out-alone warnings. Replaces the single death-cause sentence.
         if self.options.deaths { rules.push(Box::new(coach_engine::review::ReviewCoach::default())); }
+        // Praise for what went well (enemy-dead window used, urn delivered, souls spent on time,
+        // deathless streaks, walking out with a teammate, a growing team lead). Full scan only:
+        // it needs the top bar, status effects and the structure banner ('praise' in FULL_ONLY).
+        if self.options.deaths { rules.push(Box::new(coach_engine::praise::PraiseCoach::default())); }
         if self.options.counters { rules.push(coach_engine::counter_rule_from_json(&self.counters).map_err(js_error)?); }
         // Active calls (debuff on you, CC, enemy-dead window, heading out weak, unsecured souls,
         // repeat killer, missed team fight) go first so their specific text wins ties.

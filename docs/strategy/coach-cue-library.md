@@ -64,6 +64,20 @@ Source (facts underlying triggers):
 | C04 | "Clear the pit first." | Weakened Patron, defenders in pit (shield/resist icon) | W 50%/100% resist with defenders in pit | P1 |
 | C05 | "Rejuv credits left. Push now." | Top bar shows credits remaining and buff time < 60s | W buff 3 min | P1 |
 
+## Positive reinforcement (praise)
+
+Added 2026-10-29 after rec12 (a 12/3/11 Grey Talon win): "point out and encourage the good behaviour that caused our team and myself to do so well, not only point out bad." Implemented in `crates/engine/src/praise.rs` with cards in `data/coaching/praise.json` (each quotes the rows above or the strategy pages it rests on). A praise names one observed decision with its numbers, is said only in a calm moment (alive, health 60%+ and not falling, no enemy marker close, not carrying the urn), at most 3 per 10 minutes and a minute apart; two waiting at once share one call.
+
+| ID | Cue (spoken, shortened) | Trigger (HUD-observable) | Basis | Pri |
+|---|---|---|---|---|
+| P01 | "Good use of the 13:35 window: with five enemies dead you pushed into their base with your team." | 2+ enemy respawn timers held 15 s, and you in their half (y < 0.38) next to a teammate, your lane's front 15%+ further up on 3 reads (3+ dead), or their structure's health banner | C count survivors, take the safe objective (deadlockatlas); M11 | P3 |
+| P02 | "Urn delivered: about 2,100 souls." | Carrying the urn, then souls up by the urn's bounty (up to 1,500) within 45 s | W courier gets the souls and 4 permanent buffs | P3 |
+| P03 | "Good shopping: you spent 5,941 souls during your respawn." | Souls at death at least the death-screen tier, two dead reads under it | G buy during respawn or at the base | P3 |
+| P04 | "Good timing: you spent 1,400 souls 13 seconds after reaching 1,600." | Souls reached the usual tier and fell 800+ under it on two reads within 60 s | G spend souls immediately; C shop after value spikes | P3 |
+| P05 | "10 minutes without dying. You've been dead 0% of the game so far." | 10 / 20 minutes since the start (watched from the first 2 minutes) or the last respawn, no recording gap | G each death costs time and souls; W downtime | P3 |
+| P06 | "You walked out with a teammate this time." | An earlier death with every visible teammate a quarter of the map away; after this respawn an allied marker beside you on two reads on the way out | G group, avoid being caught solo; T01 | P3 |
+| P07 | "Your team's soul lead grew from 10,000 at 20:32 to 28,000 at 25:34." | Reliable team totals (no digit drop, no jump, never falling), lead 15%+ that grew 4,000+ over 4-8 minutes, from 10:00 | G a soul lead converts to items, fights, objectives | P3 |
+
 ## Counts and notes
 - 47 rows; subset can be reduced to ~40 by dropping P3 rows (L09, L08, E07, E09, E05, T05, T08, M12, M13, L03) for a leaner set.
 - UNVERIFIED thresholds: all "high unspent souls", "health < 35%", "20s+ missing" values are coach design choices to tune; they are not from sources.

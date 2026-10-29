@@ -160,3 +160,33 @@ fn visible_ui_values_do_not_authorize_coaching_when_game_state_is_unknown(){let 
     // Critical health still preempts.
     s.hp=Some(100);assert_eq!(LaneCoach::default().decide(&s).unwrap().cue_key,"lane:critical");
 }
+#[test]fn a_drop_that_leaves_you_healthy_is_a_trade_not_a_back_off(){
+    // rec12 8:59: 93% -> 76% in one read said "Health looks low or falling".
+    let mut e=Engine::new(vec![Box::new(LaneCoach::default())]);e.min_gap_secs=0;let mut s=state();
+    let mut at=|t:u32,hp:u32,d:Option<f32>,s:&mut GameSnapshot|{s.game_clock_secs=Some(t);s.hp=Some(hp);s.health_delta_ratio=d;e.step(s).into_iter().map(|c|c.key).collect::<Vec<_>>()};
+    at(400,930,None,&mut s);
+    assert!(!at(403,760,Some(-0.17),&mut s).contains(&"lane:back_off".to_string()));
+    // Still a warning once health is under the healthy mark, or on a fast fall.
+    assert!(at(406,600,Some(-0.16),&mut s).contains(&"lane:back_off".to_string()));
+    let mut e2=Engine::new(vec![Box::new(LaneCoach::default())]);e2.min_gap_secs=0;let mut s2=state();
+    s2.hp=Some(1000);e2.step(&s2);s2.game_clock_secs=Some(403);s2.hp=Some(680);s2.health_delta_ratio=Some(-0.32);
+    assert_eq!(e2.step(&s2).first().map(|c|c.key.as_str()),Some("lane:back_off"));
+}
+#[test]fn the_critical_call_does_not_follow_a_back_off_of_the_same_fall_unless_truly_critical(){
+    // rec12 25:12 "back off" then 25:13 "Health critical" at 45%.
+    let mut e=Engine::new(vec![Box::new(LaneCoach::default())]);e.min_gap_secs=0;let mut s=state();
+    let mut at=|t:u32,hp:u32,d:Option<f32>,s:&mut GameSnapshot|{s.game_clock_secs=Some(t);s.hp=Some(hp);s.health_delta_ratio=d;e.step(s).into_iter().map(|c|c.key).collect::<Vec<_>>()};
+    at(400,600,None,&mut s);
+    assert_eq!(at(402,440,Some(-0.16),&mut s),["lane:back_off"]);
+    assert!(at(404,300,Some(-0.14),&mut s).is_empty(),"a fast fall 2 s after the back-off");
+    assert_eq!(at(406,120,Some(-0.18),&mut s),["lane:critical"],"under 15% it is said");
+}
+#[test]fn one_healthy_read_between_two_hits_is_the_same_episode(){
+    let mut e=Engine::new(vec![Box::new(LaneCoach::default())]);e.min_gap_secs=0;let mut s=state();
+    let mut at=|t:u32,hp:u32,s:&mut GameSnapshot|{s.game_clock_secs=Some(t);s.hp=Some(hp);s.health_delta_ratio=None;e.step(s).into_iter().map(|c|c.key).collect::<Vec<_>>()};
+    assert_eq!(at(400,100,&mut s),["lane:critical"]);
+    at(403,700,&mut s);
+    assert!(at(406,100,&mut s).is_empty(),"healed for 3 s only");
+    at(409,700,&mut s);at(415,700,&mut s);at(420,700,&mut s);
+    assert_eq!(at(423,100,&mut s),["lane:critical"],"healed for 11 s: a new episode");
+}

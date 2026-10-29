@@ -35,8 +35,20 @@ impl Default for LaneCoach {
 /// low episode (until health is back to 60%), and also on a fast fall (30% of max health lost
 /// within 6 s while under half; 25%, or crowd control while falling, under 45%); the back-off call
 /// once per damage episode (until health recovers to the healthy mark).
+///
+/// rec12 still spoke each five times in 28 minutes (live, fast path): the back-off call 1-15 s
+/// before the critical call of the same fall (14:32 / 14:42, 25:12 / 25:13), and back-offs at
+/// 69-76% health from one sudden read-to-read drop (3:05, 8:59, 28:47). So: a fast-fall critical
+/// call (health still above [`CRITICAL`]) is not said within [`CRITICAL_AFTER_BACK_SECS`] of a
+/// back-off; a drop alone does not warn while health is still at the healthy mark unless it is
+/// a fast fall ([`FAST_FALL`]); and an episode only ends after [`RECOVER_SECS`] at the recovered
+/// level (one healthy read between two hits is the same fight).
 #[derive(Clone,Default)]
-struct HealthMemo { reads:std::collections::VecDeque<(u32,f32)>, critical_said:bool, back_said:bool, last_clock:u32 }
+struct HealthMemo { reads:std::collections::VecDeque<(u32,f32)>, critical_said:bool, back_said:bool, last_clock:u32,
+    /// Since when health is back at 60% / the healthy mark; when the last back-off was spoken.
+    over60_since:Option<u32>, healthy_since:Option<u32>, back_at:Option<u32> }
+pub const CRITICAL_AFTER_BACK_SECS:u32 = 12;
+pub const RECOVER_SECS:u32 = 10;
 /// Fraction of max health lost within FALL_SECS that counts as a fast fall.
 pub const FAST_FALL:f32 = 0.30;
 pub const FALL_SECS:u32 = 6;
@@ -206,8 +218,8 @@ impl Rule for LaneCoach {
         if let Some(h)=h {
             m.reads.push_back((clock,h));
             while m.reads.front().is_some_and(|(t,_)| t+FALL_SECS<clock) {m.reads.pop_front();}
-            if h>=0.6 {m.critical_said=false;}
-            if h>=self.catalog.thresholds.healthy {m.back_said=false;}
+            if h>=0.6 { let since=*m.over60_since.get_or_insert(clock); if clock>=since+RECOVER_SECS {m.critical_said=false;} } else {m.over60_since=None;}
+            if h>=self.catalog.thresholds.healthy { let since=*m.healthy_since.get_or_insert(clock); if clock>=since+RECOVER_SECS {m.back_said=false;} } else {m.healthy_since=None;}
         }
         // A fast fall is the emergency before the health is critical.
         let peak=m.reads.iter().map(|r| r.1).fold(0.0f32,f32::max);
@@ -225,19 +237,26 @@ impl Rule for LaneCoach {
             }
         }
         let Some(d)=d.filter(|d| d.speak) else {return vec![]};
+        let truly=h.is_some_and(|h| h<CRITICAL);
         match d.cue_key.as_str() {
             "lane:critical" if m.critical_said => return vec![],
+            // The back-off call of this fall already said "back off" (rec12 25:12 / 25:13).
+            "lane:critical" if !truly && m.back_at.is_some_and(|t| clock>=t && clock<t+CRITICAL_AFTER_BACK_SECS) => return vec![],
             "lane:back_off" if m.back_said => return vec![],
+            // A read-to-read drop that leaves you at the healthy mark is a trade, not low health
+            // (rec12 8:59 at 76%); a fast fall still warns.
+            "lane:back_off" if h.is_some_and(|h| h>=self.catalog.thresholds.healthy) && !s.health_delta_ratio.is_some_and(|d| d < -FAST_FALL) => return vec![],
             _ => {}
         }
         vec![Cue {key:d.cue_key,text:d.text,priority:d.priority,cooldown_secs:d.cooldown_secs}]
     }
     fn spoken(&self,cue:&Cue) {
         let mut m=self.health.borrow_mut();
+        let now=m.last_clock;
         // A debuff / crowd-control escape call is the back-off call for this episode.
         match cue.key.as_str() {
-            "lane:critical" => {m.critical_said=true;m.back_said=true;}
-            k if k=="lane:back_off" || crate::active::is_escape_call(k) => m.back_said=true,
+            "lane:critical" => {m.critical_said=true;m.back_said=true;m.over60_since=None;m.healthy_since=None;}
+            k if k=="lane:back_off" || crate::active::is_escape_call(k) => {m.back_said=true;m.back_at=Some(now);m.healthy_since=None;}
             _ => {}
         }
     }
