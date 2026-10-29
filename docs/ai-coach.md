@@ -32,8 +32,33 @@ top of the rule-based calls and does not change them.
 4. On the Coach page, use **Ask the coach now** at any time.
 
 Other settings:
-- **Advice interval:** default 40 s, minimum 15 s.
-- **Max reply tokens:** default 1,024 (range 512-8,192), changeable in Settings at any time with no rebuild. 200 (the old default) cut Claude Haiku replies off mid-JSON on OpenRouter; saved values below 512 are raised to 1,024. Use 2,048+ for reasoning models. A reply cut off by the limit (`finish_reason: "length"`) is retried once with double the limit, then reported as "Reply cut off".
+- **Advice interval when quiet:** default 90 s (minimum 15 s). Meaningful changes ask sooner (see
+  "When it speaks"). A saved 40 s (the old, chatty default) is moved to 90 s.
+- **Max reply tokens:** default 1,024 (range 512-8,192): the budget for the answer itself. The
+  reasoning headroom below is added on top. 200 (an old default) cut Claude Haiku replies off
+  mid-JSON on OpenRouter; saved values below 512 are raised to 1,024. A reply cut off by the limit
+  (`finish_reason: "length"`, including a reply whose reasoning used the whole budget) is retried
+  once with double the reply budget, then reported as "Reply cut off".
+- **Model reasoning:** *Low* (default), *Off* or *Model default*. rec11 ran Claude Haiku 5.5 and
+  `openrouter/free` (routed to a Nemotron reasoning model) through OpenRouter with no reasoning
+  setting: replies spent 400-1,240 reasoning tokens, took 3-6.6 s, and 5 of 60 ran out of tokens
+  before answering. How the setting is sent (`reasoningParams()`):
+
+  | Gateway | Off | Low | Model default | Extra max_tokens |
+  |---|---|---|---|---|
+  | OpenRouter (base URL on `openrouter.ai`) | `reasoning: {enabled: false}` | `reasoning: {effort: "low"}` | nothing | Off 0 · Low +1,024 · Default +2,048 |
+  | OpenAI `o1`/`o3`/`o4-mini`/`gpt-5*` (not via OpenRouter) | `reasoning_effort: "minimal"` (gpt-5) / `"low"` (o-series) | `reasoning_effort: "low"` | nothing | gpt-5 Off +256, else +1,024 / +2,048 |
+  | Anthropic Messages | nothing (no extended thinking unless asked) | nothing | nothing | 0 |
+  | Other OpenAI-compatible (Ollama, LiteLLM, …) | nothing | nothing | nothing | 0 |
+
+  OpenRouter turns `effort: "low"` into a 1,024-token thinking budget for Claude models
+  (`max(max_tokens × 0.2, 1024)`) and requires `max_tokens` to stay above it, hence +1,024
+  (docs: openrouter.ai/docs/use-cases/reasoning-tokens). OpenAI reasoning models get
+  `max_completion_tokens` and no `temperature`. If a gateway answers HTTP 400 naming the
+  reasoning field (a model whose reasoning is mandatory), the request is sent once more without
+  it. Reasoning tokens (`usage.completion_tokens_details.reasoning_tokens`) are kept in the AI
+  exchange log (`usage`, `max_tokens`, `reasoning`), shown in the AI panel meta line, in the raw
+  exchange header, in **Test connection**, and averaged under **Runtime diagnostics**.
 - **Speak AI advice:** respects **Mute voice**.
 - **Extra request headers:** a JSON object, for example `{"HTTP-Referer": "https://example.com"}`
   for OpenRouter, or `{"api-key": "…"}` for an Azure-style proxy. These header values are
@@ -41,7 +66,8 @@ Other settings:
 
 Request shapes:
 - **OpenAI-compatible:** `POST {base}/chat/completions` with `Authorization: Bearer <key>`
-  (left out when no key is set) and `{model, messages:[system,user], max_tokens, temperature: 0.3}`.
+  (left out when no key is set) and `{model, messages:[system,user], max_tokens, temperature: 0.3}`
+  plus the reasoning field above (OpenAI reasoning models: `max_completion_tokens`, no temperature).
 - **Anthropic:** `POST {base}/v1/messages` with `x-api-key`, `anthropic-version: 2023-06-01`,
   `anthropic-dangerous-direct-browser-access: true` and `{model, max_tokens, temperature, system, messages}`.
 
@@ -63,9 +89,16 @@ gateway that is not running.
 
 ## When it speaks
 
-- **Periodic:** every *interval* seconds, but only while coaching live, alive, and on the
-  Gameplay screen. It skips the request within 10 s of a High-priority rule call, such as
-  low health.
+- **Periodic, on meaningful changes.** Only while coaching live, alive and on the Gameplay screen,
+  never within 10 s of a High-priority rule call, at least 45 s (`EVENT_GAP_SECS`) after the last
+  periodic request **and** the last spoken AI advice, and only for an event from the last 40 s:
+  a new phase (laning → midgame at 8:00, → lategame at 20:00), a respawn, an enemy-dead window
+  (≥ 2 enemies dead), a major objective within 60 s (Powerups at 5:00, Sinner's at 8:00, every
+  Soul Urn, first Rift, Guardians at 12:00, Walkers at 18:00), souls reaching the usual buy, or a
+  big swing in the team souls difference (≥ 4,000 or 5% of the average team souls) since the last
+  request. The prompt starts with `WHY NOW: <what changed>`.
+- **Periodic, quiet.** Otherwise once per *interval* (default 90 s) with `WHY NOW: routine check,
+  nothing new since …: PASS unless you see a NEW, specific insight`.
 - **Death:** once per death, after the rule coach's death review has been spoken or 4 s after
   the death panel has been read (8 s at most). This is a deeper "why you died and what to
   change" answer of up to 3 sentences, built from the damage panel, the killing blow, the
@@ -73,7 +106,8 @@ gateway that is not running.
   rule death review (which names the killer hero). Opening the shop or scoreboard from the
   death screen is the same death, not a respawn followed by a second death.
 - **On demand:** **Ask the coach now**. In Replay lab and when you are not live, the answer is
-  shown but not spoken.
+  shown but not spoken. Before any match state has been read it does not send a request (rec11
+  spent one on "Manual trigger with no clock").
 
 Safeguards:
 - Only one request is in flight at a time.
@@ -81,7 +115,7 @@ Safeguards:
 - Pause, Stop and starting a replay cancel the request (`AbortController`).
 - After an error, automatic requests back off exponentially: 5 s, 10 s, 20 s, … up to 5 min.
   The backoff is shown in the panel and under **Runtime diagnostics → AI coach**.
-- Spoken AI advice uses the existing speaker with cue keys `ai:<trigger>:<focus>` and a 30 s
+- Spoken AI advice uses the existing speaker with cue keys `ai:<trigger>:<theme>` and a 30 s
   cooldown for periodic advice.
 - AI priority is capped at *Normal* in the speech queue, so it never interrupts urgent rule
   calls.
@@ -109,15 +143,33 @@ repeats, in the prompt and in code (`checkAdvice()` in `web/src/ai-coach.ts`):
   or spending are dropped from the answer; if nothing is left, nothing is spoken. A sentence that
   names a tier cheaper than the usual buy (half of it on the death screen) is dropped even when
   the gate is open.
-- **No same focus twice in a row.** Answers are normalized to a topic (`topicOf()`: economy,
-  positioning, health, team, objective, wave, map, jungle, death). An automatic periodic answer
-  on the same topic as the previous AI call within 3 minutes is not spoken, unless it is
-  High priority and not about souls. "souls" and "items" are the same topic, and an answer whose
-  every sentence is about souls is economy whatever its tag.
+- **Theme memory (periodic answers).** Answers are normalized to a theme (`topicOf()`:
+  positioning, healing, team, objective, economy, map, itemization, wave, mechanics; the
+  model's `focus` tag first, else the text; an answer whose every sentence is about souls is
+  economy). Each delivered call also records the **weakness concepts** it coaches (`CONCEPTS`:
+  range against divers, not walking out alone, healing before fights, waiting for the team,
+  missing enemies, Midboss, crowd control) and the episode counters of the live triggers at
+  that moment. Within 5 minutes (`THEME_WINDOW_SECS`):
+  - a sentence restating a concept already coached is dropped ("Silver and Apollo are down, so
+    regroup … Stay at max range behind your front line." keeps only the first sentence); if
+    nothing self-contained is left (no action, or a pronoun pointing at the dropped sentence),
+    nothing is spoken;
+  - an answer on a theme already coached is not spoken;
+  - **unless a NEW concrete trigger** for it happened since: a live trigger that became active
+    again after the earlier call (`liveTriggers()`: `diver-near`/`enemy-near` for positioning,
+    `hp-low` for healing, `respawn`/`allies-down`/`isolated`/`enemy-window` for team,
+    `enemy-window`/`objective-soon` for objective, `missing` for map, `souls-tier` for economy,
+    `debuff` for mechanics). High priority alone is not new (rec11 marked half its repeats High).
+  - The rule coach's "Profile focus: … Stay at max range behind your front line." counts as
+    coached too.
+  Death reviews and **Ask the coach now** are not theme-gated (they still pass the souls gate
+  and the near-duplicate check), but their themes are remembered. The prompt carries
+  `THEMES COACHED` (last 10 minutes: each theme/weakness with its clocks and `blocked`,
+  `NEW trigger now: …` or `free again`).
 - **No near-duplicates.** An answer whose content words overlap ≥ 60% (of the shorter text) with
   an AI call from the last 5 minutes or a rule call from the last 90 s is not spoken.
 - **RECENT AI ADVICE.** The last 4 delivered AI calls (10 minutes) are in the prompt with their
-  clock and topic, so the model can vary on its own.
+  clock and theme, so the model can vary on its own.
 - **Cheap retry only.** If an automatic answer is rejected and came back within 2.5 s, the coach
   asks once more with "YOUR PREVIOUS ANSWER WAS NOT USED (<reason>) … give advice on a different
   focus, or PASS". Otherwise it simply does not speak.
@@ -134,37 +186,84 @@ matches) has the matching weakness; matched angles come first. The model is told
 |---|---|---|
 | Respawned ≤ 45 s ago | walk out with a teammate or catch the wave by your Guardian | Dies soon after respawning, Dies alone |
 | Health < 60% and not rising | heal to full first (shopping does not heal), leave on the first big hit | Goes back in hurt, Stays in at low health, Gets burst down |
-| A close-range diver alive (Abrams, Shiv, Yamato, Mo & Krill, Calico, Lash, Victor, Drifter, Billy) and an enemy near you, a close-range last death, or the profile weakness | hold max range behind your front line, save the escape for their dive | Killed at close range, Same killer again |
-| ≥ 2 enemies dead | group up and take a Guardian, Walker or the furthest lane | Enemy-dead windows unused |
+| A close-range diver alive (Abrams, Shiv, Yamato, Mo & Krill, Calico, Lash, Victor, Drifter, Billy) **and** an enemy near you, or walking out after a close-range death (a diver merely alive no longer counts: it is true all game and made rec11 repeat "max range" 15 times) | hold max range behind your front line, save the escape for their dive | Killed at close range, Same killer again |
+| ≥ 2 enemies dead | group up and take the Guardian or Walker in the furthest pushed lane (named) | Enemy-dead windows unused |
+| A visible enemy hero under 30% (and you ≥ 50%) | a kill chance with an ally; a low enemy is a target, not a threat | Enemy-dead windows unused |
 | ≥ 2 allies dead and more than enemies | the fight is lost: back off together | Stays in lost fights |
 | No ally near and ≥ 2 enemies missing | move toward a teammate | Dies alone, Pushes in with enemies missing |
 | A status effect on you | out of stamina: don't start a trade; a debuff: disengage or cleanse | crowd control |
 
-The latest rule death review (`death:review:*`, `active:close`, `active:repeat:*`) is quoted for
-5 minutes after a death, so live advice can refer back to it.
+An angle whose concept was coached in the last 5 minutes in the same trigger episode is left out.
+The latest rule death review (`death:review:*`, `active:close`, `active:repeat:*`) is quoted in full
+for the death review; afterwards periodic prompts carry a compact `Last death at …` line (killer
+from the rule review, cause, top damage, status effects).
+
+## rec11 review: what the live AI coach said
+
+rec11 (Violet, 37 min, OpenRouter with Claude Haiku 5.5) spoke **44 AI tips** on top of ~430 rule
+cues. Each was graded against the snapshot at its clock (`frames[].snapshot`, the prompt's STATE
+before 6:13):
+
+| Grade | Tips | Examples |
+|---|---|---|
+| Helpful | 13 | 2:29 "You're at 24% health, go back to your Guardian and heal"; 3:08 "Blue has seven enemy troopers to your one"; 13:53 "Calico and Graves are down, group and push"; 17:16 "5,326 unspent souls, buy the 3,200 item"; most death reviews (Leech Therapy stun, Jar of Dead 879) |
+| Generic | 8 | 3:48 "Three enemies are missing … don't cross the map alone"; 16:33 "treat the fog as hostile"; 29:54 "Four enemies are missing … Assume a dive is coming." |
+| Repeated | 19 | "Calico is alive … hold max range behind your front line" at 5:21, 11:30, 14:27, 20:57, 23:19, 30:34; "Midboss is up, don't contest it alone" at 15:10, 15:48, 18:41, 21:43, 24:01, 32:37, 36:42; "fall back to your Guardian until X respawns" 6 times |
+| Wrong | 4 | 1:43 "Enemy yellow is missing" (a lane colour as a hero); 4:44 Midboss advice in the laning phase; 17:57 "Calico is at 18% and melee range is how you've died most." (a low enemy is a target, and the action sentence was cut off); 27:58 "stay out of Graves's melee range" (Graves is a ranged caster) |
+
+The model never passed in game (the only PASS was a manual ask before any state: "Manual
+trigger with no clock"). Failure patterns and their fixes:
+
+1. **One profile weakness restated every call.** The COACHING ANGLE "close-range divers alive"
+   fired whenever Calico was alive (all game) because the profile has "Killed at close range" —
+   and the rule coach's "Profile focus" line said the same. → the angle now needs an enemy near
+   you; theme memory drops a restated weakness for 5 minutes unless a new trigger happens.
+2. **"Midboss is up" as advice.** The icon is up almost all game, the brief said "Do not die alone
+   while it is up" and an excerpt said "Midboss is up. Don't die alone." → the Objectives line
+   mentions the Midboss only after 10:00, says when it is a team target, and Midboss excerpts are
+   retrieved only with 3+ enemies dead.
+3. **Lane colours read as heroes.** "1 missing (last seen 3s ago Yellow)" became "Enemy yellow".
+   → "1 enemy hero missing (last seen 3s ago in Yellow lane)", "Green lane front …", and a
+   system-prompt rule.
+4. **Too chatty.** A 40 s interval gave ~1.3 tips/min; nothing told the model what changed. →
+   adaptive cadence with WHY NOW; quiet checks every 90 s that invite PASS.
+5. **Reasoning ate the budget.** 400-1,240 reasoning tokens per reply, 3-6.6 s, and 6 of 60
+   exchanges stopped at `finish_reason: "length"` with no answer (4 live periodic calls at the
+   1,024 limit). → Model reasoning Low (default) with headroom, reasoning tokens counted.
+6. **Hero kits guessed.** The profile was learned on Grey Talon; the model applied it to Violet
+   and called Graves a melee hero. → `HERO_ROLES` table (only heroes we are sure of; others say
+   "role not in the coach table: do not guess the kit") and a profile/hero mismatch note.
 
 ## Offline evaluation
 
 `web/scripts/ai-coach-eval.ts` replays a recording through the real controller with a **fake
-model that answers "spend your souls" every time**, using a player profile learned from earlier
-recordings, and prints what would have been spoken plus three full sample prompts (mid-game
-periodic, death review, just after a respawn):
+model that answers with the rec11 model's stock lines** (max range, walk out, heal first, Midboss,
+souls), using the player profile the live coach used (taken from the recording's prompts), and
+prints the cadence, what would have been spoken and gated (with reasons) and two full sample
+prompts (an event-driven periodic request and a death review). With `AI_EVAL_URL`,
+`AI_EVAL_KEY`, `AI_EVAL_MODEL` (optional `AI_EVAL_PROVIDER=anthropic`,
+`AI_EVAL_REASONING=off|low|default`, `AI_EVAL_N=5`) it also sends a handful of the event prompts
+to that gateway and prints the answers and reasoning tokens. Keys are never printed.
 
 ```powershell
 cd web
-node --experimental-strip-types scripts/ai-coach-eval.ts            # defaults to frames/rec8/replay1.jsonl
-node --experimental-strip-types scripts/ai-coach-eval.ts --quiet     # counts and spoken/skipped list only
+node --experimental-strip-types scripts/ai-coach-eval.ts            # defaults to frames/rec11/recording.json
+node --experimental-strip-types scripts/ai-coach-eval.ts --quiet     # counts only
 ```
 
-On rec8 (600 frames, 13:32–50:20): 94 requests (45 of them cheap retries) and 4 answers spoken,
-all death reviews; 1 of them mentions souls (17:00, 2,695 souls ≥ the 1,600 death-spend
-threshold). The other 90 answers (45 triggers, each with its retry) were skipped: 39 × "saving
-for the usual 3,200 / 6,400 buy", 2 × "the rule coach already said it" (20:40, 39:17),
-2 × "names a tier cheaper than 3,200" (18–19 min, "buy a 1,600 item") and 2 × "near-duplicate
-of the AI call" (death reviews 3–4 min after an identical one). The death reviews at 28:02,
-42:12 and 49:47 kept only their non-souls sentence. ("Same focus" never fired here because the
-souls gate already stopped every periodic souls answer; the unit tests cover it.) The recordings are git-ignored, so the script is not part of `npm run test:unit`;
-the unit tests cover the same rules.
+rec11, 6:13-40:00 (33.8 game minutes, 600 frames, defaults: reasoning Low, 90 s quiet interval):
+
+| | Before (live) | After (this build, fake stock-line model) |
+|---|---|---|
+| Gateway requests | 47 (1.39/min) | 34 first attempts (1.01/min): 21 on events, 6 quiet checks, 7 death reviews; plus 18 instant "cheap retries" that a real 3-6 s model would not get |
+| Tips spoken | 35 (1.04/min) | 16 (0.47/min) |
+| "max range" / "midboss" / "walk out" spoken | 10 / 8 / 7 | 6 (4 of them in death reviews) / 1 / 0 |
+| Answers gated | — | 36: 18 near-duplicates, 10 repeats of a rule call (the "Profile focus" line), 8 restated weaknesses with no new trigger |
+
+Event triggers on rec11: respawn 6, enemy-dead window 6, objective within 60 s 5, new phase 2,
+souls tier 1, team souls swing 1. A real model is also told to PASS on routine checks, so it
+should speak less than the fake one. The recordings are git-ignored, so the script is not part of
+`npm run test:unit`; the unit tests cover the same rules.
 
 ## What is sent
 
@@ -173,7 +272,7 @@ The input budget is **about 2,500 tokens**, estimated as characters ÷ 4 and enf
 
 | Part | Budget | Source |
 |---|---|---|
-| System prompt | ~2,200 chars | `SYSTEM_PROMPT` in `web/src/ai-coach.ts` |
+| System prompt | ~2,700 chars | `SYSTEM_PROMPT` in `web/src/ai-coach.ts` |
 | Task line | ~250–500 chars | depends on the trigger (periodic / death / manual) |
 | State summary | ≤ 3,000 chars | `buildSummary()`: the latest snapshot plus about 90 s of history, recent AI advice and coaching angles |
 | Player profile | ≤ 900 chars | `setProfileProvider(fn)` callback, if registered |
@@ -187,47 +286,75 @@ high-value ones (deaths, HP, souls, recent calls).
 
 The summary uses only fields the app has read, and the model is told that "unknown" never
 means safe. It includes:
-- the clock and phase
-- your hero, level and K/D/A (when read)
+- the clock and phase (laning until about 8:00, midgame 8:00-20:00, lategame from 20:00)
+- WHY NOW: what changed to trigger a periodic request
+- your hero with its kit role from `HERO_ROLES` (or "role not in the coach table: do not guess
+  the kit"), level and K/D/A (when read), and a note when the profile was learned on another hero
 - HP and its 90/60/30-second trend
 - status effects
 - souls against the usual buy for the game time (saving / can afford), unsecured souls, how long
   you have held them, and whether souls advice is allowed (see the souls gate above)
 - "Respawned N s ago" for 45 s after a respawn
-- your items
+- your items with names and costs, and souls invested per slot (weapon / vitality / spirit)
 - your lane, how far up the lane you are, and the zone
 - allies and enemies alive, dead (with respawn timers), not seen recently, or at low HP
-- team souls
-- enemies visible, near you, or missing on the minimap
-- lane fronts
-- Midboss and Urn
+- enemy kit roles for the heroes in the table
+- team souls and the trend over about 3 minutes ("your team fell 6,000 further behind since")
+- enemy heroes visible, near you, or missing on the minimap ("last seen 3s ago in Yellow lane")
+- lane fronts ("Green lane front 60% up (troopers 3 yours v 2 theirs)")
+- Midboss (after 10:00 only, with when it is a target) and Urn
 - the next objective timers
 - deaths, including the damage breakdown, killing blow, status effects before death, allies and
   enemies near you, and whether the death-spend threshold was reached
-- the rule coach's death review for the latest death
-- RECENT AI ADVICE (what the AI already said, with topics) and recent rule calls
+- the rule coach's death review (death trigger), or a compact "Last death at … (N ago): killer;
+  cause; most damage; status effects" line afterwards
+- RECENT AI ADVICE (what the AI already said, with themes), THEMES COACHED and recent rule calls
 - COACHING ANGLES (live situation × player-profile weakness)
 
-Example (rec8, death review at 28:02, from `scripts/ai-coach-eval.ts`, abridged):
+Example (rec11, event-driven periodic request at 19:03, from `scripts/ai-coach-eval.ts`; the
+profile, knowledge and excerpts that follow are left out):
 
 ```text
-TASK: The player just died. Explain WHY from the death evidence (damage by source, killing blow, killer hero named by the rule death review, status effects or crowd control before death, health before, allies near), then give the ONE change for the next life, tied to a PLAYER PROFILE weakness when it matches. Talk about souls only if STATE says "Souls advice: allowed". Up to 3 short sentences, at most 45 words.
+TASK: Coach what WHY NOW says changed, with one specific call on a theme not in THEMES COACHED (unless the change is a NEW trigger for it). PASS if nothing new and specific is worth the player's attention or the rule coach already covers it.
 
 STATE
-Trigger: death · clock 28:02 (lategame) · screen Dead · YOU ARE DEAD
-You: Grey Talon · level 27
-Souls 2,418 on the death screen (below the 3,200 death-spend threshold, half the usual 6,400 buy) · Souls advice: not allowed (2,418 is below the 3,200 death-spend threshold: not a souls death)
-Allies: 3 alive, dead: Grey Talon (56s), Shiv (7s), Venator (24s)
-Enemies: 5 alive, dead: Kelvin (41s), not seen recently: 3
-Death at 27:57: cause Melee · damage taken: Melee 525, Flying Slash 501, Gun Damage 389, Melee 131, Express Shot 124, Power Slash 121 · killing blow Melee · last alive HP 32% · allies near you 0, enemies near 0 · unspent before death 2,394 · death-spend threshold 3,200: not reached · respawn 56s
-Rule death review (already spoken): Why you died: Yamato did 35% of the damage (622) with Flying Slash and Power Slash. You went from 86% to dead in 15 seconds. You were in their half with 4 enemies not seen by your team. …
-
-PLAYER PROFILE (from earlier matches; coach these weaknesses when the live situation matches)
-Player profile (4 matches, mostly Grey Talon, 16% dead, 2.6/10min deaths). Weak: Killed at close range: 6 of 7 deaths with a known cause came from melee range …; Dies soon after respawning: 8 of 12 deaths within 90 s of respawning [improving]; …
+Trigger: periodic · clock 19:03 (midgame, 8:00 to 20:00) · screen Gameplay
+WHY NOW: objective within 60 s: Soul Urn spawns at 20:00 (in 57s)
+You: Violet (role not in the coach table: do not guess the kit) · level 22 · profile is mostly from Grey Talon games: check its weaknesses fit Violet
+HP 1,935/1,935 (100%) · HP% 90s/60s/30s ago→now: 91→100→97→100
+Souls 2,526 (saving: the usual buy now is a 3,200 item; 674 short) · Souls advice: not allowed (saving for the usual 3,200 buy)
+Your items (8): Improved Spirit (1,600), Mystic Shot (1,600), Healing Booster (1,600), Radiant Regeneration (3,200), Restorative Shot (800), Spirit Shielding (1,600), Opening Rounds (1,600), Rapid Recharge (3,200) · invested by slot: weapon 4,000, vitality 3,200, spirit 8,000
+Area: Yellow lane · zone YORK : DOCKS
+Allies: 5 alive, dead: Celeste (5s), low HP: Paige 23%
+Enemies: 6 alive, not seen recently: 1
+Enemy roles: Lady Geist close-range spirit brawler; Dynamo support and teamfight initiator; Calico close-range diver; Graves ranged spirit caster with summons; others not in the coach table
+Enemy items seen: Debuff Reducer, Extra Spirit, Healing Booster, Kinetic Dash, Titanic Magazine, Rapid Recharge, Melee Lifesteal, Compress Cooldown, Restorative Shot
+Team souls: yours 92,000 vs enemy 93,000 (-1,000) · at 16:11 it was -1,000: steady
+Minimap: 4 enemy heroes visible
+Lanes: Green lane front 37% up (troopers 0 yours v 3 theirs); Blue lane front 56% up (troopers 0 yours v 0 theirs); Yellow lane front 42% up (troopers 2 yours v 1 theirs)
+Objectives: Midboss alive (team target only after a won fight)
+Upcoming: Powerups spawn at 20:00 (in 0:57); Soul Urn spawns at 20:00 (in 0:57)
+Deaths observed this session: 2 (at 10:08, 11:55)
+Last death at 11:55 (7:08 ago): Baba did at least 297 damage with Granny Long Legs, 27% of what the panel lists; cause Granny Long Legs · most damage Granny Long Legs 297 · carrying_urn, slowed
+RECENT AI ADVICE (yours):
+- [10:14] healing: Melee finished you again. Next life, hold max range behind your front line and heal above 60% before you go back in.
+- [13:40] objective: Enemies are down: group with your team and push the furthest lane now.
+- [14:27] team: Fall back to your Guardian with the living team and hold until your allies respawn.
+- [15:35] economy: Go back to your Guardian shop and spend your 3,599 souls on the usual buy now.
+THEMES COACHED (last 10 min; "blocked" = do not coach it again unless WHY NOW gives a new trigger for it):
+- theme healing: 10:14 (free again)
+- theme objective: 13:40 (free again)
+- theme team: 14:27 (blocked)
+- theme economy: 15:35 (blocked)
+- weakness "range against divers" [Killed at close range]: 10:14 (allowed: new trigger or 5 min passed)
+- weakness "healing before fights" [Gets burst down]: 10:14 (allowed: new trigger or 5 min passed)
+- weakness "waiting for the team": 14:27 (blocked)
+RECENT COACH CALLS: none
 ```
 
-A good reply cites Yamato's slashes, being alone in their half with four enemies unseen, and one
-change (walk out with a teammate and hold max range behind the front line) — and no souls.
+A good reply uses the Urn timing (who carries, which lane is safe for the delivery), names
+Calico or Graves only with what STATE says, and does not restate "max range" (blocked unless an
+enemy comes near) — or PASSes.
 
 ## Prompt design
 
@@ -236,17 +363,23 @@ change (walk out with a teammate and hold max range behind the front line) — a
   confident advice that the screen cannot support.
 - **One fix, short, imperative.** Advice is spoken mid-fight. The limit is two sentences and
   30 words (three sentences and 45 words for a death review). `parseAdvice()` enforces these
-  limits even if the model ignores them.
-- **No repeats, varied topics.** Recent rule calls and the AI's own recent advice are included;
-  the model must not reuse a focus within 3 minutes and must not repeat rule calls unless it
-  adds a concrete how-to. `PASS` (`"speak": null`) is an explicit, cheap option. Code enforces it
-  (see "Repetition and souls gating").
+  limits even if the model ignores them; when two sentences are too long it keeps the one with the
+  action, not a bare situation.
+- **Situation → specific action → why.** The model is asked for one idea with names (heroes,
+  "Green lane", items with costs, timers) and the principle in a few words, and to read WHY NOW
+  first. Green, Blue and Yellow are lanes, never heroes.
+- **No repeats, varied themes.** Recent rule calls, the AI's own recent advice and THEMES COACHED
+  are included; the model must not coach a blocked theme or weakness unless there is a new
+  trigger, must never restate a profile weakness as a generic reminder (the rule coach does),
+  and is told that PASS (`"speak": null`) is good. Code enforces it (see "Repetition and souls
+  gating").
 - **Review-style, tied to the player.** The model is told that the rule coach already covers
   routine reminders and to prefer what prevents deaths and wins fights, coaching a profile
   weakness when a COACHING ANGLE shows the situation matches it.
 - **Souls only when they matter.** Souls advice only when the summary says "Souls advice:
   allowed"; holding less than the usual buy is saving, not hoarding.
-- **Strict JSON with a reason.** `{"speak", "priority", "why", "focus"}`. `why` must cite the
+- **Strict JSON with a reason.** `{"speak", "priority", "why", "focus", "weakness"}` (`focus` is
+  one of the nine themes; `weakness` the profile weakness coached, or null). `why` must cite the
   evidence, and the panel shows it, so you can judge each call. The parser accepts code
   fences, text around the JSON and `<think>` blocks from local reasoning models. Anything else
   is shown as an error, not spoken.
@@ -262,6 +395,10 @@ change (walk out with a teammate and hold max range behind the front line) — a
 - `setProfileProvider(fn: () => string | null)` from `web/src/ai-coach.ts`: returns a short
   player-profile text (at most 900 characters are used). The app calls it on every request, and
   it must not throw.
+- `AiCoachDeps.items(id)` (optional): item name, cost and slot for the summary. `ai-coach-ui.ts`
+  loads them from `assets/items.json`.
+- `liveTriggers()`, `themeMemory()`, `reasoningParams()` and `usageOf()` are pure and exported
+  for other modules (for example an end-of-game review) and tests.
 - Optional snapshot fields are used when present: `status_effects`, `death_damage`,
   `death_killing_blow`, `level`, `unsecured_souls`, `kills` / `deaths` / `assists` and
   `minimap.zone`.

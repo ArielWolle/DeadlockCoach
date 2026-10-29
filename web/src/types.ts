@@ -66,6 +66,8 @@ export interface Settings {
   aiEnabled: boolean; aiProvider: 'openai' | 'anthropic'; aiBaseUrl: string; aiModel: string;
   /** Stored only in this browser's localStorage; never logged or exported. */
   aiKey: string; aiInterval: number; aiMaxTokens: number; aiSpeak: boolean; aiHeaders: string;
+  /** Model reasoning ("thinking") budget: 'off', 'low' (default) or the model's own 'default'. */
+  aiReasoning: 'off' | 'low' | 'default';
   /** Player profile (player-profile.ts): learn from matches and speak one focus reminder. Local only. */
   playerProfile:boolean;
 }

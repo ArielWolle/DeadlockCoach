@@ -109,13 +109,19 @@ test('settings save the AI gateway, test connection reports HTTP errors without 
   await page.getByLabel('Base URL').fill('https://gateway.test/v1');
   await page.getByLabel('Model', { exact: true }).fill('mock-model');
   await page.getByLabel('API key').fill(KEY);
-  await page.getByLabel('Advice interval (seconds)').fill('20');
+  await page.getByLabel('Advice interval when quiet (seconds)').fill('20');
   await page.getByRole('button', { name: 'Save settings' }).click();
   await page.reload();
   await expect(page.getByLabel('Enable the AI coach')).toBeChecked();
-  await expect(page.getByLabel('Advice interval (seconds)')).toHaveValue('20');
+  await expect(page.getByLabel('Advice interval when quiet (seconds)')).toHaveValue('20');
   await expect(page.getByLabel('API key')).toHaveValue('');
   await expect(page.getByLabel('API key')).toHaveAttribute('placeholder', /key is saved/);
+  // Model reasoning defaults to Low and is saved.
+  await expect(page.getByLabel('Model reasoning')).toHaveValue('low');
+  await page.getByLabel('Model reasoning').selectOption('off');
+  await page.getByRole('button', { name: 'Save settings' }).click();
+  await page.reload();
+  await expect(page.getByLabel('Model reasoning')).toHaveValue('off');
   await page.getByRole('button', { name: 'Test connection' }).click();
   await expect(page.locator('#ai-test-result')).toContainText('Gateway error: HTTP 401');
   await expect(page.locator('#ai-test-result')).not.toContainText(KEY);
@@ -129,10 +135,30 @@ test('settings save the AI gateway, test connection reports HTTP errors without 
   expect(logs.join('\n')).not.toContain(KEY);
 });
 
+test('OpenRouter: reasoning effort low with reply headroom is sent, and reasoning tokens are shown', async ({ page }) => {
+  await page.addInitScript(s => localStorage.setItem('deadlock-coach-settings-v1', JSON.stringify(s)), { ...settings('openai'), aiBaseUrl: 'https://openrouter.ai/api/v1', aiModel: 'anthropic/claude-haiku-5.5' });
+  const json = JSON.stringify({ speak: 'Graves is dead for 20 seconds: push Blue lane with your team now, because a Guardian is worth more than a kill.', priority: 'Normal', why: 'enemy dead', focus: 'objective' });
+  const seen = await mockGateway(page, 'openrouter.ai', () => ({ model: 'anthropic/claude-haiku-5.5', choices: [{ message: { content: json }, finish_reason: 'stop' }],
+    usage: { prompt_tokens: 3000, completion_tokens: 380, completion_tokens_details: { reasoning_tokens: 310 } } }));
+  await replay(page);
+  await page.getByRole('button', { name: 'Ask the coach now' }).click();
+  await expect(page.locator('#ai-advice')).toContainText('push Blue lane');
+  await expect(page.locator('#ai-meta')).toContainText('310 reasoning tokens');
+  const body = JSON.parse(seen[0].body);
+  expect(body.reasoning).toEqual({ effort: 'low' }); expect(body.max_tokens).toBe(2048);
+  expect(body.messages[1].content).toContain('You: Haze (mid-range gun assassin)');
+  await page.locator('[data-page="settings"]').click();
+  await expect(page.locator('#diagnostics')).toContainText('OpenRouter reasoning effort low');
+});
+
 test('a CORS or network failure is reported as such in the AI panel', async ({ page }) => {
   await page.addInitScript(s => localStorage.setItem('deadlock-coach-settings-v1', JSON.stringify(s)), settings('openai'));
   await page.route('https://gateway.test/**', route => route.abort('failed'));
   await page.goto('./');
+  // Before any match state is read, "Ask" does not spend a request (rec11: "Manual trigger with no clock").
+  await page.getByRole('button', { name: 'Ask the coach now' }).click();
+  await expect(page.locator('#ai-advice')).toContainText('No match state read yet');
+  await replay(page);
   await page.getByRole('button', { name: 'Ask the coach now' }).click();
   await expect(page.locator('#ai-state')).toHaveText('ERROR');
   await expect(page.locator('#ai-error')).toContainText('Network or CORS failure reaching https://gateway.test');
