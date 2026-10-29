@@ -510,12 +510,45 @@ word spoken version (about 1-2 minutes) that opens with specific praise after a 
 aloud and shown as text. Logic: `web/src/ai-review.ts` (DOM-free); UI: `web/src/ai-review-ui.ts`.
 
 **Triggers.** Automatic when the AI coach is on and Settings > "End-of-game review" is checked
-(default on): the PostGame screen, or a match the profile closes (new match, long gap) after at
-least 10 minutes of observed game time. Replays are never reviewed automatically; the Player page
-button **Review my last match** reviews the last finished match (live or the last completed replay,
-from the replay's own snapshots and rule cues) or, without one, the match in progress. One review
-per match (key: HUD match id + hero + end minute + deaths, because the HUD "match id" repeats across
-matches); a failed request can be retried, a reply that is not the JSON is stored and shown as raw text.
+(default on): the PostGame screen, or a match the profile closes after at least 10 minutes of
+observed game time: a new match, a long gap, the **end watch**, or **Stop** / the shared window
+closing. Replays are never reviewed automatically; the Player page button **Review my last match**
+reviews the last match: a live match still open is closed first when capture is not running (a
+match whose end was never seen), else the last finished match (live or the last completed
+replay, from the replay's own snapshots and rule cues); after a reload, the Player profile's last
+live match. One review per match (key: HUD match id + hero + end minute + deaths, because the HUD
+"match id" repeats across matches); a failed request can be retried, a reply that is not the JSON is
+stored and shown as raw text.
+
+**How a match end is seen** (rec13: a 38-minute match coached with the AI on got no review). rec13
+ended while dead: "ArchMother Defeat" over the death screen with "Respawn in 1" (frame 590, read
+Dead), over the Tab scoreboard (591, Scoreboard), a black frame (592, Loading), the MVP screens
+(593-596, Unknown) and the post-game summary with PLAY AGAIN and "ESC BACK" (597-599, read as Shop
+with the last hero and an extrapolated clock). No frame was PostGame and none ended the match, and
+the user stopped 26 s later. Now:
+- Vision (`crates/vision/src/scan.rs`, `screen.rs`): the Defeat / Victory banner is also checked on
+  Dead and Scoreboard frames, and a Shop-anchored frame with the **PLAY AGAIN** button is PostGame
+  (the summary header names the losing Patron for both teams, so it is not a result). Fixtures
+  `00570`-`00573`. Re-scanning rec5 / rec8 / rec10 / rec12 / rec13 changes PostGame only on
+  frames checked on the screenshots: the banner over a death screen (rec13 590-591, rec8 584-585
+  Defeat, rec10 576-577 Victory with "Respawn in 85") and summary screens (rec13 597-599, rec8 and
+  rec10 593-598, rec12 0-63 and 100: rec11's summary).
+- End watch (`MATCH_END` / `MatchEndWatch` in `web/src/player-profile.ts`, shared by the Player
+  profile and the review tracker): after >= 10 min observed, a black Loading frame and >= 3 Loading
+  / Unknown frames 20 s or more after the last live frame (a moving clock on Gameplay / Dead /
+  Scoreboard, or a shop with souls or while dead) end the match at that live frame. Never while a
+  respawn timer runs (its end + 20 s; 90 s on a death screen without a timer read). Menus (pause),
+  countdowns, shops without souls and HUD frames with a frozen clock (pause, end camera) neither count
+  nor reset; Unknown frames alone never end a match (rec6 had 3-minute Unknown runs mid-match;
+  alt-tab), Unknown frames that read a clock are a missed HUD. After a black frame, non-live frames
+  are not game time (rec8: the summary added 38 s and an alive frame to its last death). Recorded
+  live snapshots: rec13 ends at frame 598 (22 s after the scoreboard), rec8 at 595, rec3 at its final
+  black screen; no other recording ends early (`web/scripts/match-end-check.ts` prints where a
+  recording ends and its digest).
+- Stop / share ended after >= 10 min observed closes the match (Player profile and review); a
+  shorter one stays open with a Coach notice. Visible: the Coach page notice says the review is
+  being written, ready (link to the Player page) or failed, or why there is none (AI coach off,
+  review off in Settings, invalid settings, match too short); the Player page list says so too.
 
 **Match digest** (`buildDigest`, deterministic, at most 8,000 characters; observed facts only, "?" /
 "not read" for unknowns). A private `ReviewTracker` segments matches exactly like the player profile

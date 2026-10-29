@@ -93,3 +93,33 @@ fn the_defeat_banner_is_post_game() {
     assert_eq!(s.screen.as_deref(), Some("PostGame"));
     assert!(s.game_clock_secs.is_none() && s.souls.is_none());
 }
+
+#[test]
+fn the_defeat_banner_over_the_death_screen_and_scoreboard_is_post_game() {
+    // rec13 590 (Dead, "Respawn in 1") and 591 (Scoreboard): the match ended while dead and no
+    // PostGame frame was ever reported, so no end-of-game review ran.
+    for p in ["00570", "00571"] {
+        let s = twice(p);
+        assert_eq!(s.screen.as_deref(), Some("PostGame"), "{p}");
+        assert!(!s.dead && s.game_clock_secs.is_none() && s.hero.is_none(), "{p}: {s:?}");
+    }
+}
+
+#[test]
+fn the_post_game_summary_is_post_game_not_shop() {
+    // rec13 597-599: "ArchMother Defeated", player cards, PLAY AGAIN, "ESC BACK" bottom left.
+    let s = twice("00572");
+    assert_eq!(s.screen.as_deref(), Some("PostGame"));
+    assert!(s.game_clock_secs.is_none() && s.hero.is_none() && s.souls.is_none(), "{s:?}");
+    // A real shop of the same match stays a shop.
+    assert_eq!(twice("00573").screen.as_deref(), Some("Shop"));
+}
+
+#[test]
+fn a_match_ending_while_dead_reports_post_game_in_sequence() {
+    // In order as recorded: dead (respawn 9), Defeat over the death screen, then the summary.
+    let mut a = scanner();
+    let screens: Vec<String> = ["00523", "00570", "00571", "00572"].iter().enumerate()
+        .map(|(i, p)| a.scan(&frame(p), i as u64 * 4000).screen.unwrap_or_default()).collect();
+    assert_eq!(&screens[1..], ["PostGame", "PostGame", "PostGame"], "{screens:?}");
+}

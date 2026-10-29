@@ -1083,7 +1083,60 @@ export function migrate(raw: unknown): StoredProfile {
     focusTurn: num(r.focusTurn), focusFor: str(r.focusFor, 40) };
 }
 
-export interface ObserveEvents { matchStarted: boolean; respawned: boolean; died: boolean; ended: MatchRecord | null }
+/** Ending a match without a result screen (docs/ai-coach.md "End-of-game review"). rec13 ended
+ *  while dead: "Defeat" over the death screen (Dead), then over the Tab scoreboard (Scoreboard),
+ *  a black frame (Loading), the MVP screens (Unknown) and the post-game summary (Shop with the
+ *  last clock and hero): no PostGame frame, so the match stayed open and was never reviewed. */
+export const MATCH_END = {
+  /** Only a match observed this long ends without a result screen (or on Stop). */
+  min_span_secs: 600,
+  /** A black loading frame and >= 3 Loading / Unknown frames, this long after the last live HUD
+   *  frame. Unknown frames alone never end a match: rec6 had 3-minute Unknown runs mid-match (a
+   *  vision bug), alt-tab shows other windows; the end of a match always passes a black frame. */
+  idle_secs: 20, idle_frames: 3,
+  /** Never before the own respawn timer (up to ~90 s) has run out plus this; a death screen
+   *  without a timer read waits `dead_wait_secs`. */
+  respawn_grace_secs: 20, dead_wait_secs: 90,
+  /** Replays without wall time: frames instead (one loading frame needed). */
+  replay_frames: 5,
+} as const;
+/** Watches for the end of a match without a result screen. Live HUD frames (a clock that moves,
+ *  or the death screen; a shop with souls or while dead) keep the match going; Loading and
+ *  Unknown frames are end evidence; menus (pause), countdowns, shops without souls and HUD frames
+ *  with a frozen clock (pause, end-of-game camera) are neutral: they neither count nor reset. */
+export class MatchEndWatch {
+  private liveWall: number | null = null; private liveClock: number | null = null; private liveDead = false;
+  private frames = 0; private loading = 0; private deadline: number | null = null; private timer: number | null = null;
+  reset() { this.liveWall = null; this.liveClock = null; this.liveDead = false; this.frames = 0; this.loading = 0; this.deadline = null; this.timer = null; }
+  /** Feed one frame (in order); true when the match looks over. */
+  observe(s: Snapshot, wall: number | null, spanSecs: number): boolean {
+    const read = finite(s.game_clock_secs) ? Math.round(s.game_clock_secs) : null;
+    const dead = s.dead === true || s.screen === 'Dead';
+    const hud = s.screen === 'Gameplay' || s.screen === 'Dead' || s.screen === 'Scoreboard' || (s.screen == null && read != null);
+    const live = (hud && read != null && (this.liveClock == null || read !== this.liveClock || dead)) || (s.screen === 'Shop' && (dead || finite(s.souls)));
+    if (live) {
+      this.liveWall = wall; if (read != null) this.liveClock = read; this.liveDead = dead; this.frames = 0; this.loading = 0;
+      const timer = finite(s.respawn_secs) && s.respawn_secs >= 0 && s.respawn_secs <= 120 ? s.respawn_secs : null;
+      if (!dead) { this.deadline = null; this.timer = null; } else if (timer != null) { this.timer = timer; if (wall != null) this.deadline = wall + timer * 1000; }
+      return false;
+    }
+    // An Unknown frame that still reads a clock is a HUD the classifier missed (rec4), not a menu.
+    if (s.screen === 'Loading' || (s.screen === 'Unknown' && read == null)) { this.frames++; if (s.screen === 'Loading') this.loading++; }
+    if (spanSecs < MATCH_END.min_span_secs || this.liveClock == null) return false;
+    // Without wall time a death screen counts only when its last timer read was about to run out.
+    if (wall == null || this.liveWall == null) return (!this.liveDead || (this.timer != null && this.timer <= MATCH_END.respawn_grace_secs)) && this.loading >= 1 && this.frames >= MATCH_END.replay_frames;
+    const idle = (wall - this.liveWall) / 1000;
+    if (this.liveDead && (this.deadline != null ? wall < this.deadline + MATCH_END.respawn_grace_secs * 1000 : idle < MATCH_END.dead_wait_secs)) return false;
+    return this.loading >= 1 && this.frames >= MATCH_END.idle_frames && idle >= MATCH_END.idle_secs;
+  }
+  /** A black frame has been seen since the last live frame: later non-live frames (the MVP and
+   *  summary screens, read as Unknown / Shop with an extrapolated clock) are not game time. */
+  get suspended() { return this.loading > 0; }
+}
+
+export interface ObserveEvents { matchStarted: boolean; respawned: boolean; died: boolean; ended: MatchRecord | null;
+  /** How `ended` was decided: a result screen, a match boundary (clock reset, new id, long gap) or the end watch. */
+  endedBy?: 'result' | 'boundary' | 'idle' }
 export interface FocusCue { key: string; text: string; priority: 'Normal'; cooldown_secs: number }
 export const FOCUS_COOLDOWN_MS = 5 * 60_000;
 
@@ -1099,6 +1152,7 @@ export class PlayerProfile {
   private lastSave = 0; private resultSeen = false;
   /** The final clock and wall time of a match ended by its result screen (see after_result_secs). */
   private ended: { clock: number | null; wall: number | null } | null = null;
+  private endWatch = new MatchEndWatch();
   constructor(opts: { store?: KeyValueStore | null; key?: string; now?: () => number } = {}) {
     this.store = opts.store ?? null; this.key = opts.key ?? PLAYER_PROFILE_KEY; this.now = opts.now ?? (() => Date.now());
   }
@@ -1132,10 +1186,20 @@ export class PlayerProfile {
       if (this.current && !this.resultSeen) {
         if (result !== 'unknown') this.current.result = result; this.resultSeen = true;
         this.ended = { clock: this.current.clock, wall: wall ?? this.current.lastWall }; ev.ended = this.endMatch();
+        if (ev.ended) ev.endedBy = 'result';
       }
       return ev;
     }
     const read = finite(s.game_clock_secs) ? s.game_clock_secs : null;
+    // No result screen: loading / unknown screens long enough after the last live HUD frame.
+    if (this.current && this.endWatch.observe(s, wall, this.current.spanSecs)) {
+      this.ended = { clock: this.current.clock, wall: wall ?? this.current.lastWall }; ev.ended = this.endMatch();
+      if (ev.ended) ev.endedBy = 'idle';
+      return ev;
+    }
+    // After a black frame, non-live frames wait for the verdict outside the match (rec8 / rec13:
+    // the post-game summary read as Shop with an extrapolated clock added ~20 s of "game time").
+    if (this.current && this.endWatch.suspended) return ev;
     const cur = this.current;
     // Menus and loading screens long after the last clocked frame belong to no match.
     if (cur && read == null && wall != null && cur.lastReadWall != null && wall - cur.lastReadWall > LIMITS.stale_unclocked_ms) return ev;
@@ -1144,7 +1208,7 @@ export class PlayerProfile {
       const reset = read != null && cur.clock != null && cur.clock > 120 && read < 60;
       const newId = finite(s.match_id) && cur.matchId != null && digitDiff(cur.matchId, s.match_id) >= 3 && !cur.continuous(read, wall);
       const longGap = gap != null && (gap > LIMITS.wall_gap_new_match_ms || (gap > LIMITS.wall_gap_check_ms && read != null && !cur.continuous(read, wall)));
-      if (reset || newId || longGap) ev.ended = this.endMatch();
+      if (reset || newId || longGap) { ev.ended = this.endMatch(); if (ev.ended) ev.endedBy = 'boundary'; }
     }
     if (!this.current) {
       // A match starts with readable gameplay evidence (a clock on a gameplay or death screen).
@@ -1152,13 +1216,22 @@ export class PlayerProfile {
       // The end-of-game camera after a result screen still shows the final clock: not a new match.
       const e = this.ended;
       if (e && e.clock != null && read >= 60 && Math.abs(read - e.clock) <= LIMITS.after_result_secs && !(wall != null && e.wall != null && wall - e.wall > LIMITS.wall_gap_check_ms)) return ev;
-      this.current = new MatchAggregator(wall ?? this.now(), source); this.resultSeen = false; this.ended = null;
+      this.current = new MatchAggregator(wall ?? this.now(), source); this.resultSeen = false; this.ended = null; this.endWatch.reset();
       ev.matchStarted = true;
     }
     const r = this.current.add(s, wall);
     ev.respawned = r.respawned; ev.died = r.died;
     if (source === 'live' && this.now() - this.lastSave > 60_000) this.save();
     return ev;
+  }
+  /** A black frame since the last live frame: the frames now are not part of the match (MATCH_END). */
+  get suspended() { return this.current != null && this.endWatch.suspended; }
+  /** Capture stopped (Stop, share ended): a match observed at least `minSecs` is over; a shorter
+   *  one stays open (a long gap or a new clock ends it later). */
+  finishSession(minSecs: number = MATCH_END.min_span_secs): MatchRecord | null {
+    const cur = this.current; if (!cur || cur.spanSecs < minSecs) return null;
+    this.ended = { clock: cur.clock, wall: cur.lastWall };
+    return this.endMatch();
   }
   /** Close the match in progress; kept when it had enough evidence. */
   endMatch(): MatchRecord | null {
