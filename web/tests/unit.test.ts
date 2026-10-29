@@ -10,7 +10,7 @@ import {regionsFromReport} from '../src/region-overlays.ts';
 import {loadVerifiedAsset} from '../src/assets.ts';
 import {freshCue} from '../src/live-cues.ts';
 import {Speaker} from '../src/speech.ts';
-import {PlayerProfile, migrate, killerFamily, respawnEstimate, deadOf, spanOf, FALLBACK_NAMES, MAX_MATCHES, PLAYER_PROFILE_KEY, type MatchRecord} from '../src/player-profile.ts';
+import {PlayerProfile, migrate, killerFamily, respawnEstimate, deadOf, spanOf, excludedReason, FALLBACK_NAMES, MAX_MATCHES, PLAYER_PROFILE_KEY, type MatchRecord} from '../src/player-profile.ts';
 
 test('settings normalize corrupt input, finite numeric ranges and viewport bounds', () => {
   assert.deepEqual(normalize(null), defaults);
@@ -302,8 +302,10 @@ test('player profile classifier finds weaknesses with trends, strengths, compact
   for(let i=0;i<2;i++){feedMatch(p,600,now,{deaths:false,souls:800});p.endMatch();now+=3600e3;}
   const t=p.summary().weaknesses.find(x=>x.id==='dying');assert.ok(!t||t.trend==='improving',JSON.stringify(t));
   assert.ok(p.summary().strengths.some(x=>x.id==='spending'||x.id==='survival')||true);
-  const prompt=p.promptText()!;assert.ok(prompt.length<=600,String(prompt.length));assert.match(prompt,/^Player profile \(5 matches, mostly Grey Talon/);
-  assert.ok(p.focusTips(2).length>=1);assert.match(p.focusTips(1)[0],/^Profile focus:/);
+  const prompt=p.promptText()!;assert.ok(prompt.length<=900,String(prompt.length));assert.match(prompt,/^Player profile \(5 matches, mostly Grey Talon/);
+  assert.match(prompt,/ Weak: .+ Strong: .+ Improved: /);
+  // Two clean matches after three bad ones: praise leads, then a fix, alternating.
+  const tips=p.focusTips(3);assert.match(tips[0],/^(Great game|Keep it up)/);assert.match(tips[1],/^Profile focus:/);assert.match(tips[2],/^(Great game|Keep it up)/);
   assert.equal(new PlayerProfile().promptText(),null);
 });
 test('player profile persists versioned data, caps stored matches, migrates, imports, exports, resets and spaces focus cues',()=>{
@@ -375,4 +377,109 @@ test('time dead on the newest-pipeline recordings matches the respawn-timer grou
   if(existsSync(rec11)){const p=profileOf([rec11]);const s=p.summary();
     assert.equal(s.heroName,'Violet');assert.equal(s.deadPct,17);assert.match(p.promptText()!,/^Player profile \(1 match, mostly Violet, 17% dead/);
     assert.match(s.weaknesses.find(w=>w.id==='unspent_souls')!.evidence,/half an item tier or more \(1\.6k-3\.2k by game time\) in 7 of 7 deaths/);}
+});
+/** A live-scan-like match (no minimap marker, the zone label only): `deaths` = [start, seconds]
+ *  offsets, optional urn carry, death-screen spend, an enemy-dead window and its zone. */
+function liveMatch(p:PlayerProfile,wall0:number,o:{secs?:number;deaths?:Array<[number,number]>;urn?:[number,number];spend?:boolean;window?:[number,number];windowZone?:string;matchId?:(rel:number)=>number}={}){
+  const start=600,secs=o.secs??1200;
+  for(let rel=0;rel<=secs;rel+=4){
+    const c=start+rel,d=(o.deaths??[]).find(([a,n])=>rel>=a&&rel<a+n);
+    const inWin=o.window&&rel>=o.window[0]&&rel<o.window[1];
+    const souls=o.spend&&d?(rel-d[0]<8?5000:500):o.spend&&(o.deaths??[]).some(([a,n])=>rel>=a+n)?500:(o.spend?5000:1000);
+    const f=frame(c,{dead:!!d,you:null,ally:null,ed:inWin?2:0,souls,match_id:o.matchId?.(rel)});
+    if(!d)(f.minimap as Record<string,unknown>).zone_area=inWin?(o.windowZone??'Lane'):rel%600<400?'Lane':'Jungle';
+    if(o.urn&&rel>=o.urn[0]&&rel<=o.urn[1])f.status_effects=['carrying_urn'];
+    p.observe(f as never,wall0+rel*1000);
+  }
+  return p.endMatch()!;
+}
+test('live scans without a minimap marker: zone areas, only plausible matches count, calibrated wording',()=>{
+  // rec8-rec12 live: the marker was located on 6-10 of ~450 gameplay frames, so the old "readable
+  // time" (lane + jungle + base + dead) was mostly death screens: 90% / 78% / 65% "of the game dead".
+  let now=1e12;const p=new PlayerProfile({now:()=>now});
+  const m=liveMatch(p,now,{deaths:[[300,60],[900,60]]});
+  assert.ok(m.time.lane>=600&&m.time.jungle>=300,JSON.stringify(m.time));assert.equal(m.deadSecs,120);assert.equal(m.spanSecs,1200);
+  assert.equal(p.summary().rows[0].deadPct,10);assert.equal(excludedReason(m),null);
+  // Not counted: under 8 minutes, no readable gameplay (an old live record), over 50% dead.
+  const short={...m,spanSecs:300,deadSecs:30,id:'s'},menus={...m,time:{lane:20,jungle:0,base:0,dead:300,unknown:900},fieldSecs:0,id:'n'},odd={...m,deadSecs:1080,id:'o'};
+  const legacy={...m,id:'l',time:{...m.time,dead:200}} as MatchRecord;delete legacy.spanSecs;delete legacy.deadSecs;
+  assert.match(excludedReason(short)!,/under 8 min/);assert.match(excludedReason(menus)!,/no readable gameplay/);assert.match(excludedReason(odd)!,/implausible 90% dead/);
+  const s=p.model.summary([odd,short,menus,legacy,m]);
+  assert.equal(s.deadPct,10,'only the plausible, metric-measured match');assert.equal(s.excluded,3);
+  assert.equal(s.rows.find(r=>r.id==='l')!.deadPct,null);assert.match(s.rows.find(r=>r.id==='l')!.excluded!,/older version/);
+  assert.ok(!s.weaknesses.some(t=>t.id==='dying'),'10% dead is not "dying too often"');
+  // Three matches at 20% dead: the spoken line names the games and a target.
+  const q=new PlayerProfile({now:()=>now});
+  for(let i=0;i<3;i++){liveMatch(q,now,{deaths:[[200,80],[600,80],[1000,80]]});now+=3600e3;}
+  const dying=q.summary().weaknesses.find(t=>t.id==='dying')!;
+  assert.match(dying.focus,/^Profile focus: you were dead 20% of your last 3 games; aim under 12%\. Stay at max range/);
+});
+test('match boundaries on live scans: a stale HUD match id, the end-of-game camera and menus between matches',()=>{
+  let now=1e12;const p=new PlayerProfile({now:()=>now});
+  // rec12 read rec11's id 127139499 for its first minutes, then 127160441.
+  const m=liveMatch(p,now,{matchId:rel=>rel<240?127139499:127160441});
+  assert.equal(m.matchId,127160441);
+  // rec10: PostGame at 57:55, then a gameplay frame with clock 58:00 was a new match (and a cue).
+  for(let c=600;c<1200;c+=4)p.observe(frame(c) as never,now+c*1000);
+  assert.ok(p.observe({screen:'PostGame'} as never,now+1200e3).ended);
+  const ev=p.observe(frame(1205) as never,now+1205e3);assert.equal(ev.matchStarted,false);assert.equal(p.current,null);
+  // A real new match (clock reset) still starts.
+  assert.equal(p.observe(frame(30) as never,now+1400e3).matchStarted,true);
+  // Shop / loading frames without a clock long after the last clocked frame add nothing.
+  for(let c=30;c<300;c+=4)p.observe(frame(c) as never,now+1400e3+(c-30)*1000);
+  const before=p.current!.observedSecs;
+  for(let i=0;i<60;i++)p.observe({screen:'Shop',game_clock_secs:null} as never,now+1400e3+270e3+200e3+i*4000);
+  assert.equal(p.current!.observedSecs,before);
+});
+test('strengths come with evidence: windows used, urn, death-screen shopping, deathless stretches, improvement; praise and fixes alternate',()=>{
+  let now=1e12;const p=new PlayerProfile({now:()=>now});
+  // Two rough matches: 20% dead, an unused enemy-dead window each.
+  for(let i=0;i<2;i++){liveMatch(p,now,{deaths:[[200,80],[600,80],[1000,80]],window:[700,760]});now+=3600e3;}
+  assert.ok(p.summary().weaknesses.some(t=>t.id==='unused_windows'));
+  // The good one: one death at 10:00 (20 s) after which 4,500 souls were spent before the respawn,
+  // the urn carried 5:00-5:40, two enemies dead 15:00-15:40 while in their base.
+  const m=liveMatch(p,now,{deaths:[[600,20]],urn:[300,340],spend:true,window:[900,940],windowZone:'EnemyBase'});now+=3600e3;
+  assert.equal(m.deaths[0].spentDead,4500);assert.deepEqual(m.urn,{carried:1,delivered:1,lost:0,at:[[900,940]]});
+  assert.deepEqual([m.windows.used,m.windows.unused,m.windows.base],[1,0,1]);
+  const s=p.summary(),ids=s.strengths.map(t=>t.id);
+  for(const id of ['last_windows','last_urn','last_death_spend','last_low_dead','last_deathless'])assert.ok(ids.includes(id),`${id} in ${ids}`);
+  assert.match(s.strengths.find(t=>t.id==='last_windows')!.focus,/^Keep it up: last game you used 1 of 1 enemy-dead window to push their base\.$/);
+  assert.match(s.strengths.find(t=>t.id==='last_death_spend')!.evidence,/Spent 4\.5k souls between the 20:00 death and the respawn/);
+  assert.match(s.strengths.find(t=>t.id==='last_deathless')!.evidence,/No deaths for 10:00 \(10:00-20:00\)/);
+  assert.ok(s.improvements.some(t=>t.id==='improved_dead'));assert.ok(s.improved);
+  assert.match(s.improvements[0].evidence,/^Dead 2% of the game last match vs 20% in your previous 2 games\./);
+  assert.match(p.promptText()!,/Strong: latest match: Used 1 of 1 windows .+ Improved: Dead 2%/);
+  // Spoken: the improvement leads, then a fix, then a concrete play; never only fixes.
+  const cues:string[]=[];for(let i=0;i<4;i++){const c=p.focusCue();if(c)cues.push(c.text);now+=5*60000;}
+  assert.match(cues[0],/^Great game: you were dead 2% of it, down from 20%/);assert.match(cues[1],/^Profile focus:/);
+  assert.match(cues[2],/^Keep it up: last game you used 1 of 1 enemy-dead window to push their base/);
+  assert.ok(!cues.some(c=>/windows? .*push a lane/.test(c)),'the unused-windows fix is not said after a match that used them');
+});
+test('live recordings rec8-rec12 (browser path): plausible time dead, earlier weaknesses, rec12 strengths and praise',async()=>{
+  const {existsSync}=await import('node:fs');
+  const root='C:/Users/arielwolle/Documents/Github/DeadlockCoach/frames';
+  const files=['rec8','rec9','rec10','rec11','rec12'].map(r=>`${root}/${r}/recording.json`);
+  if(!files.every(f=>existsSync(f)))return; // recordings are local
+  const {liveProfileOf}=await import('../scripts/player-profile-replay.ts');
+  const {profile,cues,matches}=liveProfileOf(files);
+  // One match per recording; time dead against the respawn timers (rec8 17%, rec11 17%), never 65-90%.
+  assert.equal(matches.length,5);
+  const pctDead=matches.map(({record:m})=>Math.round(deadOf(m)*100/spanOf(m)));
+  assert.deepEqual(pctDead,[17,17,23,17,7]);
+  assert.equal(matches[4].record.matchId,127160441,'not rec11 id read by the stale HUD');
+  for(const c of cues)assert.doesNotMatch(c.text,/\b([5-9]\d)% of/,c.text);
+  // Earlier matches' weaknesses are still found.
+  const before=profile.model.summary(profile.matches.slice(1)).weaknesses.map(t=>t.id);
+  for(const id of ['dying','unspent_souls','repeat_killer'])assert.ok(before.includes(id),`${id} in ${before}`);
+  // rec12 (Grey Talon, 3 deaths, 7% dead): the plays behind the win.
+  const s=profile.summary(),by=(id:string)=>s.strengths.find(t=>t.id===id);
+  assert.match(by('last_windows')!.evidence,/Used 2 of 4 windows .*\(13:38, 27:21\); all of them pushed into their base/);
+  assert.match(by('last_urn')!.evidence,/16:09-16:33/);assert.match(by('last_death_spend')!.evidence,/Spent 5\.9k souls between the 14:50 death/);
+  assert.match(by('last_low_dead')!.evidence,/^Dead 7% of the game/);assert.match(by('last_deathless')!.evidence,/9:17 \(0:31-9:48\)/);
+  assert.ok(by('last_lanes'));assert.ok(by('last_team_lead'));
+  assert.deepEqual(s.improvements.map(t=>t.id),['improved_dead','improved_deaths']);assert.ok(s.improved);
+  // The next match's first reminder praises; reminders during rec8-rec12 mixed praise and fixes.
+  assert.match(profile.focusCue()!.text,/^Great game: you were dead 7% of it, down from 18%/);
+  assert.ok(cues.some(c=>/^Keep it up/.test(c.text))&&cues.some(c=>/^Profile focus/.test(c.text)));
+  const prompt=profile.promptText()!;assert.ok(prompt.length<=900);assert.match(prompt,/Strong: latest match: Used 2 of 4 windows/);assert.match(prompt,/Improved: Dead 7%/);
 });

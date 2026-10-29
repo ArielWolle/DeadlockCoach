@@ -1,4 +1,5 @@
-/** The Player page: strengths, weaknesses, per-match history and profile management. */
+/** The Player page: strengths (last match's plays and profile habits), "Improved since last
+ *  time", weaknesses, per-match history and profile management. */
 import type { PlayerProfile, Trait } from './player-profile';
 import type { Snapshot } from './types';
 
@@ -58,17 +59,19 @@ export class PlayerPage {
     select.value = all.heroes.some(h => h.hero === chosen) ? chosen : '';
     const s = select.value ? p.summary(select.value) : all;
     $('player-summary').textContent = s.matches
-      ? `${s.matches} match${s.matches === 1 ? '' : 'es'}${s.heroName ? ` · mostly ${s.heroName}` : ''} · ${s.observedMinutes} min of game time observed (last 10 matches)${s.deadPct != null ? ` · dead ${s.deadPct}% of it · ${s.deathsPer10} deaths per 10 min` : ''}${s.farmPerMin != null ? ` · ${s.farmPerMin} souls/min` : ''}.`
+      ? `${s.matches} match${s.matches === 1 ? '' : 'es'}${s.heroName ? ` · mostly ${s.heroName}` : ''} · ${s.observedMinutes} min of game time observed (last 10 counted matches)${s.deadPct != null ? ` · dead ${s.deadPct}% of it · ${s.deathsPer10} deaths per 10 min` : ''}${s.farmPerMin != null ? ` · ${s.farmPerMin} souls/min` : ''}${s.excluded ? ` · ${s.excluded} not counted (too short, no gameplay or misread)` : ''}.`
       : 'No matches yet. Coach a match, or add a replay, to start learning your habits.';
-    this.traits('player-weaknesses', s.weaknesses, 'No clear weaknesses in the evidence so far.');
+    // Strengths first: what to keep doing is as useful as what to fix.
     this.traits('player-strengths', s.strengths, 'No clear strengths yet: they appear as evidence builds up.');
+    this.traits('player-improved', s.improvements, s.matches >= 2 ? 'No clear improvement over the matches before the last one.' : 'Shown once there are two matches to compare.');
+    this.traits('player-weaknesses', s.weaknesses, 'No clear weaknesses in the evidence so far.');
     const body = $('player-matches'); body.replaceChildren();
     if (!s.rows.length) { const tr = el('tr'); const td = el('td', 'No matches recorded.'); td.colSpan = 8; tr.append(td); body.append(tr); }
     for (const r of s.rows) {
       const tr = el('tr');
       const date = new Date(r.date);
-      const cells = [`${date.toLocaleDateString()} ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}${r.source === 'replay' ? ' · replay' : ''}${r.partial ? ' · partial' : ''}`,
-        `${r.heroName}${r.result ? ` · ${r.result}` : ''}`, `${r.minutes} min`, String(r.deaths), r.deadPct == null ? '—' : `${r.deadPct}%`,
+      const cells = [`${date.toLocaleDateString()} ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}${r.source === 'replay' ? ' · replay' : ''}${r.partial ? ' · partial' : ''}${r.excluded ? ` · not counted: ${r.excluded}` : ''}`,
+        `${r.heroName}${r.result ? ` · ${r.result}` : ''}`, `${r.minutes} min`, String(r.deaths), r.deadPct == null ? (r.legacy ? '— (older version)' : '—') : `${r.deadPct}%`,
         `${r.fightsJoined} / ${r.fightsMissed}`, r.unspentAtDeath, r.topKiller || '—'];
       for (const c of cells) tr.append(el('td', c));
       body.append(tr);
@@ -82,10 +85,16 @@ export class PlayerPage {
     for (const t of traits) {
       const li = el('li', undefined, `player-trait ${t.kind}`);
       const head = el('div', undefined, 'player-trait-head');
-      head.append(el('strong', t.label), el('span', TREND[t.trend], `tag player-trend ${t.trend}`), el('span', `${t.confidenceLabel} confidence`, 'tag'));
+      head.append(el('strong', t.label));
+      // Last-match highlights and improvements are single-match facts: no trend / confidence tags.
+      if (t.scope === 'last') head.append(el('span', 'Last match', 'tag'));
+      else if (t.scope === 'improved') head.append(el('span', TREND.improving, 'tag player-trend improving'));
+      else head.append(el('span', TREND[t.trend], `tag player-trend ${t.trend}`), el('span', `${t.confidenceLabel} confidence`, 'tag'));
       if (t.kind === 'weakness') head.append(el('span', ['', 'minor', 'notable', 'major'][t.severity], `tag player-severity s${t.severity}`));
       li.append(head, el('p', t.evidence));
-      if (t.kind === 'weakness') { const tip = el('p', undefined, 'player-tip'); tip.append(el('strong', 'Practice: '), document.createTextNode(t.tip)); li.append(tip); }
+      const tip = el('p', undefined, 'player-tip');
+      if (t.kind === 'weakness') { tip.append(el('strong', 'Practice: '), document.createTextNode(t.tip)); li.append(tip); }
+      else if (t.focus) { tip.append(el('strong', 'Coach says: '), document.createTextNode(t.focus)); li.append(tip); }
       list.append(li);
     }
   }
