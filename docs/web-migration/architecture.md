@@ -94,7 +94,8 @@ then reuse the same verified web build and official Pages actions.
 ## Frontend
 
 TypeScript + Vite, semantic HTML and CSS; no frontend application runtime framework required.
-Hash navigation supports static hosting without server rewrites. Coach, Map intelligence,
-Match state, Replay lab, Field guide and Settings share the same local state. No API keys,
+Hash navigation supports static hosting without server rewrites. Coach, Live match
+(`#match`; the old `#map` link opens it too), Player, Replay lab, Field guide and Settings share
+the same local state. No API keys,
 accounts or telemetry. Keyboard focus and reduced-motion support are included; automated
 accessibility tests are not a full WCAG conformance claim.

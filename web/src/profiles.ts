@@ -1,7 +1,3 @@
-import deadlock from '../../data/profiles/deadlock.json';
-import generic from '../../data/profiles/generic-hud.json';
-import colorBar from '../../data/profiles/color-bar.json';
-import deadlockFields from '../../data/profiles/deadlock-hud-fields.json';
 import automatic from '../../data/profiles/deadlock-auto.json';
 
 export interface ProfileNode { id: string; inputs?: string[]; when?: string; op: { type: string; [key: string]: unknown } }
@@ -11,8 +7,9 @@ export interface GameProfile {
   templates?: Array<{ id: string; png_base64: string }>;
   nodes: ProfileNode[]; outputs: Record<string, string>;
 }
-export const builtInProfiles = [automatic, deadlock, generic, colorBar, deadlockFields] as GameProfile[];
-export const defaultProfile = () => structuredClone(builtInProfiles[0]);
+/** The Deadlock automatic HUD discovery profile. Other profiles are only used when one is stored
+ *  (an older Matching lab draft, or a browser test fixture); Settings › Diagnostics resets it. */
+export const defaultProfile = () => structuredClone(automatic) as GameProfile;
 export function parseProfile(text: string): GameProfile {
   if (text.length > 4 * 1024 * 1024) throw new Error('Profile exceeds 4 MB. Use smaller template images.');
   const p = JSON.parse(text.replace(/^\uFEFF/, ''));
@@ -33,6 +30,11 @@ export function loadProfile(): GameProfile {
   catch { return defaultProfile(); }
 }
 export function saveProfile(profile: GameProfile): boolean {
-  try { localStorage.setItem('coach-perception-profile-v1', JSON.stringify(profile)); return true; } catch { return false; }
+  try {
+    // The default is not stored, so a later default update applies by itself.
+    if (profile.id === automatic.id) localStorage.removeItem('coach-perception-profile-v1');
+    else localStorage.setItem('coach-perception-profile-v1', JSON.stringify(profile));
+    return true;
+  } catch { return false; }
 }
 export const isDeadlock = (p: GameProfile) => p.adapter === 'deadlock';

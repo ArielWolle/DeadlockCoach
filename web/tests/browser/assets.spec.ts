@@ -19,7 +19,7 @@ test('real worker recovers stale shell timings and corrupt versioned cache witho
   });
   await page.getByRole('button',{name:'Load included match'}).click();
   await expect(page.locator('#replay-status')).toContainText('Included match replay complete',{timeout:110000});
-  await expect(page.locator('#engine-state')).toHaveText('LOCAL ENGINE READY');
+  await expect(page.locator('#engine-state')).toHaveText('Ready');
   const actual=await page.evaluate(async({url,version})=>{
     const response=await(await caches.open(`deadlock-assets-${version}`)).match(url);
     return [...new Uint8Array(await crypto.subtle.digest('SHA-256',await response!.arrayBuffer()))].map(b=>b.toString(16).padStart(2,'0')).join('');

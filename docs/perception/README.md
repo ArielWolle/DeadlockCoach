@@ -24,30 +24,20 @@ observation-only example for incrementally replacing specialized HUD logic with 
 This is a reusable recognition framework, not a pretrained universal game/HUD recognizer.
 Regions, icons, parsing and evidence thresholds still need validation for the target UI.
 
-## Browser authoring
+## Browser authoring (removed)
 
-Open **Matching lab**:
-
-1. Load **Any game · OCR starter** or **Any game · color/bar starter** into the draft.
-2. Load a reference screenshot, or use the latest captured frame.
-3. Add a named field, choose its crop stage and use **Select region on reference**.
-   This editor is free-aspect and supports tiny fields independently of game-viewport cropping.
-4. Tune OCR, extraction, bounds, scores and confirmation in the JSON. Importing a template
-   image embeds a small PNG and creates a searchable anchor stage.
-5. **Apply profile** validates the complete graph/resources before replacing the current one.
-   A failed import leaves the previous engine usable.
-6. Run the reference frame, or start live capture. Inspect published fields and every stage's
-   status, value, image dimensions, similarity score, bounds, error and execution time.
-7. Export the profile, a detailed current report, or observation JSONL.
+The web app's **Matching lab** page (starter profiles, a JSON draft editor, visual field
+regions, template images, reference-frame runs and a stage inspector) was removed to keep the
+app focused on Deadlock coaching (see [docs/ui](../ui/README.md)). Author and test profiles with
+the `coach-perceive` CLI instead. The browser still runs a profile stored under the
+`coach-perception-profile-v1` localStorage key (the Deadlock automatic profile is the default),
+publishes `coach:perception` events, and offers **Use default detection** in
+Settings › Diagnostics when a non-default profile is active.
 
 Profiles without OCR do not download neural models. Generic OCR profiles download their models
 without loading the Deadlock template pack. Viewport aspect ratio and maximum processing width
 belong to the profile: generic profiles can use 4:3, portrait, ultrawide or an unrestricted aspect.
 The legacy Deadlock adapter retains its calibrated 16:9/1600-wide input.
-
-Draft changes are separate from the active profile. Active profiles are stored locally when
-browser storage permits; a self-contained JSON export also carries embedded template assets.
-The report-history export is bounded to 300 observations / approximately 4 MB of JSON text.
 
 ## Profile contract
 
