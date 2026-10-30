@@ -13,7 +13,7 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { AiCoach, EVENT_GAP_SECS, HERO_NAMES, SYSTEM_PROMPT, callGateway, checkAdvice, clockText, parseAdvice, setProfileProvider, soulsView, type AbilityRow, type AiConfig, type AiReasoning, type ItemInfo } from '../src/ai-coach.ts';
+import { AiCoach, EVENT_GAP_SECS, HERO_NAMES, RULE_THEME_SECS, SYSTEM_PROMPT, ruleThemes, topicOf, callGateway, checkAdvice, clockText, parseAdvice, setProfileProvider, soulsView, type AbilityRow, type AiConfig, type AiReasoning, type ItemInfo } from '../src/ai-coach.ts';
 import { defaults, normalize } from '../src/settings.ts';
 import type { Cue, Knowledge } from '../src/types.ts';
 import { profileOf } from './player-profile-replay.ts';
@@ -42,13 +42,35 @@ const name = (id: string) => heroNames[id] || items[id]?.name || id.replace(/^(h
 // Frames: a live recording export ({frames:[{timestamp, snapshot, cues}], spoken, ai}) or replay jsonl.
 type Frame = { t: number; snapshot: Record<string, unknown>; cues: Cue[] };
 let frames: Frame[] = [], original: Array<{ clock: number | null; text: string }> = [], liveProfile: string | null = null, liveAi = 0;
+let liveSpoken: Array<{ t: number; clock: number | null; source: string; key?: string; text: string }> = [];
+let livePrompts: Array<{ trigger: string; chars: number; brief: number }> = [], merged = 0, mergedFrom: string | null = null;
 if (inputPath.endsWith('.json')) {
-  const rec = JSON.parse(readFileSync(inputPath, 'utf8')) as { frames: Array<{ timestamp: number; snapshot: Record<string, unknown>; cues?: Cue[] }>; spoken?: Array<{ t: number; clock: number | null; source: string; text: string }>; ai?: Array<{ t: number; prompt: string; trigger: string }> };
+  const rec = JSON.parse(readFileSync(inputPath, 'utf8')) as { frames: Array<{ timestamp: number; snapshot: Record<string, unknown>; cues?: Cue[] }>; spoken?: Array<{ t: number; clock: number | null; source: string; key?: string; text: string }>; ai?: Array<{ t: number; prompt: string; trigger: string }> };
   frames = rec.frames.map(f => ({ t: f.timestamp, snapshot: f.snapshot, cues: f.cues || [] }));
   const first = frames[0]?.t ?? 0;
   original = (rec.spoken || []).filter(c => c.source === 'ai' && c.t >= first - 3600000).map(c => ({ clock: c.clock, text: c.text }));
+  liveSpoken = (rec.spoken || []).filter(c => c.t >= first - 3600000) as typeof liveSpoken;
   liveAi = (rec.ai || []).filter(x => x.t >= first).length;
-  liveProfile = (rec.ai || []).map(x => x.prompt.split('PLAYER PROFILE (from earlier matches; coach these weaknesses when the live situation matches)\n')[1]?.split('\n')[0]).find(Boolean) || null;
+  liveProfile = (rec.ai || []).map(x => x.prompt.split(/PLAYER PROFILE \(from earlier matches[^\n]*\)\n/)[1]?.split('\n')[0]).find(Boolean) || null;
+  // The live AI log (frames/<rec>/ai-log.json) has the full prompts: their sizes are the "before".
+  const logPath = path.join(path.dirname(inputPath), 'ai-log.json');
+  const log = existsSync(logPath) ? JSON.parse(readFileSync(logPath, 'utf8')) as { exchanges?: Array<{ trigger: string; system_chars?: number; prompt?: string }> } : null;
+  const xs = log?.exchanges?.length ? log.exchanges : (rec.ai || []).map(x => ({ trigger: x.trigger, system_chars: undefined, prompt: x.prompt }));
+  livePrompts = xs.filter(x => typeof x.prompt === 'string').map(x => ({ trigger: x.trigger.replace(/:.*/, ''), chars: (x.system_chars ?? 3200) + x.prompt!.length, brief: x.prompt!.includes('DEADLOCK FACTS') ? (x.prompt!.split('DEADLOCK FACTS')[1]?.split('\n\n')[0].length ?? 0) + 14 : 0 }));
+  // Newer scans of the same frames (replay*.jsonl next to it) read enemy items and scoreboard rows
+  // that the live export lacks: merged by game clock (--merge none skips it).
+  const mergePath = opt('--merge') ?? readdirSync(path.dirname(inputPath)).filter(n => /^replay\d*\.jsonl$/.test(n)).map(n => path.join(path.dirname(inputPath), n))[0];
+  if (mergePath && mergePath !== 'none' && existsSync(mergePath)) {
+    const byClock = new Map<number, Record<string, unknown>>();
+    for (const l of readFileSync(mergePath, 'utf8').split(/\r?\n/).filter(x => x.trim())) { const s = (JSON.parse(l) as { snapshot: Record<string, unknown> }).snapshot; if (typeof s?.game_clock_secs === 'number' && !byClock.has(s.game_clock_secs)) byClock.set(s.game_clock_secs, s); }
+    for (const f of frames) {
+      const m = typeof f.snapshot.game_clock_secs === 'number' ? byClock.get(f.snapshot.game_clock_secs) : undefined; if (!m) continue;
+      let used = false;
+      for (const k of ['enemy_items', 'players', 'match_result', 'structures', 'midboss_taken_by', 'abilities']) if (m[k] != null && (!Array.isArray(m[k]) || (m[k] as unknown[]).length) && (f.snapshot[k] == null || (Array.isArray(f.snapshot[k]) && !(f.snapshot[k] as unknown[]).length))) { f.snapshot = { ...f.snapshot, [k]: m[k] }; used = true; }
+      if (used) merged++;
+    }
+    mergedFrom = mergePath;
+  }
 } else {
   const lines = readFileSync(inputPath, 'utf8').split(/\r?\n/).filter(l => l.trim()).map(l => JSON.parse(l) as { t?: number; snapshot: Record<string, unknown>; cues?: Cue[] });
   const start = lines.find(l => typeof l.t === 'number' && l.t > 1e9)?.t ?? 0;
@@ -129,7 +151,10 @@ for (const rec of frames) {
   for (const b of coach.history.boundaries) if (!boundaries.includes(b)) boundaries.push(b);
   if (calls.length > before) {
     const c = calls[before];
-    if (c.trigger === 'periodic' && !samples.event && c.why && !/routine check/.test(c.why) && clock != null && clock >= 1100) samples.event = { clock: c.clock, user: c.body };
+    // The sample periodic prompt: the first event-driven one after 18:20, replaced by a late-game one
+    // that shows the new game state (fed enemy, a lead being thrown, a fight just won or lost).
+    const rich = /THROW RISK|Fed enemy|^Fight: /m.test(c.body);
+    if (c.trigger === 'periodic' && !c.retry && c.why && !/routine check/.test(c.why) && clock != null && clock >= 1100 && (!samples.event || (rich && !/THROW RISK|Fed enemy|^Fight: /m.test(samples.event.user)))) samples.event = { clock: c.clock, user: c.body };
     if (c.trigger === 'death' && clock != null && clock >= 1100 && rec.t >= mainStart && !samples.death) samples.death = { clock: c.clock, user: c.body };
   }
 }
@@ -177,6 +202,32 @@ for (const c of calls.filter(x => x.trigger === 'death' && !x.retry)) {
   console.log(`  DEATH PROMPT [${c.clock}] heroes named in STATE: ${named.join(', ') || 'none'}${roster ? '' : ' (no roster line)'}\n${lines.map(l => `      ${l.slice(0, 260)}`).join('\n')}`);
 }
 for (const d of delivered.filter(x => x.trigger === 'death')) console.log(`  DEATH SPOKEN [${d.clock}] ${d.text}`);
+
+// Prompt size and one coach voice (docs/coach-review-13.md item 12-14): the live log vs this build.
+{
+  const avg = (xs: number[]) => xs.length ? Math.round(xs.reduce((a, b) => a + b, 0) / xs.length) : 0;
+  const size = (trigger: string) => calls.filter(c => c.trigger === trigger && !c.retry).map(c => SYSTEM_PROMPT.length + c.body.length);
+  if (livePrompts.length) {
+    const b = (t: string) => livePrompts.filter(p => p.trigger === t).map(p => p.chars);
+    console.log(`\nPROMPT SIZE (system + user, characters; ~4 per token)`);
+    for (const t of ['periodic', 'death']) {
+      const before = avg(b(t)), after = avg(size(t));
+      console.log(`  ${t.padEnd(8)} before (live ai-log, ${b(t).length} calls) avg ${before.toLocaleString('en-US')} · after (${size(t).length} calls) avg ${after.toLocaleString('en-US')}${before ? ` · ${Math.round((1 - after / before) * 100)}% smaller` : ''}`);
+    }
+    const brief = livePrompts.filter(p => p.brief).map(p => p.brief);
+    console.log(`  generic wiki block in the live prompts: ${brief.length} of ${livePrompts.length} calls, ~${avg(brief).toLocaleString('en-US')} chars each (now 0; its essentials are SYSTEM_PROMPT rule 9) · system prompt now ${SYSTEM_PROMPT.length.toLocaleString('en-US')} chars`);
+  }
+  // Before: live AI calls on a theme a rule call covered in the 30 s before (same rule as the gate now).
+  const live = liveSpoken.filter(c => c.source !== 'ai' && c.key), ai = liveSpoken.filter(c => c.source === 'ai');
+  const dup = ai.filter(a => { const th = topicOf(a.key?.split(':')[2] || '', a.text); return live.some(r => r.clock != null && a.clock != null && a.clock - r.clock >= 0 && a.clock - r.clock <= RULE_THEME_SECS && ruleThemes(r.key!).includes(th as never)); });
+  const st = coach.status;
+  console.log(`\nONE COACH VOICE`);
+  if (ai.length) console.log(`  before (live): ${dup.length} of ${ai.length} AI calls on the theme of a rule call spoken in the 30 s before · AI death calls ${ai.filter(a => /^ai:death/.test(a.key || '')).length} · rule death reviews ${live.filter(r => /^death:review/.test(r.key!)).length}`);
+  const gatedRule = skipped.filter(s => /as the rule call/.test(s.reason)).length, gatedDeath = skipped.filter(s => /rule death review/.test(s.reason)).length;
+  console.log(`  after: ${gatedRule} answers gated as a rule-call theme (30 s) · ${st.ruleSkips || 0} event requests left to the rule coach · ${st.fightSkips || 0} fights without a periodic request · ${st.windowSkips || 0} windows too short to ask · ${st.fightDrops || 0} answers dropped for a fight`);
+  console.log(`  deaths: ${coach.history.deathCount} deaths (flicker frames merged), ${calls.filter(c => c.trigger === 'death' && !c.retry).length} AI death requests, ${delivered.filter(d => d.trigger === 'death').length} spoken, ${gatedDeath} gated as covered by the rule death review, ${st.deathSkips || 0} second calls refused`);
+  console.log(`  measured latency ~${coach.history.latency} s (fake model: instant; live default 6 s)${mergedFrom ? ` · merged enemy items / scoreboard rows from ${path.basename(mergedFrom)} into ${merged} frames` : ''}`);
+}
 if (!quiet) {
   for (const d of delivered) console.log(`  SPOKEN  [${d.clock}] ${d.trigger}/${d.topic}${d.why ? ` (why now: ${d.why.slice(0, 70)})` : ''}: ${d.text}`);
   for (const s of skipped) console.log(`  GATED   [${s.clock}] ${s.reason.replace(/^Skipped a repeat: /, '')}`);

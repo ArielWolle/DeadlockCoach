@@ -11,11 +11,11 @@
 //   buildReviewPrompt / parseReview / requestReview   prompt, tolerant JSON parsing, gateway call
 //   ReviewStore     localStorage list of reviews (newest first, cap 20, one per match)
 // Nothing here touches the DOM; tests/ai-review.unit.ts imports it directly.
-import { LIMITS, PlayerProfile, killerFamily, PlayerProfileModel, REVIEW, deadOf, deathSpend, spanOf, spendTarget, resultOf, type KeyValueStore, type MatchRecord } from './player-profile.ts';
+import { LIMITS, PlayerProfile, killerFamily, PlayerProfileModel, REVIEW, chooseGoals, deadOf, deathSpend, goalTip, scoreGoals, spanOf, spendTarget, resultOf, type GoalResult, type KeyValueStore, type MatchGoal, type MatchRecord } from './player-profile.ts';
 import { GatewayError, HERO_ROLES, aiExchanges, heroMatchup, callGateway, clockText, extractText, jsonCandidates, retrieve, sections, type AiConfig, type CallOptions } from './ai-coach.ts';
 import type { Cue, Knowledge, Snapshot } from './types';
 
-export const DIGEST_MAX_CHARS = 8000;
+export const DIGEST_MAX_CHARS = 9000;
 export const REVIEW_STORE_KEY = 'deadlock-coach-match-reviews-v1';
 export const MAX_REVIEWS = 20;
 /** A match the profile closes without a PostGame screen is reviewed automatically only after this much observed game time. */
@@ -49,6 +49,10 @@ export interface TimelineData {
   kda: { kills: number | null; deaths: number | null; assists: number | null; at: number | null } | null;
   /** Hero ids read on the scoreboard / top bar, with how many frames read each (the first frames of a match can still show the previous match's heroes). */
   enemies: Record<string, number>; allies: Record<string, number>;
+  /** Lane structures: the first read of each and its destruction (clock), the Midboss taker changes, and the
+   *  Victory / Defeat banner read by the vision (match_result). Absent on timelines stored before them. */
+  structures?: Array<{ t: number | null; lane: string | null; kind: string; own: boolean; alive: boolean }>;
+  midboss?: Array<{ t: number | null; by: 'ally' | 'enemy' }>; result?: 'win' | 'loss' | null;
 }
 const REVIEW_CUE = /^(death:review|review:pattern)(:|$)/;
 const MAX_POINTS = 8000;
@@ -57,8 +61,9 @@ export class MatchTimeline {
   private d: TimelineData = MatchTimeline.empty();
   private fightLast: number | null = null;
   private lastClock: number | null = null;
-  static empty(): TimelineData { return { points: [], panels: [], fights: [], cues: [], kda: null, enemies: {}, allies: {} }; }
-  reset() { this.d = MatchTimeline.empty(); this.fightLast = null; this.lastClock = null; }
+  private structState: Record<string, boolean> = {};
+  static empty(): TimelineData { return { points: [], panels: [], fights: [], cues: [], kda: null, enemies: {}, allies: {}, structures: [], midboss: [], result: null }; }
+  reset() { this.d = MatchTimeline.empty(); this.fightLast = null; this.lastClock = null; this.structState = {}; }
   get size() { return this.d.points.length; }
   /** One analyzed frame (in order). `cues` = the rule coach's cues of this frame (death reviews and pattern texts are kept). */
   add(s: Snapshot, wall: number | null, cues: Cue[] = []) {
@@ -94,6 +99,15 @@ export class MatchTimeline {
     if (finite(s.kills) || finite(s.deaths) || finite(s.assists)) {
       const o = this.d.kda; this.d.kda = { kills: finite(s.kills) ? s.kills : o?.kills ?? null, deaths: finite(s.deaths) ? s.deaths : o?.deaths ?? null, assists: finite(s.assists) ? s.assists : o?.assists ?? null, at: t };
     }
+    if (s.match_result === 'win' || s.match_result === 'loss') this.d.result = s.match_result;
+    for (const st of Array.isArray(s.structures) ? s.structures : []) {
+      if (!st || typeof st.kind !== 'string' || typeof st.own !== 'boolean' || typeof st.alive !== 'boolean') continue;
+      const lane = typeof st.lane === 'string' ? st.lane : null, key = `${st.own}:${lane}:${st.kind}`, was = this.structState[key];
+      // The first read, and alive -> destroyed (final; a later alive read is a misread).
+      if (was === undefined || (was && !st.alive)) { this.structState[key] = st.alive; (this.d.structures ||= []).push({ t, lane, kind: st.kind, own: st.own, alive: st.alive }); }
+    }
+    const by = s.midboss_taken_by;
+    if ((by === 'ally' || by === 'enemy') && (this.d.midboss ||= []).at(-1)?.by !== by) this.d.midboss!.push({ t, by });
     if (dead && t != null) this.panel(s, t, prev?.area === 'dead');
     if (t != null) this.fight(s, t, dead, you);
     for (const c of cues) if (REVIEW_CUE.test(c.key) && !this.d.cues.some(x => x.key === c.key) && this.d.cues.length < 80)
@@ -247,16 +261,21 @@ export interface DigestInput {
   match: EndedMatch; previous?: MatchRecord[]; name?: (id: string) => string; docs?: Knowledge[];
   /** Rule-coach texts from the live cue log (death reviews, pattern summaries) when the timeline did not see them. */
   cues?: ReviewCueText[];
+  /** The match focus goals chosen at its start (else the record's, the stored profile match's, or the ones the earlier matches give). */
+  goals?: MatchGoal[] | null;
 }
 export interface Digest { text: string; chars: number; hero: string | null; heroName: string; result: string; minutes: number; deaths: number; comparisons: Comparison[]; key: string;
   /** What went well (the STRENGTHS section) and whether the match reads as a good game. */
-  strengths: Strength[]; goodGame: boolean }
+  strengths: Strength[]; goodGame: boolean;
+  /** The match focus goals, scored on this match. */
+  goals: GoalResult[] }
 const defaultName = (id: string) => new PlayerProfileModel().heroName(id);
 interface Section { title: string; lines: string[]; keep: number }
 
 /** Result as observed; when the end screen did not say, the last Patron banner hints at it. */
 function resultText(m: EndedMatch): { text: string; short: string } {
-  if (m.record.result) return { text: m.record.result, short: m.record.result };
+  const read = m.record.result ?? m.timeline.result ?? null;
+  if (read) return { text: `${read} (the ${read === 'win' ? 'Victory' : 'Defeat'} banner)`, short: read };
   const last = [...m.timeline.points].reverse().find(p => p.banner);
   const end = m.timeline.points.at(-1)?.t ?? null;
   if (last?.banner && last.t != null && end != null && end - last.t <= 120 && /king|mother|patron/i.test(last.banner.name) && last.banner.own != null) {
@@ -437,6 +456,27 @@ export function buildDigest(input: DigestInput, maxChars = DIGEST_MAX_CHARS): Di
     ? [...strengths.map((s, i) => `- ${s.text}`), ...(goodGame ? [`Verdict: a good game (${res.short === 'unknown' ? `dead ${pct(deadS, span)}%, ${rec.deaths.length} deaths` : res.short}). Lead with these strengths and why each worked; give at least as many went_well items as improvements.`] : [])]
     : ['No clear strength observed: do not invent praise.'] });
 
+  // The match focus goal(s), scored (docs/player-profile.md "Match focus goal").
+  const stored = (input.previous || []).find(m => sameMatch(m, rec) && m.goals?.length);
+  const announced = input.goals?.length ? input.goals : rec.goals?.length ? rec.goals : stored?.goals?.length ? stored.goals : null;
+  const goalDefs = (announced ?? chooseGoals(previous)).map(g => ({ id: g.id, text: g.text, ...(g.target != null ? { target: g.target } : {}) }));
+  const goals = scoreGoals(goalDefs, rec);
+  if (goals.length) secs.push({ title: `FOCUS GOAL${goals.length > 1 ? 'S' : ''} (${announced ? 'set at the match start' : 'what the earlier matches asked for; not announced live'}): score each one first`, keep: 99,
+    lines: goals.map(g => `- ${g.text}: ${g.met === true ? 'MET' : g.met === false ? 'MISSED' : 'not measurable'}: ${g.detail}.${g.met === false && goalTip(g.id) ? ` Practice: ${goalTip(g.id)}` : ''}`) });
+
+  // Lead and throw (rec13: +46k lost; a loss).
+  {
+    const nw = pts.filter(p => p.t != null && p.allyNw != null && p.enemyNw != null).map(p => ({ t: p.t!, d: p.allyNw! - p.enemyNw! }));
+    if (nw.length >= 5) {
+      const peak = nw.reduce((a, b) => b.d > a.d ? b : a), end = nw.at(-1)!;
+      const lost = peak.d - end.d, loss = /loss/.test(res.short);
+      if (peak.d >= 15000 && (lost >= 15000 || (loss && lost >= 5000))) {
+        const turn = nw.filter(x => x.t >= peak.t).find(x => peak.d - x.d >= Math.min(10000, lost / 2));
+        secs.push({ title: 'LEAD AND THROW', keep: 99, lines: [`Team souls lead peaked at +${k(peak.d)} at ${clockText(peak.t)} and was ${end.d >= 0 ? '+' : '-'}${k(Math.abs(end.d))} at the last read ${clockText(end.t)} (${k(lost)} lost${turn ? `; it started to fall by ${clockText(turn.t)}` : ''})${loss ? ', and the match was lost' : ''}: name the throw and the moment it turned.`] });
+      }
+    }
+  }
+
   // Economy
   const eco: string[] = [];
   const marks: string[] = [];
@@ -510,7 +550,7 @@ export function buildDigest(input: DigestInput, maxChars = DIGEST_MAX_CHARS): Di
     if (unread.length) parts.push(`not read: ${unread.join(', ')}`);
     deaths.push(`${i + 1}. ${clockText(d.clock)}: ${parts.join('; ')}.`);
     const review = cues.find(c => /^death:review:/.test(c.key) && Math.abs(Number(c.key.split(':')[2]) - d.clock) <= 25);
-    if (review) deaths.push(`   Rule coach said: "${clip(review.text.replace(/^Why you died:\s*/i, ''), Math.max(160, Math.min(330, Math.floor(1400 / rec.deaths.length))))}"`);
+    if (review) deaths.push(`   Rule coach said: "${clip(review.text.replace(/^(Why you died:|You died because)\s*/i, ''), Math.max(160, Math.min(330, Math.floor(1400 / rec.deaths.length))))}"`);
   });
   if (!deaths.length) deaths.push('No deaths observed.');
   secs.push({ title: `DEATHS (${rec.deaths.length})`, lines: deaths, keep: 99 });
@@ -528,7 +568,21 @@ export function buildDigest(input: DigestInput, maxChars = DIGEST_MAX_CHARS): Di
   const ob: string[] = [];
   const mb = runs(pts, p => p.midboss, 3);
   const gone = mb.filter((r, i) => i > 0 && r.v === false && mb[i - 1].v === true && r.to - r.from >= 20).map(r => clockText(r.from));
-  if (mb.length) ob.push(gone.length ? `Midboss icon disappeared (taken; by which team not read) at ${gone.join(', ')}.` : 'Midboss: no take observed.');
+  const takes = tl.midboss || [];
+  if (takes.length) ob.push(`Midboss (Rejuvenator) taken by: ${takes.map(x => `${x.by === 'ally' ? 'your team' : 'the enemy'} at about ${clockText(x.t)}`).join('; ')}.`);
+  else if (mb.length) ob.push(gone.length ? `Midboss icon disappeared (taken; by which team not read) at ${gone.join(', ')}.` : 'Midboss: no take observed.');
+  // Lane structures: destroyed with the clock they were first read gone, and what still stood.
+  {
+    const xs = tl.structures || [];
+    if (xs.length) {
+      const label = (x: { lane: string | null; kind: string }) => `${x.lane ? `${x.lane} ` : ''}${x.kind[0].toUpperCase()}${x.kind.slice(1)}`;
+      const down = (own: boolean) => xs.filter(x => x.own === own && !x.alive).map(x => `${label(x)} ${clockText(x.t)}`);
+      const standing = (own: boolean) => { const keys = new Map<string, boolean>(); for (const x of xs.filter(y => y.own === own)) keys.set(label(x), x.alive); return [...keys].filter(([, a]) => a).map(([l]) => l); };
+      ob.push(`Structures destroyed (first read gone): theirs ${down(false).join(', ') || 'none read'}; ours ${down(true).join(', ') || 'none read'}.`);
+      const st = [standing(false).length ? `theirs ${standing(false).join(', ')}` : '', standing(true).length ? `ours ${standing(true).join(', ')}` : ''].filter(Boolean);
+      if (st.length) ob.push(`Still standing at the last read: ${st.join('; ')}.`);
+    }
+  }
   const urn = runs(pts, p => /^Carried/.test(p.urn || '') ? p.urn : null, 2).map(r => `${r.v === 'CarriedByYou' ? 'you' : r.v === 'CarriedByAlly' ? 'an ally' : 'an enemy'} ${clockText(r.from)}-${clockText(r.to)}`);
   ob.push(urn.length ? `Soul Urn carried by: ${urn.slice(0, 8).join('; ')}.` : 'Soul Urn: no carry observed.');
   const banners = runs(pts, p => p.banner ? `${p.banner.name}|${p.banner.own}` : null, 2).map(r => {
@@ -591,7 +645,7 @@ export function buildDigest(input: DigestInput, maxChars = DIGEST_MAX_CHARS): Di
   for (const s of order) { while (text.length > maxChars && s.lines.length > Math.min(s.keep, s.lines.length) ) { s.lines.pop(); text = render(); } }
   for (const s of order) { while (text.length > maxChars && s.lines.length > 1) { s.lines.pop(); text = render(); } }
   if (text.length > maxChars) text = text.slice(0, maxChars - 1) + '…';
-  return { text, chars: text.length, hero: rec.hero, heroName, result: res.short, minutes: Math.round(span / 6) / 10, deaths: rec.deaths.length, comparisons, key: reviewKey(rec), strengths, goodGame };
+  return { text, chars: text.length, hero: rec.hero, heroName, result: res.short, minutes: Math.round(span / 6) / 10, deaths: rec.deaths.length, comparisons, key: reviewKey(rec), strengths, goodGame, goals };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -606,7 +660,10 @@ You get a MATCH DIGEST read from the screen by an automatic coach, not a video. 
 - Rank improvements by impact on winning: deaths and time dead first (every death is souls and map time for the enemy), then souls spending, then fight and objective presence (enemy-dead windows, Walkers, Midboss, Urn), then map and wave habits.
 - Be specific to Deadlock and to the player's hero and the enemy heroes named in the digest. Prefer concrete habits ("after a respawn, walk out with the next teammate or catch the closest safe wave") over generic advice ("play safer").
 - Praise real progress: when the comparison with earlier matches says improved, say what improved and by how much.
-- Speak to the player as "you", direct and warm, like a coach after a game.
+- FOCUS GOALS: score each goal first (met or missed, with its evidence), in the summary and the spoken text; a missed goal is the first improvement unless a bigger one exists.
+- The result: use it when the digest has it. After a loss with LEAD AND THROW, name the throw and the moment it turned (the fed enemy, the Rejuvenator, a base dive) before anything else.
+- Use structures and the Midboss only as the digest reads them (OBJECTIVES SEEN); never assume a Walker or Shrine fell.
+- One coach voice, the same as during the match: "you" for the player, "we" for the team, teammates and enemies by name, short reasons, the next action. Direct and warm, like a coach right after the game.
 
 Reply with one JSON object only (no markdown, no code fences):
 {"summary": "2-3 sentences: the verdict on this match, opening with what went well when it did",
@@ -615,9 +672,10 @@ Reply with one JSON object only (no markdown, no code fences):
  "keep_doing": ["a habit from this match to repeat every game"],
  "next_game_focus": "one sentence: the single thing to focus on next game",
  "hero_tips": ["tip for this hero in situations like the ones in the digest"],
- "spoken": "180-300 words of natural speech for text-to-speech"}
-went_well: 2-5 items, strongest first. improvements: 1-3 by impact, most important first (after a good game, no more than went_well). keep_doing: 1-3 items. hero_tips: 1-3 items.
-"spoken": plain sentences only, no lists, no markdown, no symbols or abbreviations like K/D/A; say times as "around fifteen minutes in" or "at 15:20"; round numbers. When the game went well, open with genuine, specific praise (what you did and why it mattered), never a generic "good game"; then the top fixes with one reason each; end with what to keep doing and the next-game focus.`;
+ "focus_goals": [{"goal": "the FOCUS GOAL text", "met": true or false or null, "note": "the evidence in a few words"}],
+ "spoken": "about 200 words (150-230) of natural speech for text-to-speech"}
+went_well: 2-5 items, strongest first. improvements: 1-3 by impact, most important first (after a good game, no more than went_well). keep_doing: 1-3 items. hero_tips: 1-3 items. focus_goals: one per FOCUS GOAL in the digest (empty without one).
+"spoken": plain sentences only, no lists, no markdown, no symbols or abbreviations like K/D/A; say times as "around fifteen minutes in" or "at 15:20"; round numbers. Open with the result and the focus goal score; when the game went well, then genuine, specific praise (what you did and why it mattered), never a generic "good game"; then the top fixes with one reason each; end with what to keep doing and the next-game focus.`;
 
 export interface ReviewPrompt { system: string; user: string; chars: number; maxTokens: number }
 export function buildReviewPrompt(digest: Digest | string, aiMaxTokens = 1024): ReviewPrompt {
@@ -633,7 +691,9 @@ export function buildReviewPrompt(digest: Digest | string, aiMaxTokens = 1024): 
 export interface Improvement { title: string; evidence: string; why_it_matters: string; how_to_practice: string }
 export interface ReviewContent { summary: string; went_well: string[]; improvements: Improvement[];
   /** Habits from this match to repeat (older stored reviews have none). */
-  keep_doing: string[]; next_game_focus: string; hero_tips: string[]; spoken: string; partial?: boolean }
+  keep_doing: string[]; next_game_focus: string; hero_tips: string[]; spoken: string; partial?: boolean;
+  /** The model's score of the match focus goals (older stored reviews have none). */
+  focus_goals?: Array<{ goal: string; met: boolean | null; note: string }> }
 export type ReviewParse = { ok: true; review: ReviewContent } | { ok: false; error: string };
 
 /** Close an unfinished JSON text: open string, dangling key / comma, open brackets. */
@@ -701,6 +761,11 @@ export function parseReview(raw: string): ReviewParse {
   }).filter(i => i.title || i.evidence);
   const r: ReviewContent = { summary: str(obj.summary, 900), went_well: strs(obj.went_well, 6), improvements, keep_doing: strs(obj.keep_doing ?? obj.keep, 4, 300), next_game_focus: str(obj.next_game_focus ?? obj.focus, 300),
     hero_tips: strs(obj.hero_tips, 4), spoken: speakable(typeof obj.spoken === 'string' ? obj.spoken : '') };
+  const goals = (Array.isArray(obj.focus_goals) ? obj.focus_goals : []).slice(0, 3).map((x: unknown) => {
+    const o = x && typeof x === 'object' ? x as Record<string, unknown> : { goal: x };
+    return { goal: str(o.goal, 160), met: typeof o.met === 'boolean' ? o.met : null, note: str(o.note ?? o.evidence, 240) };
+  }).filter(g => g.goal);
+  if (goals.length) r.focus_goals = goals;
   if (!r.spoken) r.spoken = speakable([r.summary, r.went_well.length ? `What went well: ${r.went_well.join('. ')}.` : '', ...r.improvements.map((i, n) => `${['First', 'Second', 'Third'][n]}, ${i.title}. ${i.how_to_practice}`), r.keep_doing.length ? `Keep doing this: ${r.keep_doing.join('. ')}.` : '', r.next_game_focus ? `Next game: ${r.next_game_focus}` : ''].filter(Boolean).join(' '));
   if (!r.summary && !r.spoken && !r.improvements.length) return { ok: false, error: 'The review JSON had no summary, improvements or spoken text.' };
   if (partial) r.partial = true;
@@ -743,6 +808,8 @@ function lastReplyText(cfg: AiConfig): string {
 export interface StoredReview {
   id: string; createdAt: number; date: number; hero: string | null; heroName: string; result: string; minutes: number; deaths: number; source: MatchRecord['source'];
   status: 'ok' | 'raw' | 'error'; review: ReviewContent | null; raw: string | null; error: string | null; model: string | null; digestChars: number; digest?: string;
+  /** The match focus goals as the digest scored them (deterministic, shown even without a reply). */
+  goals?: GoalResult[];
 }
 function sanitizeReview(v: unknown): StoredReview | null {
   if (!v || typeof v !== 'object') return null; const o = v as Record<string, unknown>;
@@ -753,7 +820,9 @@ function sanitizeReview(v: unknown): StoredReview | null {
     source: o.source === 'replay' || o.source === 'import' ? o.source : 'live', status: o.status === 'ok' || o.status === 'raw' ? o.status : 'error',
     review: review?.ok ? { ...review.review, ...((o.review as Record<string, unknown>).partial ? { partial: true } : {}) } : null,
     raw: typeof o.raw === 'string' ? o.raw.slice(0, 20000) : null, error: typeof o.error === 'string' ? o.error.slice(0, 500) : null, model: typeof o.model === 'string' ? o.model.slice(0, 120) : null,
-    digestChars: finite(o.digestChars) ? o.digestChars : 0, ...(typeof o.digest === 'string' ? { digest: o.digest.slice(0, DIGEST_MAX_CHARS + 200) } : {}) };
+    digestChars: finite(o.digestChars) ? o.digestChars : 0, ...(typeof o.digest === 'string' ? { digest: o.digest.slice(0, DIGEST_MAX_CHARS + 200) } : {}),
+    ...(Array.isArray(o.goals) ? { goals: (o.goals as unknown[]).filter((g): g is GoalResult => !!g && typeof g === 'object' && typeof (g as GoalResult).id === 'string').slice(0, 3)
+      .map(g => ({ id: g.id.slice(0, 30), text: str(g.text, 120), met: typeof g.met === 'boolean' ? g.met : null, detail: str(g.detail, 160) })) } : {}) };
 }
 export class ReviewStore {
   reviews: StoredReview[] = [];
@@ -776,5 +845,5 @@ export function storedReview(d: Digest, m: EndedMatch, r: ReviewResult | { error
   const ok = 'status' in r;
   return { id: d.key, createdAt: now, date: m.record.startedAt, hero: d.hero, heroName: d.heroName, result: d.result, minutes: d.minutes, deaths: d.deaths, source: m.source,
     status: ok ? r.status : 'error', review: ok ? r.review : null, raw: ok && r.status === 'raw' ? r.raw.slice(0, 20000) : null, error: r.error ?? null,
-    model: ok ? r.model : null, digestChars: d.chars, digest: d.text };
+    model: ok ? r.model : null, digestChars: d.chars, digest: d.text, ...(d.goals.length ? { goals: d.goals } : {}) };
 }

@@ -10,7 +10,7 @@ import {regionsFromReport} from '../src/region-overlays.ts';
 import {loadVerifiedAsset} from '../src/assets.ts';
 import {freshCue} from '../src/live-cues.ts';
 import {Speaker} from '../src/speech.ts';
-import {PlayerProfile, migrate, killerFamily, respawnEstimate, deadOf, spanOf, excludedReason, FALLBACK_NAMES, MAX_MATCHES, PLAYER_PROFILE_KEY, type MatchRecord} from '../src/player-profile.ts';
+import {PlayerProfile, chooseGoals, scoreGoal, migrate, killerFamily, respawnEstimate, deadOf, spanOf, excludedReason, FALLBACK_NAMES, MAX_MATCHES, PLAYER_PROFILE_KEY, type MatchRecord} from '../src/player-profile.ts';
 
 test('settings normalize corrupt input, finite numeric ranges and viewport bounds', () => {
   assert.deepEqual(normalize(null), defaults);
@@ -481,8 +481,60 @@ test('live recordings rec8-rec12 (browser path): plausible time dead, earlier we
   assert.match(by('last_low_dead')!.evidence,/^Dead 7% of the game/);assert.match(by('last_deathless')!.evidence,/9:17 \(0:31-9:48\)/);
   assert.ok(by('last_lanes'));assert.ok(by('last_team_lead'));
   assert.deepEqual(s.improvements.map(t=>t.id),['improved_dead','improved_deaths']);assert.ok(s.improved);
-  // The next match's first reminder praises; reminders during rec8-rec12 mixed praise and fixes.
-  assert.match(profile.focusCue()!.text,/^Great game: you were dead 7% of it, down from 18%/);
-  assert.ok(cues.some(c=>/^Keep it up/.test(c.text))&&cues.some(c=>/^Profile focus/.test(c.text)));
+  // The next match's first reminder praises, then names the focus goal.
+  assert.match(profile.focusCue()!.text,/^Great game: you were dead 7% of it, down from 18%.* Profile focus: this match, /);
+  // During rec8-rec12: one cue per match start (a praise, then the match focus goal) and, at a
+  // respawn, only a goal check when the death broke a goal: never a praise at a respawn (rec13 said
+  // "Keep it up: last game you went 9 minutes without dying" 5 s after a death).
+  const starts=cues.filter(c=>c.event==='start'),respawns=cues.filter(c=>c.event==='respawn');
+  assert.equal(starts.length,4);for(const c of starts)assert.match(c.text,/(^|\. )Profile focus: this match, /,c.text);
+  assert.ok(starts.some(c=>/^(Keep it up|Great game)/.test(c.text)),starts.map(c=>c.text).join('\n'));
+  assert.ok(respawns.length>0);for(const c of respawns){assert.match(c.text,/^Goal check: /);assert.match(c.key,/^player:focus:goal:/);}
+  // One goal check per goal per 5 minutes, never after the souls were spent on the death screen.
+  for(let i=1;i<respawns.length;i++)if(respawns[i].key===respawns[i-1].key&&respawns[i].file===respawns[i-1].file)assert.ok(respawns[i].clock!-respawns[i-1].clock!>=300);
+  // Each match after the first was scored against its goals.
+  for(const {record:m} of matches.slice(1)){assert.ok(m.goals?.length,m.id);for(const g of m.goals!)assert.ok(g.met!==undefined&&g.detail);}
   const prompt=profile.promptText()!;assert.ok(prompt.length<=900);assert.match(prompt,/Strong: latest match: Used 2 of 4 windows/);assert.match(prompt,/Improved: Dead 7%/);
+});
+test('match focus goal: chosen from the last 3 matches, said once at the start, checked at a death that broke it, scored at the end; no praise at a respawn',()=>{
+  let now=1e12;const store=memory();const p=new PlayerProfile({store,now:()=>now});
+  // Three matches with two close-range deaths each (Aura of Suffering, Melee), both holding 2.5k+ souls.
+  for(let i=0;i<3;i++){feedMatch(p,600,now);p.endMatch();now+=3600e3;}
+  assert.deepEqual(chooseGoals(p.matches).map(g=>g.id),['close_range','unspent_souls']);
+  assert.deepEqual(chooseGoals(p.matches.slice(0,1)).map(g=>g.id),['close_range','unspent_souls'],'two events in one match are enough');
+  assert.deepEqual(chooseGoals([]),[]);
+  // The live match: a won fight (2 enemies dead), you stay in at 25% and die to melee at 11:40.
+  const said:string[]=[];let mid:string|null=null;
+  for(let c=600;c<1300;c+=2){
+    const rel=c-600;let f:Frame;
+    if(rel>=100&&rel<130)f=frame(c,{dead:true,cause:'Melee',souls:500});
+    else if(rel>=80&&rel<100)f=frame(c,{ed:2,hp:rel>=86?250:900,souls:500});
+    else f=frame(c,{souls:500});
+    if(c===1290)(f as Record<string,unknown>).match_result='loss';
+    const ev=p.observe(f as never,now+rel*1000);
+    if(ev.matchStarted||ev.respawned){const cue=p.focusCue(ev.matchStarted?'start':'respawn');if(cue)said.push(`${ev.matchStarted?'start':'respawn'}|${cue.key}|${cue.text}`);}
+    if(rel===50){mid=p.goalText();assert.equal(p.focusCue('start'),null,'once per match start');}
+  }
+  assert.match(mid!,/^No close-range deaths \(so far: on track, no deaths\) · Spend at the usual buy/);
+  assert.equal(said.length,2,said.join('\n'));
+  assert.match(said[0],/^start\|player:focus:goal\|(.*\. )?Profile focus: this match, no close-range deaths and spend at the usual buy\.$/);
+  assert.equal(said[1],'respawn|player:focus:goal:close_range|Goal check: that was a close-range death. Next life, hold max range behind the front line.');
+  assert.ok(!said.some(s=>/^respawn\|.*(Keep it up|Great game)/.test(s)),'no praise right after a death');
+  assert.equal(p.focusCue('respawn'),null,'once per respawn');
+  assert.match(p.goalText()!,/No close-range deaths \(so far: broken 1 time \(11:40\) in 1 death\)/);
+  const rec=p.endMatch()!;
+  assert.equal(rec.result,'loss','the Defeat banner (match_result) is the result');
+  assert.equal(rec.deaths[0].lowAfterWin,true,'died under 35% after a won fight');
+  assert.deepEqual(rec.goals!.map(g=>[g.id,g.met]),[['close_range',false],['unspent_souls',true]]);
+  assert.match(rec.goals![0].detail,/^broken 1 time \(11:40\) in 1 death$/);
+  // Stored, reloaded and shown per match (Player page history).
+  const q=new PlayerProfile({store,now:()=>now}).load();
+  assert.deepEqual(q.matches[0].goals,rec.goals);assert.deepEqual(q.summary().rows[0].goals,rec.goals);
+  assert.deepEqual(migrate({schema:1,matches:[{...rec,goals:[{id:'x'.repeat(50),text:5,met:'yes'}]}]}).matches[0].goals,[{id:'x'.repeat(30),text:'x'.repeat(30),met:null,detail:''}]);
+  // Scoring helpers: a match goal (the won fight's 20 s window went unused), a death cap.
+  assert.deepEqual(scoreGoal({id:'unused_windows',text:'Push every enemy-dead window'},rec),{id:'unused_windows',text:'Push every enemy-dead window',met:false,detail:'0 of 1 enemy-dead windows used (unused at 11:20)'});
+  assert.deepEqual(scoreGoal({id:'deaths',text:'At most 2 deaths',target:2},rec),{id:'deaths',text:'At most 2 deaths',target:2,met:true,detail:'1 death (goal at most 2)'});
+  // The next match's goals: the newest match had no unspent-souls death (it measured clean).
+  assert.deepEqual(p.nextGoals(),{goals:chooseGoals(p.matches),current:false});
+  assert.ok(!chooseGoals(p.matches).some(g=>g.id==='unspent_souls'),JSON.stringify(chooseGoals(p.matches)));
 });

@@ -64,11 +64,15 @@
             <article class="panel padded"><h2>Strengths: keep doing this</h2><ul id="player-strengths" class="player-traits"></ul><h3 class="player-subhead">Improved since last time</h3><ul id="player-improved" class="player-traits"></ul></article>
             <article class="panel padded"><h2>Weaknesses to work on</h2><ul id="player-weaknesses" class="player-traits"></ul></article>
           </div>
+          <!-- Match focus goal (player-profile.ts chooseGoals / scoreGoal) -->
+          <article class="panel padded" aria-labelledby="goal-title"><h2 id="goal-title">Match focus goal</h2>
+            <p id="player-goal-next">No focus goal yet: it is chosen from the weaknesses of your last 3 matches.</p>
+            <h3 class="player-subhead">Goal history</h3><ul id="player-goal-history" class="player-goals"></ul></article>
           <!-- End-of-game AI reviews (ai-review-ui.ts) -->
           <article class="panel padded review-panel" aria-labelledby="review-title"><div class="panel-heading"><h2 id="review-title">Match reviews</h2><div class="replay-actions"><button id="review-last" type="button">Review my last match</button><button id="review-export" type="button" class="secondary" disabled>Export reviews</button></div></div>
             <p class="muted">With the AI coach on, a longer review of the whole match is written and read aloud when a match ends (PostGame screen, or 10+ minutes coached). Reviews stay in this browser (the newest 20).</p>
             <p id="review-status" class="review-status" role="status" aria-live="polite"></p>
-            <ul id="review-list" class="review-list"></ul></article>          <article class="panel padded"><h2>Matches</h2><div class="player-table-wrap" tabindex="0" role="region" aria-label="Recorded matches table (scrolls sideways)"><table class="player-table"><caption class="visually-hidden">Recorded matches, newest first</caption><thead><tr><th scope="col">Date</th><th scope="col">Hero</th><th scope="col">Observed</th><th scope="col">Deaths</th><th scope="col">Time dead (of observed game time)</th><th scope="col">Fights joined / missed</th><th scope="col">Unspent at death (half an item tier+)</th><th scope="col">Top killer</th></tr></thead><tbody id="player-matches"></tbody></table></div>
+            <ul id="review-list" class="review-list"></ul></article>          <article class="panel padded"><h2>Matches</h2><div class="player-table-wrap" tabindex="0" role="region" aria-label="Recorded matches table (scrolls sideways)"><table class="player-table"><caption class="visually-hidden">Recorded matches, newest first</caption><thead><tr><th scope="col">Date</th><th scope="col">Hero</th><th scope="col">Observed</th><th scope="col">Deaths</th><th scope="col">Time dead (of observed game time)</th><th scope="col">Fights joined / missed</th><th scope="col">Unspent at death (half an item tier+)</th><th scope="col">Top killer</th><th scope="col">Focus goal</th></tr></thead><tbody id="player-matches"></tbody></table></div>
             <details><summary>What the coach knows about you (AI prompt text)</summary><p id="player-prompt" class="muted">Nothing learned yet.</p></details>
             <p class="muted">Thresholds and sources: docs/player-profile.md. Unread values are never counted as evidence.</p></article>
         </section>

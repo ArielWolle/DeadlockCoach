@@ -4,10 +4,11 @@ import assert from 'node:assert/strict';
 import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import { AiCoach, AiHistory, MAX_INPUT_CHARS, SUMMARY_MAX_CHARS, SYSTEM_PROMPT, COACH_BRIEF, buildPrompt, buildRequest, buildSummary, callGateway, cleanSpeech,
+import { AiCoach, AiHistory, MAX_INPUT_CHARS, SUMMARY_MAX_CHARS, SYSTEM_PROMPT, buildPrompt, buildRequest, buildSummary, callGateway, cleanSpeech,
   endpoint, extractText, heroMatchup, parseAdvice, retrieve, sections, situationTerms, testConnection, upcomingObjectives, setProfileProvider, profileText,
   checkAdvice, coachingAngles, overlap, soulsView, topicOf, TASKS, aiExchanges, clearAiExchanges, onAiExchange,
   configFrom, effectiveMaxTokens, isOpenRouter, liveTriggers, themesIn, usageOf, weaknessOf, reinforceGate, strangerHeroes, damageByHero, isPraise, HERO_NAMES,
+  wordBudget, structuresLine, scrubProfile, ruleThemes, ruleCovered, structureProblem, deathCovered,
   type Advice, type AbilityRow, type AiConfig, type AiSnapshot, type ItemInfo } from '../src/ai-coach.ts';
 import { defaults, normalize } from '../src/settings.ts';
 import type { Knowledge, Settings } from '../src/types.ts';
@@ -57,7 +58,8 @@ test('state summary is deterministic, cites history and stays within budget', ()
   assert.equal(a, b);
   for (const part of ['clock 11:30 (midgame, 8:00 to 20:00)', 'You: haze', 'HP 600/1,000 (60%)', '100→90→70→60', 'Unspent souls 3,400', 'held ≥2,550 for 90s', 'can afford the usual 3,200 buy for 11:30 · Souls advice: allowed',
     'Area: Blue lane, 45% up lane · zone Blue jungle', 'Enemies: 1 alive, dead: Graves (22s), not seen recently: 1', 'Team souls: yours 20,000 vs enemy 18,000 (+2,000)',
-    '1 enemy hero visible (1 near you', '1 enemy hero missing (last seen 12s ago)', 'Midboss alive', 'rule: Back off to cover.']) assert.ok(a.includes(part), `${part}\n---\n${a}`);
+    '1 enemy hero visible (1 near you', '1 enemy hero missing (last seen 12s ago)', 'Midboss alive', 'rule (healing): Back off to cover.',
+    'Word budget: at most 20 words (midgame) · heard about 6 s after this state', 'Structures: not read: do not name a specific Guardian, Walker or Shrine as the target']) assert.ok(a.includes(part), `${part}\n---\n${a}`);
   assert.ok(a.includes('Upcoming: Guardians reach minimum resist at 12:00 (in 0:30)'), a);
   // A huge state still respects the summary budget and keeps the trigger line.
   const big = snap(690, { items: Array.from({ length: 400 }, (_, i) => `upgrade_item_${i}_${'x'.repeat(30)}`), status_effects: Array.from({ length: 50 }, (_, i) => `effect ${i}`) });
@@ -103,7 +105,7 @@ test('prompt stays within ~2,500 tokens and includes the profile, brief and exce
   const p = buildPrompt({ trigger: 'manual', summary: 'S'.repeat(5000), profile: 'P'.repeat(5000), matchup: 'M', excerpts: Array.from({ length: 6 }, (_, i) => ({ title: `T${i}`, heading: 'H', text: 'E'.repeat(5000) })) });
   assert.ok(p.chars <= MAX_INPUT_CHARS, String(p.chars)); assert.equal(p.tokens, Math.ceil(p.chars / 4)); assert.ok(p.tokens <= 2500);
   assert.equal(p.system, SYSTEM_PROMPT);
-  assert.ok(p.user.includes('PLAYER PROFILE') && p.user.includes(COACH_BRIEF) && p.user.includes('REFERENCE EXCERPTS'));
+  assert.ok(p.user.includes('PLAYER PROFILE') && p.user.includes('REFERENCE EXCERPTS') && !p.user.includes('DEADLOCK FACTS'), 'no generic wiki block any more');
   assert.ok(p.user.startsWith('TASK: The player pressed'));
   const small = buildPrompt({ trigger: 'death', summary: 'Trigger: death' });
   assert.ok(!small.user.includes('PLAYER PROFILE (from')); assert.ok(small.user.includes('just died'));
@@ -314,7 +316,8 @@ test('coaching angles tie the live situation to profile weaknesses; the death-sc
   assert.equal(angles.length, 3, angles.join('\n'));
   assert.match(angles[0], /^- Respawned 10s ago, 0 allies near you → walk out with a teammate .*\[profile: Dies soon after respawning\]$/);
   assert.match(angles[1], /^- Close-range divers alive: yamato \(1 enemy near you\); your last death was at close range → hold max range behind your front line .*\[profile: Killed at close range\]$/);
-  assert.match(angles[2], /^- 2 enemies dead \(graves, shiv, first back in 22s\) → group up and hit the Guardian or Walker in Green lane \(front 60% up\)/);
+  // No structure state read: the angle never names a Guardian or Walker as the target.
+  assert.match(angles[2], /^- 2 enemies dead \(graves, shiv, first back in 22s\) → group up and push Green lane \(front 60% up\) to its next standing structure/);
   const summary = buildSummary({ snapshot: s, history: h, now: 80000, trigger: 'periodic', profile });
   assert.ok(summary.includes('Respawned 10s ago (last death at 16:40, cause Melee)') && summary.includes('COACHING ANGLES'), summary);
   assert.deepEqual(coachingAngles({ snapshot: snap(1080, { dead: true, screen: 'Dead' }), history: h, now: 90000, profile }), []);
@@ -512,7 +515,10 @@ test('adaptive cadence: events ask sooner (respawn, enemy-dead window, objective
   // A death and respawn: the respawn is an event (and the respawn shows in WHY NOW).
   await step(30, quiet(1466, { dead: true, screen: 'Dead', hp: null, death_cause: 'Melee' })); await flush();
   const deaths = bodies.length; assert.equal(deaths, 2, 'no death review yet (waits for the panel)');
+  // 24:26 without a respawn timer read: a long respawn, so it waits up to 15 s for the rule death review.
   now += 9000; coach.observe(quiet(1475, { dead: true, screen: 'Dead', hp: null, death_cause: 'Melee' }), [], true); await flush();
+  assert.equal(bodies.length, 2, 'waits for the rule death review');
+  now += 7000; coach.observe(quiet(1482, { dead: true, screen: 'Dead', hp: null, death_cause: 'Melee' }), [], true); await flush();
   assert.equal(bodies.length, 3); assert.match(bodies[2], /^TASK: The player just died/);
   // The death review passed (nothing spoken), so the respawn asks; the Soul Urn at 25:00 is 5 s away.
   await step(20, quiet(1495)); assert.equal(bodies.length, 4);
@@ -560,7 +566,7 @@ test('summary wording (rec11): lanes are places, roles and items are named, team
   assert.match(buildSummary({ snapshot: three, history: new AiHistory(), now: 0, trigger: 'periodic' }), /Midboss alive and 3 enemies dead: a team take is possible/);
   // The prompt forbids lane colours as heroes, asks for situation → action → why, and allows PASS.
   assert.match(SYSTEM_PROMPT, /Green, Blue and Yellow are LANES, never heroes/); assert.match(SYSTEM_PROMPT, /situation → specific action → why/); assert.match(SYSTEM_PROMPT, /"weakness"/);
-  assert.ok(!/Do not die alone while it is up/.test(COACH_BRIEF));
+  assert.ok(!/Do not die alone while it is up/.test(SYSTEM_PROMPT));
   // A low enemy is an opportunity angle, never a threat; the diver angle needs a live reason.
   const low = snap(1100, { hero_status: [{ ally: false, slot: 0, hero: 'hero_nano', health_ratio: .18, networth_observations: 3, observations: 3, position_observations: 0 }], enemy_heroes: ['hero_nano'] });
   low.minimap = { ...low.minimap!, heroes: [] };
@@ -716,11 +722,142 @@ test('controller: a good play asks sooner (WHY NOW) and a reinforcement is spoke
   assert.equal(bodies.length, 0, 'nothing changed');
   now += 4000; coach.observe(base(834, 1), [], true); await flush(); assert.equal(bodies.length, 0, 'one enemy dead is no window');
   now += 4000; coach.observe(base(838, 5), [], true); await flush();
+  // Four enemies fell at once: a fight is on (2+ deaths in 10 s), so the rule coach has it.
+  assert.equal(bodies.length, 0, 'no periodic request during a fight'); assert.equal(coach.status.fightSkips, 1);
+  now += 12000; coach.observe(base(850, 5), [], true); await flush();
   assert.equal(bodies.length, 1);
   const user = JSON.parse(bodies[0]).messages[1].content as string;
   assert.match(user, /WHY NOW: [^\n]*good play \(see GOOD PLAYS\): pushed into the enemy base at 13:58 while 5 enemies were dead/);
   assert.deepEqual(delivered, ['ai:periodic:reinforce|Good push while five were dead: that is how a lead snowballs. Back off before they respawn.']);
   assert.deepEqual(coach.history.praised, ['window-push:838']);
+});
+
+// ---------------------------------------------------------------------------------------
+// rec13 (docs/coach-review-13.md items 12-14): game state, one coach voice, the death review
+// ---------------------------------------------------------------------------------------
+const E13 = ['hero_inferno', 'hero_atlas', 'hero_vampirebat', 'hero_ghost', 'hero_chrono', 'hero_necro'], A13 = ['hero_orion', 'hero_bebop', 'hero_familiar', 'hero_mirage', 'hero_fencer', 'hero_punkgoat'];
+const NW13 = [49000, 38000, 35000, 41000, 35000, 35000];
+const team13 = (timers: number[] = [], alliesDead = 0) => [
+  ...A13.map((hero, slot) => ({ ally: true, slot, hero, health_ratio: 1, dead: slot > 0 && slot <= alliesDead, respawn_secs: slot > 0 && slot <= alliesDead ? 20 : null, networth: 30000, networth_observations: 3, observations: 3, position_observations: 0 })),
+  ...E13.map((hero, slot) => ({ ally: false, slot, hero, health_ratio: 1, networth: NW13[slot], dead: slot < timers.length, respawn_secs: timers[slot] ?? null, networth_observations: 3, observations: 3, position_observations: 0 })),
+];
+const s13 = (clock: number, extra: Partial<AiSnapshot> = {}, timers: number[] = [], alliesDead = 0): AiSnapshot =>
+  snap(clock, { hero: 'hero_orion', enemy_heroes: E13, ally_heroes: A13, hero_status: team13(timers, alliesDead), hp: 2000, max_hp: 2100, souls: 1000, ...extra });
+
+test('rec13 state: structures, Midboss holder, fed enemy, enemy items, K/D/A, fight state, throw, ultimate, focus goal, latency-aware window', () => {
+  const items: Record<string, ItemInfo> = { upgrade_titan_round: { name: 'Titanic Magazine', cost: 3200, slot: 'weapon' }, upgrade_magic_shield: { name: 'Spirit Shielding', cost: 1600, slot: 'vitality' } };
+  const name = (id: string) => HERO_NAMES[id] || items[id]?.name || id;
+  const h = new AiHistory(); h.name = name; let t = 0;
+  const push = (s: AiSnapshot) => { h.push(s, [], t); t += 5000; };
+  push(s13(2000, { ally_networth: 150000, enemy_networth: 120000 }));
+  push(s13(2190, { ally_networth: 176000, enemy_networth: 130000, players: [{ ally: false, hero: 'hero_inferno', items: ['upgrade_magic_shield', 'upgrade_titan_round'] }, { ally: true, hero: 'hero_orion', items: [], kills: 23, deaths: 5, assists: 11 }] }));
+  push(s13(2360, { ally_networth: 180000, enemy_networth: 150000, kills: null, deaths: null, assists: null }));
+  // Three enemies fall within a few seconds while you are at 30%: a won fight, on now.
+  const now = s13(2370, { ally_networth: 180000, enemy_networth: 150000, hp: 630, structures: [{ lane: 'Yellow', kind: 'walker', own: false, alive: true }, { lane: 'Blue', kind: 'guardian', own: false, alive: false }, { lane: 'Green', kind: 'guardian', own: true, alive: true }],
+    midboss_taken_by: 'enemy', abilities: [{ slot: 1, ready: true }, { slot: 4, ready: true }] }, [30, 25, 20]);
+  push(now);
+  const f = h.fightState(t); assert.equal(f.kind, 'won'); assert.equal(f.on, true); assert.equal(f.enemies.length, 3);
+  const out = buildSummary({ snapshot: now, history: h, now: t, trigger: 'periodic', name, items: id => items[id] ?? null, goal: 'No deaths below 35% health after a won fight (so far: on track, no deaths)' });
+  for (const part of [
+    'Word budget: at most 10 words (fight on) · heard about 6 s after this state',
+    'MATCH FOCUS GOAL: No deaths below 35% health after a won fight (so far: on track, no deaths)',
+    'Fight: ON NOW (3 heroes died in the last 10 s) · just WON a fight: 3 enemies died in the last 20 s (Infernus, Abrams, Mina) vs 0 of ours · you are at 30%: heal first, objective second',
+    'Enemy-dead window: at least 2 stay dead about 19 s after you are heard',
+    'You: Grey Talon (long-range marksman) · K/D/A 23/5/11', 'Your ultimate: ready',
+    'Enemy items (scoreboard, 3:00 ago): Infernus: Titanic Magazine, Spirit Shielding',
+    'Fed enemy: Infernus 49,000 net worth vs next Lady Geist 41,000 (+8,000): their win condition',
+    'THROW RISK: we were +46,000 and it is shrinking: protect the lead, no base dives without the Rejuvenator',
+    'Structures (read; a structure not listed is unknown, never a target): theirs: Blue Guardian destroyed; Yellow Walker standing · ours: Green Guardian standing',
+    'Midboss: taken by the enemy at about 39:30: they may hold the Rejuvenator']) assert.ok(out.includes(part), `${part}\n---\n${out}`);
+  assert.ok(out.length <= SUMMARY_MAX_CHARS);
+  // Budgets per moment; a window that closes within 10 s of being heard.
+  assert.deepEqual(wordBudget('death', now, h, t), { words: 30, sentences: 2, why: 'death screen' });
+  assert.equal(wordBudget('periodic', snap(300), new AiHistory(), 0).words, 15);
+  assert.equal(wordBudget('periodic', snap(900), new AiHistory(), 0).words, 20);
+  const short = s13(2380, {}, [14, 12]); h.push(short, [], t + 20000);
+  assert.equal(h.windowLeft(short), 6);
+  assert.match(buildSummary({ snapshot: short, history: h, now: t + 20000, trigger: 'periodic', name }), /Enemy-dead window: at least 2 stay dead about 6 s after you are heard: too short for a structure, PASS or call the reset/);
+  // No structure state at all: the summary forbids naming one.
+  assert.equal(structuresLine(new AiHistory(), 600), 'Structures: not read: do not name a specific Guardian, Walker or Shrine as the target');
+  // The prompt: no wiki block, the essentials in the system prompt, the profile without other matches' heroes.
+  const profile = "Player profile (7 matches, mostly Violet). Weak: Killed at close range: 2 of 2 deaths (melee hits x1, Victor's Aura of Suffering x1); Same killer again: Graves killed you 3 times. Focus: keep distance.";
+  const scrubbed = scrubProfile(profile);
+  assert.ok(!/Victor|Graves/.test(scrubbed) && /mostly Violet/.test(scrubbed), scrubbed);
+  assert.equal(scrubProfile('Seven of 9 deaths came from melee.'), 'Seven of 9 deaths came from melee.');
+  const p = buildPrompt({ trigger: 'periodic', summary: out, profile });
+  assert.ok(!p.user.includes('DEADLOCK FACTS') && !p.user.includes('Graves killed') && p.user.includes('PLAYER PROFILE (earlier matches'));
+  for (const rule of [/"we" for the team/, /Name one teammate/, /the why in six words or fewer/, /Decide the next 30 seconds/, /only to a structure STATE lists as standing/, /closes within 10 seconds of being heard, PASS or call the reset/, /a Walker is 3,675 team souls/, /MATCH FOCUS GOAL/])
+    assert.match(SYSTEM_PROMPT, rule);
+});
+
+test('one coach voice: rule-call themes (plan:, threat:, lead:, reset:) within 30 s, structures not standing, windows too short, one AI death call per death', async () => {
+  const a = (speak: string, focus: string): Advice => ({ speak, focus, priority: 'Normal', why: '' });
+  assert.deepEqual(ruleThemes('plan:walker:Yellow'), ['objective', 'team']); assert.deepEqual(ruleThemes('threat:hero_atlas'), ['positioning', 'map']);
+  assert.deepEqual(ruleThemes('lead:throw'), ['team', 'objective']); assert.deepEqual(ruleThemes('reset:heal'), ['healing']); assert.deepEqual(ruleThemes('pos:enemies_down'), ['objective', 'team']);
+  const h = new AiHistory(); h.name = heroName;
+  h.push(s13(1800, { structures: [{ lane: 'Yellow', kind: 'walker', own: false, alive: true }, { lane: 'Blue', kind: 'guardian', own: false, alive: false }] }), [], 0);
+  h.push(s13(1810), [{ key: 'plan:walker:Yellow', text: 'Plan: their Yellow Walker is weak, we go together at 30:30.', priority: 'Normal', cooldown_secs: 60 }], 10000);
+  h.push(s13(1820), [], 20000);
+  const v = soulsView(s13(1820), h, 20000);
+  const take = a('We take their Yellow Walker with Bebop now, structures beat kills.', 'objective');
+  const r1 = checkAdvice(take, 'periodic', v, h, 20000);
+  assert.ok(!r1.ok && /same theme \(objective\) as the rule call plan:walker:Yellow at 30:10/.test(r1.reason), JSON.stringify(r1));
+  assert.ok(ruleCovered('objective', h, 20000) && !ruleCovered('healing', h, 20000));
+  h.push(s13(1845), [], 45000);
+  assert.ok(checkAdvice(take, 'periodic', soulsView(s13(1845), h, 45000), h, 45000).ok, '30 s later the theme is free');
+  // A structure read as destroyed, or never read, is never the target; our own Guardian is a place to heal.
+  const gone = checkAdvice(a('We hit their Blue Guardian with Rem now, it is our best push.', 'objective'), 'manual', v, h, 45000);
+  assert.ok(!gone.ok && /names their Blue Guardian, read as destroyed/.test(gone.reason), JSON.stringify(gone));
+  assert.equal(structureProblem('Take the Green Shrine with Mirage.', h), 'names their Green Shrine, not read as standing');
+  assert.equal(structureProblem('Heal at our Green Guardian with Bebop first.', h), null);
+  assert.equal(structureProblem('We take their Blue Guardian.', new AiHistory()), null, 'no structure state: the summary rule applies, not the gate');
+  const cut = checkAdvice(a('Heal up to full with Bebop first. Then we hit their Blue Guardian.', 'healing'), 'periodic', v, h, 45000);
+  assert.ok(cut.ok && cut.speak === 'Heal up to full with Bebop first.' && /read as destroyed/.test(cut.note || ''), JSON.stringify(cut));
+  // An enemy-dead window that closes 6 s after it is heard (timers 14 and 12, latency 6 s).
+  h.push(s13(1850, {}, [14, 12]), [], 50000);
+  const late = checkAdvice(a('Push with Rem now: we take their Yellow Walker.', 'objective'), 'periodic', soulsView(s13(1850), h, 50000), h, 50000);
+  assert.ok(!late.ok && /window closes about 6 s after it is heard/.test(late.reason), JSON.stringify(late));
+  // The death review: one death despite the Shop / health-less Gameplay frames of a 64 s death
+  // (rec13 41:05), one AI request, and an answer with the rule review's lesson is not spoken.
+  let now = 1e6; const bodies: string[] = []; const delivered: string[] = [];
+  const fetchImpl = (async (_u: string, init: RequestInit) => { bodies.push(JSON.parse(String(init.body)).messages[1].content);
+    return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ speak: 'Melee caught you alone. Next life, walk out with a teammate after you respawn.', priority: 'Normal', why: 'w', focus: 'positioning' }) } }] })); }) as unknown as typeof fetch;
+  const coach = new AiCoach({ settings: () => settings(), isLive: () => true, generation: () => 1, knowledge: async () => [], now: () => now, fetchImpl, name: heroName, onAdvice: c => delivered.push(c.text) });
+  const flush = async () => { for (let i = 0; i < 6; i++) await new Promise(r => setTimeout(r, 0)); };
+  const review = { key: 'death:review:2480', text: 'Why you died: Melee was the biggest source on the damage panel (2,322). You walked out alone 5 seconds after respawning. Next time: After a respawn, group with a teammate or catch a wave near your guardian first.', priority: 'Normal' as const, cooldown_secs: 0 };
+  const seq: Array<[number, Partial<AiSnapshot>, typeof review[]]> = [[2442, {}, []], [2461, { hp: 713 }, []], [2465, { dead: true, screen: 'Shop', hp: null, max_hp: null }, []], [2469, { dead: true, screen: 'Dead', hp: null, death_cause: 'Melee' }, []],
+    [2477, { screen: 'Gameplay', hp: null, max_hp: null }, []], [2480, { dead: true, screen: 'Dead', hp: null }, []], [2490, { dead: true, screen: 'Dead', hp: null, respawn_secs: 64 }, [review]], [2494, { dead: true, screen: 'Dead', hp: null, respawn_secs: 60 }, []],
+    [2504, { screen: 'Gameplay', hp: null, max_hp: null }, []], [2509, { screen: 'Gameplay', hp: null, max_hp: null }, []], [2513, { dead: true, screen: 'Dead', hp: null }, []], [2528, { dead: true, screen: 'Dead', hp: null }, []], [2555, { hp: 3000, max_hp: 3201 }, []]];
+  let last = 2442;
+  for (const [clock, extra, cues] of seq) { now += (clock - last) * 1000; last = clock; coach.observe(s13(clock, extra), cues, true); await flush(); }
+  assert.equal(coach.history.deathCount, 1, 'one death, not three');
+  assert.equal(bodies.filter(b => /^TASK: The player just died/.test(b)).length, 1, 'one AI death request');
+  assert.match(bodies[0], /Rule death review of this death \(already spoken\): Why you died: Melee/);
+  assert.deepEqual(delivered, [], 'the same lesson as the rule review is not spoken twice');
+  assert.match(coach.status.message, /same next-life lesson as the rule death review|repeats the rule call "Why you died/);
+  assert.match(deathCovered('Abrams dove you in their jungle. Next life, walk out with a teammate first.', coach.history)!, /same next-life lesson as the rule death review \("After a respawn, group with a teammate/);
+  assert.equal(deathCovered('Abrams dove you while Bebop and Rem were down. Next life, back off to Bebop when two allies fall.', coach.history), null, 'a different lesson is spoken');
+});
+
+test('fight state: no periodic AI request during a fight; an answer that arrives in a fight is dropped', async () => {
+  let now = 1e6; const bodies: string[] = []; const delivered: string[] = []; let gate: Promise<void> = Promise.resolve();
+  const fetchImpl = (async (_u: string, init: RequestInit) => { bodies.push(String(init.body)); await gate;
+    return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ speak: 'Abrams is their engage: we hold behind Bebop and kite.', priority: 'Normal', why: 'w', focus: 'positioning' }) } }] })); }) as unknown as typeof fetch;
+  const coach = new AiCoach({ settings: () => settings({ aiInterval: 20 }), isLive: () => true, generation: () => 1, knowledge: async () => [], now: () => now, fetchImpl, name: heroName, onAdvice: c => delivered.push(c.text) });
+  const flush = async () => { for (let i = 0; i < 6; i++) await new Promise(r => setTimeout(r, 0)); };
+  const step = async (secs: number, s: AiSnapshot) => { now += secs * 1000; coach.observe(s, [], true); await flush(); };
+  await step(0, s13(1500)); await step(10, s13(1510));
+  await step(5, s13(1515, {}, [30, 28])); // two enemies die at once: a fight is on
+  await step(6, s13(1521, {}, [24, 22])); assert.equal(bodies.length, 0, 'the 20 s quiet interval passed, but the fight blocks it');
+  assert.equal(coach.status.fightSkips, 1);
+  await step(10, s13(1531, {}, [14, 12])); assert.equal(bodies.length, 1, 'the fight is over 10 s after the deaths');
+  // A request in flight when a fight starts: the answer is dropped.
+  let release!: () => void; gate = new Promise(r => { release = r; });
+  await step(50, s13(1581)); assert.equal(bodies.length, 2);
+  coach.history.push(s13(1582), [], now); coach.history.push(s13(1583, {}, [], 2), [], now + 1000);
+  release(); await flush(); await flush();
+  assert.equal(coach.status.fightDrops, 1); assert.match(coach.status.message, /a fight started/);
+  assert.match(coach.diagnostic(), /fights left to the rule coach/);
 });
 
 // The live rec11 → rec12 session (local recordings, not in the repository): with the previous match

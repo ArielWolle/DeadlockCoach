@@ -180,17 +180,68 @@ located time on a lane; team lead from 1:10, up to +52k; improved: dead 7% vs 18
 deaths per 10 min. The earlier matches' weaknesses (dying, unspent souls, repeat killer, burst)
 are still listed.
 
+## Match focus goal
+
+docs/coach-review-13.md item 13: one or two **measurable** goals per match, chosen from the
+weaknesses of the last 3 counted matches, said once at the match start, checked at the deaths that
+break them, scored at the end (end-of-game review and Player page). Logic: `GOALS`,
+`chooseGoals()`, `scoreGoal()`, `brokenBy()` in `web/src/player-profile.ts`.
+
+| Goal (`id`) | Text | Broken by (per death unless noted) |
+|---|---|---|
+| `won_fight_low` | No deaths below 35% health after a won fight | `lowAfterWin`: 2+ enemies dead (more than ours) in the 20 s before the death and a health read under 35% at least 4 s before it (rec13 29:26: five dead, you at 15% hitting their Walker) |
+| `close_range` | No close-range deaths | the killer family is close range (melee, Victor's aura, Drifter's mark) |
+| `unspent_souls` | Spend at the usual buy (1,600 / 3,200 / 6,400): no death holding half an item tier | souls at death ≥ `deathSpend(clock)` |
+| `respawn_deaths` | No deaths within 60 s of a respawn | `afterRespawnSecs ≤ 60` |
+| `alone_deaths` | No deaths with no ally near | `alone` |
+| `weak_entry` | No deaths after going back in under 60% health | `weakEntry` |
+| `forward_unseen` | No deaths in their half with 3+ enemies unseen | `forwardUnseen` |
+| `unused_windows` | Push every enemy-dead window | per match: an unused window (not measurable without one) |
+| `deaths` | At most N deaths (N = 70% of the recent median, at least 2) | only when no specific goal qualifies and the median is 5+ deaths |
+
+**Choice.** A goal needs 2+ events in the last 3 counted matches (or events in 2 of them), scored
+by events × 0.85^age; the 2 best are kept, ties in the table order (most specific first). A goal
+the newest match measurably got right (deaths evaluated, none broke it) is skipped, like the
+`CONTRADICTS` rule of the focus lines. The goals are chosen when a match starts (`goals`, persisted
+with the open match) and stored with the match at its end as `goals: [{id, text, met, detail}]`
+(`met` = true / false / null when not measurable; e.g. `broken 2 times (19:30, 29:26) in 6 deaths`).
+`goalText()` gives the progress so far to the AI coach (`setGoalProvider` in main.ts): "No
+close-range deaths (so far: on track, 2 deaths, none broke it)". The end-of-game digest scores
+the goals the match started with (`FOCUS GOALS (set at the match start)`); a replay or a match
+without them gets the goals its earlier matches give, marked "not announced live". The Player page
+shows this or the next match's goals, the goal history (met / missed per match, "N of M goals met")
+and a Focus goal column in the matches table.
+
+rec13 (after rec8, rec11, rec12): `unspent_souls` (missed: 19:30, 29:26) and `forward_unseen`
+(missed: 23:09). rec9-rec12 played live in order: rec9 `unused_windows` + `unspent_souls`, rec11
+`unspent_souls` + `close_range`, rec12 `unspent_souls` + `unused_windows`.
+
+Also for rec13: the Victory / Defeat banner the vision reads (`match_result`, also over the death
+screen or the scoreboard) is the match result; and one death = one event: a gameplay frame without
+a health read while the respawn estimate is more than 5 s away stays in the death (rec13's 41:05
+death, 64 s long, was split in two by health-less frames at 41:44 and 41:49: 7 deaths instead of 6).
+
 ## Live reminders
 
-At a match start and at each respawn the coach may say one `player:focus:*` line (Normal
-priority), at most every 5 minutes, learned from completed counted matches. Lines alternate
-between praise ("Keep it up: last game you used 2 enemy-dead windows to push their base.") and
-one fix ("Profile focus: ..."), rotating through each list; the rotation restarts after every new
-completed match. After a clearly improved match the first line is its biggest improvement ("Great
-game: you were dead 7% of it, down from 18%. Keep it up."). A fix the last match contradicts is
-not said (dying after low time dead, unused windows after using them, unspent souls after dying
-with none). The cue key is `player:focus:<trait id>`. It goes through the same delivery path as
-every other cue (mute, freshness and per-key cooldowns apply).
+`focusCue('start' | 'respawn')` (main.ts calls it at a match start / a respawn), at most once per
+match start and once per respawn when relevant, learned from completed counted matches:
+- **Match start:** one specific praise of the last matches when there is one, then the focus goals:
+  "Keep it up: last game you used 2 of 4 windows to push their base. Profile focus: this match, no
+  close-range deaths and spend at the usual buy." Without goals, one line of the praise / fix
+  rotation (praise first after a clearly improved match: "Great game: you were dead 7% of it, down
+  from 18%."; the rotation restarts after every new completed match). A fix the last match
+  contradicts is not said (dying after low time dead, unused windows after using them, unspent
+  souls after dying with none). Key `player:focus:goal` (with goals) or `player:focus:<trait id>`.
+- **Respawn:** only a goal check, when the death broke a focus goal ("Goal check: that was a
+  close-range death. Next life, hold max range behind the front line."), key
+  `player:focus:goal:<id>`; at most once per goal per 5 minutes of game time, and not for unspent
+  souls already spent on the death screen. **Never praise at a respawn**: rec13 said "Keep it up:
+  last game you went 9 minutes without dying" 5 s after a death. A start cue within 60 s of a death
+  of this match has no praise either, and after a death no "deathless" praise.
+- Without a match in progress (tests, scripts) a start cue is limited to one per 5 minutes.
+
+The cues go through the same delivery path as every other cue (mute, freshness and per-key
+cooldowns apply).
 
 ## API (`PlayerProfile`)
 
@@ -198,7 +249,8 @@ every other cue (mute, freshness and per-key cooldowns apply).
 then profile strengths, `improvements`, `improved`, `weaknesses`, `rows` with `excluded`),
 `promptText(hero?)` (<= 900 characters: "Weak: ...", "Strong: ...", "Improved: ...", "Focus: ...";
 ai-coach.ts reads the weakness labels between "Weak:" and "Strong:"), `focusTips(n)` (alternating
-praise and fixes), `focusCue()`, `addReplay(snapshots)`, `load()` / `save()` (schema 1; a bare
+praise and fixes), `focusCue(kind)`, `goals` / `nextGoals()` / `goalText()` (match focus goal),
+`addReplay(snapshots)`, `load()` / `save()` (schema 1; a bare
 array is migrated; newer schemas are refused; new fields are optional), `exportJSON()` /
 `importJSON()`, `reset()`.
 The AI coach gets the text through `setProfileProvider(playerPromptText)` (exported by `main.ts`),

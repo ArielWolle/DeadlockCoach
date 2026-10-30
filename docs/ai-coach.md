@@ -102,11 +102,36 @@ gateway that is not running.
   nothing new since …: PASS unless you see a NEW, specific insight`.
 - **Death:** once per death, after the rule coach's death review **of this death** has been
   spoken, or 4 s after the death panel has been read (8 s at most); with a respawn timer of 25 s or
-  more it waits up to 15 s for that review (rec12's reviews came 7-25 s after the death). This is a deeper "why you died and what to
-  change" answer of up to 3 sentences, built from the damage panel, the killing blow, the
-  status effects of the last 10 s alive, the health before death, who was near you and the
-  rule death review (which names the killer hero). Opening the shop or scoreboard from the
-  death screen is the same death, not a respawn followed by a second death.
+  more (or none read after 15:00) it waits up to 15 s for that review, with 40 s or more (or none
+  read after 30:00) up to 25 s (rec12's reviews came 7-25 s after the death, rec13's 41:05 one 25 s).
+  The answer (≤ 2 sentences, 30 words) is spoken only when it adds a **different concrete lesson**
+  to the rule review (`deathCovered()`: not ≥ 45% of its words, and its next-life sentence not only
+  the review's "Next time" concepts): one coach voice on the death screen. No cheap retry for a
+  death, and never two AI death calls within 20 s of game time. It is built from the damage panel,
+  the killing blow, the status effects of the last 10 s alive, the health before death, who was
+  near you and the rule death review (which names the killer hero). Opening the shop or scoreboard
+  from the death screen is the same death, and so is a gameplay frame **without a health read**
+  while the respawn timer still runs (or within 15 s of the death without a timer): rec13's 64 s
+  death at 41:05 read Shop at 41:05, Gameplay without health at 41:17, 41:44 and 41:49, and got 3
+  AI death reviews; now it is one death and one request.
+- **Fights belong to the rule coach.** While a fight is on (2+ heroes died on the top bar in the
+  last 10 s, or your health falls fast: `health_delta_ratio` ≤ -25% or 30 points within 6 s) no
+  periodic request is made, and a periodic answer that arrives during one is dropped
+  (diagnostics: "N fights left to the rule coach", "N dropped for a fight").
+- **Not on a theme the rule coach just covered.** A rule call's key gives its themes
+  (`RULE_THEMES`: `plan:` objective/team, `threat:` positioning/map, `lead:` team/objective,
+  `reset:` healing, `fight` team/positioning, `timer:` / `map:urn` / `pos:enemies_down`
+  objective, `map:wave` / `wave:` / `lane:last_hit` wave, `lane:back_off` / `lane:critical`
+  healing, `pos:gank` / `pos:missing` map, `unspent` economy, `counter:` itemization, ...). A
+  cadence event whose theme a rule call covered in the last 30 s does not ask (respawn → team,
+  enemy-dead window / objective → objective, souls → economy, team souls swing → team), and a
+  periodic answer on such a theme is not spoken ("same theme (objective) as the rule call
+  plan:walker:Yellow at 30:10"). RECENT COACH CALLS show each call's themes.
+- **Latency-aware windows.** The gateway latency is measured (smoothed, default 6 s; rec13's median
+  was 5.8 s) and the summary says "heard about 6 s after this state". An enemy-dead window is
+  stated as the seconds at least 2 enemies stay dead after the call is heard (second-longest
+  respawn timer minus the latency); at 10 s or less it is "too short for a structure, PASS or call
+  the reset", the event does not ask, and an answer sending us to a structure is not spoken.
 - **On demand:** **Ask the coach now**. In Replay lab and when you are not live, the answer is
   shown but not spoken. Before any match state has been read it does not send a request (rec11
   spent one on "Manual trigger with no clock").
@@ -359,6 +384,38 @@ when the summary says `Praise: allowed`.
 | Tips spoken | 77 (2.72/min) | 17 (0.60/min), 3 of them praise (no deaths for 7 minutes at 8:35, the urn at 17:25, the 29% reset at 25:55) |
 | Good plays found | — | reset 2:16, deathless 7:31, death-shop 10:17 and 14:54, window-push 13:54 and 27:40, urn 16:46, reset 25:39 (+4 team-lead context lines) |
 
+rec13 (`scripts/ai-coach-eval.ts <main checkout>/frames/rec13/recording.json`, Grey Talon, a loss,
+38.8 game minutes): the "before" sizes come from the live `ai-log.json` next to the recording (48
+exchanges); the enemy items and scoreboard rows of the newer scan `replay1.jsonl` are merged by
+game clock (`--merge none` skips it). The fake model is the rec11 stock-line model.
+
+| | Before (live rec13) | After (this build, fake model) |
+|---|---|---|
+| Periodic prompt (system + user) | 9,722 chars avg (40 calls) | 7,056 chars avg (27% smaller) |
+| Death prompt | 9,674 chars avg (8 calls) | 7,928 chars avg (18% smaller) |
+| Generic wiki block | ~1,600 chars on 48 of 48 calls | none |
+| AI calls on the theme of a rule call of the 30 s before | 8 of 29 (by the rule keys; the review counted 13) | 2 answers gated, 7 event requests left to the rule coach |
+| Periodic requests during fights | — | 0 (34 fight episodes) |
+| Deaths / AI death requests | 8 AI death calls (3 for the 41:05 death), 7 rule reviews | 6 deaths, 6 requests (one per death), no retry |
+
+The new periodic state at 25:31 (two enemies dead, you carrying the urn), abridged:
+
+```text
+Trigger: periodic · clock 25:31 (lategame, from 20:00) · screen Gameplay
+WHY NOW: enemy-dead window: 2 enemies dead (Infernus, Graves)
+Word budget: at most 20 words (lategame) · heard about 6 s after this state
+You: Grey Talon (long-range marksman) · level 26 · K/D/A 7/1/5 · profile is mostly from Violet games: check its weaknesses fit Grey Talon
+Enemies: 4 alive, dead: Infernus, Graves (28s), not seen recently: 2
+Enemy items (scoreboard, 5:18 ago): Infernus: Swift Striker, Enduring Speed, Titanic Magazine, Extra Regen; Abrams: Extra Regen; Mina: Tankbuster, Quicksilver Reload; Paradox: Sharpshooter, Restorative Shot; Graves: Arcane Surge, Enchanter's Emblem, Restorative Shot
+Team souls: yours 151,000 vs enemy 142,000 (+9,000) · at 22:58 it was +17,000: your team fell 8,000 further behind since · THROW RISK: we were +17,000 and it is shrinking: protect the lead, no base dives without the Rejuvenator
+Structures: not read: do not name a specific Guardian, Walker or Shrine as the target
+THEMES COACHED (last 10 min; "blocked" = do not coach it again unless WHY NOW gives a new trigger for it):
+- theme team: 20:32 (NEW trigger now: enemy-window)
+- weakness "not walking out alone": 20:32 (blocked)
+COACHING ANGLES (live situation → fix; [profile] = matches a known weakness):
+- 2 enemies dead (Infernus, Graves, first back in 28s) → group up and push Blue lane (front 59% up) to its next standing structure now instead of farming your own half
+```
+
 ## What is sent
 
 The input budget is **about 2,500 tokens**, estimated as characters ÷ 4 and enforced by
@@ -366,13 +423,16 @@ The input budget is **about 2,500 tokens**, estimated as characters ÷ 4 and enf
 
 | Part | Budget | Source |
 |---|---|---|
-| System prompt | ~3,200 chars | `SYSTEM_PROMPT` in `web/src/ai-coach.ts` |
+| System prompt | ~3,100 chars | `SYSTEM_PROMPT` in `web/src/ai-coach.ts` (one coach voice; the essentials of the old wiki block in rule 9) |
 | Task line | ~250–800 chars | depends on the trigger (periodic / death / manual) |
 | State summary | ≤ 3,000 chars | `buildSummary()`: the latest snapshot plus about 90 s of history, recent AI advice and coaching angles |
-| Player profile | ≤ 900 chars | `setProfileProvider(fn)` callback, if registered |
-| Coach brief | ~1,500 chars | `COACH_BRIEF`: key facts from `docs/timings` and `docs/strategy` |
+| Player profile | ≤ 500 chars | `setProfileProvider(fn)` callback, scrubbed of heroes of other matches (`scrubProfile()`) |
 | Matchup line | ≤ 300 chars | `docs/heroes/<hero>.md` win rates vs the enemies you face |
-| Excerpts | ≤ 3 × 700 chars | sections from strategy/jungle/timings docs, ranked by keyword score |
+| Excerpts | periodic none · death 1 · manual 2, ≤ 450 chars each | sections from strategy/jungle/timings docs, ranked by keyword score |
+
+The generic **coach brief** (`COACH_BRIEF`, ~1,600 characters on all 48 rec13 calls) is gone: its
+essentials (item tiers, haunted souls lost on death, a Walker's 3,675 team souls, the Midboss /
+Rejuvenator rule) are one rule of the system prompt; timers come from STATE.
 
 If the input is over budget, the app shrinks the parts in this order: excerpts, then the
 profile, then the summary. Low-value summary lines (for example, lanes) are dropped before
@@ -402,8 +462,33 @@ means safe. It includes:
   enemies near you, and whether the death-spend threshold was reached
 - the rule coach's death review (death trigger), or a compact "Last death at … (N ago): killer;
   cause; most damage; status effects" line afterwards
-- RECENT AI ADVICE (what the AI already said, with themes), THEMES COACHED and recent rule calls
+- RECENT AI ADVICE (the last 3, with themes), THEMES COACHED (blocked themes and weaknesses only,
+  or the ones a NEW trigger frees) and recent rule calls with their themes
 - COACHING ANGLES (live situation × player-profile weakness)
+- rec13 additions (docs/coach-review-13.md item 12): `Word budget: at most 20 words (lategame) ·
+  heard about 6 s after this state`; `MATCH FOCUS GOAL: … (so far: …)` (player profile,
+  `setGoalProvider`); `Fight: ON NOW (3 heroes died in the last 10 s) · just WON a fight: 3 enemies
+  died in the last 20 s (Infernus, Abrams, Mina) vs 0 of ours · you are at 30%: heal first,
+  objective second` (or just LOST / an even trade); `Enemy-dead window: at least 2 stay dead about
+  19 s after you are heard`; K/D/A from the HUD or your scoreboard row (kept between reads); `Your
+  ultimate: ready` / `on cooldown (23 s)` (`abilities` slot 4); `Enemy items (scoreboard, 2:44
+  ago): Infernus: Swift Striker, …` (the scoreboard rows by hero, else `enemy_items`: rec13 sent
+  neither); `Fed enemy: Infernus 49,000 net worth vs next Lady Geist 41,000 (+8,000)`; the team
+  souls trend over about 3 minutes with `THROW RISK: we were +46,000 and it is shrinking: protect
+  the lead, no base dives without the Rejuvenator` (a peak lead of 15k+ that fell 5k+ in 3 minutes
+  or 15k+ overall, or a 15k+ lead while the enemy took the Midboss); `Structures (read; a
+  structure not listed is unknown, never a target): theirs: Blue Guardian destroyed; Yellow Walker
+  standing · ours: …` (destroyed is final) or `Structures: not read: do not name a specific
+  Guardian, Walker or Shrine as the target`; `Midboss: taken by the enemy at about 33:10: they may
+  hold the Rejuvenator …` (`midboss_taken_by`).
+
+**Word budgets** (`wordBudget()`, item 14): death screen 30 words / 2 sentences, during a fight 10 /
+1, laning (before 8:00) and the 20 s after a respawn 15, otherwise 20 (also right after a fight);
+Ask the coach now 30. `parseAdvice()` enforces them, cutting an over-long first sentence at its last
+clause (":" ";" "," not inside a number) rather than mid-phrase. **Structures in replies**
+(`structureProblem()`): once any structure state was read, a sentence sending us to an enemy
+Guardian / Walker / Shrine / Patron that is read destroyed or never read standing is dropped
+("names their Blue Guardian, read as destroyed"); "heal at our Guardian" is not a target.
 
 Example (rec11, event-driven periodic request at 19:03, from `scripts/ai-coach-eval.ts`; the
 profile, knowledge and excerpts that follow are left out):
@@ -455,9 +540,11 @@ enemy comes near) — or PASSes.
 - **Evidence only.** The model gets the same uncertainty rules as the rule engine: never invent
   positions, cooldowns, items or timers, and treat unknown as unknown, not safe. This stops
   confident advice that the screen cannot support.
-- **One fix, short, imperative.** Advice is spoken mid-fight. The limit is two sentences and
-  30 words (three sentences and 45 words for a death review). `parseAdvice()` enforces these
-  limits even if the model ignores them; when two sentences are too long it keeps the one with the
+- **One coach voice, one decision.** The rule coach and the model are one coach: "we" for the
+  team, one teammate by name, a reason of six words or fewer, a decision for the next 30 seconds
+  rather than a description of now, inside the word budget of the moment (20 words; 15 in laning
+  or after a respawn; 10 in a fight; 30 on the death screen). `parseAdvice()` enforces the limits
+  even if the model ignores them; when two sentences are too long it keeps the one with the
   action, not a bare situation.
 - **Situation → specific action → why.** The model is asked for one idea with names (heroes,
   "Green lane", items with costs, timers) and the principle in a few words, and to read WHY NOW
@@ -487,8 +574,13 @@ enemy comes near) — or PASSes.
 ## Integration points (for other modules)
 
 - `setProfileProvider(fn: () => string | null)` from `web/src/ai-coach.ts`: returns a short
-  player-profile text (at most 900 characters are used). The app calls it on every request, and
-  it must not throw.
+  player-profile text (at most 500 characters are used, hero names of other matches scrubbed). The
+  app calls it on every request, and it must not throw.
+- `setGoalProvider(fn: () => string | null)`: the match focus goal(s) with progress so far
+  (`PlayerProfile.goalText()`, registered by main.ts), the `MATCH FOCUS GOAL` line.
+- `RULE_THEMES` / `ruleThemes(key)` / `ruleCovered(theme, history, now)`: the rule-call themes by
+  key prefix; `wordBudget()`, `structuresLine()`, `structureProblem()`, `deathCovered()`,
+  `scrubProfile()`, `AiHistory.fightState()` / `windowLeft()` / `standing()` are exported for tests.
 - `AiCoachDeps.items(id)` (optional): item name, cost and slot for the summary. `ai-coach-ui.ts`
   loads them from `assets/items.json`.
 - `liveTriggers()`, `themeMemory()`, `reasoningParams()` and `usageOf()` are pure and exported
@@ -498,16 +590,19 @@ enemy comes near) — or PASSes.
   `HERO_NAMES` (all 44 heroes) backs `strangerHeroes()`; `AiHistory.rosterOf()`, `reviewsFor(death)`,
   `good`, `boundaries` and `reinforceGate()` are exported for tests and other modules.
 - Optional snapshot fields are used when present: `status_effects`, `death_damage`,
-  `death_killing_blow`, `level`, `unsecured_souls`, `kills` / `deaths` / `assists` and
-  `minimap.zone`.
+  `death_killing_blow`, `level`, `unsecured_souls`, `kills` / `deaths` / `assists`,
+  `minimap.zone`, `players` (scoreboard rows: enemy items, your K/D/A), `enemy_items`,
+  `hero_status[].networth` (fed enemy), `structures`, `midboss_taken_by`, `abilities` (slot 4 =
+  ultimate) and `match_result` (end-of-game review).
 
 ## End-of-game review
 
 When a match ends, the AI coach (if enabled) writes one longer review of the whole match: a verdict,
 what went well **and why it worked** (first), up to three improvements by impact (with timestamps,
-why it matters and how to practice), what to keep doing, a next-game focus, hero tips, and a 180-300
-word spoken version (about 1-2 minutes) that opens with specific praise after a good game and is read
-aloud and shown as text. Logic: `web/src/ai-review.ts` (DOM-free); UI: `web/src/ai-review-ui.ts`.
+why it matters and how to practice), what to keep doing, a next-game focus, hero tips, the match
+focus goals scored, and a spoken version of about 200 words (150-230, a little over a minute) that
+opens with the result and the goal score, then specific praise after a good game, and is read aloud
+and shown as text. Logic: `web/src/ai-review.ts` (DOM-free); UI: `web/src/ai-review-ui.ts`.
 
 **Triggers.** Automatic when the AI coach is on and Settings > "End-of-game review" is checked
 (default on): the PostGame screen, or a match the profile closes after at least 10 minutes of
@@ -550,7 +645,44 @@ the user stopped 26 s later. Now:
   being written, ready (link to the Player page) or failed, or why there is none (AI coach off,
   review off in Settings, invalid settings, match too short); the Player page list says so too.
 
-**Match digest** (`buildDigest`, deterministic, at most 8,000 characters; observed facts only, "?" /
+**rec13 additions (items 13-14).** The result is the Victory / Defeat banner when the vision reads
+it (`match_result`, also over a death screen or the scoreboard: "Result: loss (the Defeat banner)");
+**FOCUS GOALS** right after STRENGTHS (never dropped): the match's focus goals (set at its start by
+the Player profile, passed by `ai-review-ui.ts`; else the stored match's; else the ones the earlier
+matches give, marked "not announced live"), each MET / MISSED / not measurable with its evidence
+and, when missed, its practice tip; **LEAD AND THROW** (never dropped) when the team souls lead
+peaked at 15k+ and lost 15k+ (or 5k+ in a loss), with the turn; in OBJECTIVES SEEN the Midboss
+taker (`midboss_taken_by`) and the lane structures read destroyed (with the clock first read gone)
+and still standing. Budget 9,000 characters. The prompt scores the goals first, names a thrown lead
+before anything else after a loss, uses structures and the Midboss only as read, and speaks in the
+live coach's voice ("you", "we", names, short reasons, next action); the spoken text is about 200
+words (150-230) and opens with the result and the goal score; the reply adds `focus_goals[{goal,
+met, note}]`. The stored review keeps the digest's scored goals (`goals`), and the review panel
+shows "Focus goal: Met / Missed" even without a model reply.
+
+rec13 digest (`scripts/ai-review-eval.ts`; earlier matches rec8, rec11, rec12; the Defeat banner
+simulated as `match_result` on frames 590-591, as the vision now reads it), new sections:
+
+```text
+Hero: Grey Talon (hero_orion). Result: loss (the Defeat banner). Game clock 5:52 to 44:13, 38.4 min observed (live).
+K/D/A (scoreboard read at 44:13): 23/5/11.
+
+FOCUS GOALS (set at the match start): score each one first
+- Spend at the usual buy (1,600 / 3,200 / 6,400): no death holding half an item tier: MISSED: broken 2 times (19:30, 29:26) in 6 deaths. Practice: Shop when your wave is safe, and never walk into a fight with an item in your pocket.
+- No deaths in their half with 3+ enemies unseen: MISSED: broken 1 time (23:09) in 6 deaths. Practice: When three enemies are missing, stay on your side of the wave.
+
+LEAD AND THROW
+Team souls lead peaked at +55k at 34:23 and was +14k at the last read 43:49 (41k lost; it started to fall by 34:26), and the match was lost: name the throw and the moment it turned.
+
+OBJECTIVES SEEN
+Midboss icon disappeared (taken; by which team not read) at 30:13, 39:38.
+Soul Urn carried by: you 15:15-15:50; you 25:31-26:04.
+```
+
+(The rec13 export predates the structure and Midboss-taker fields, so those lines are absent; the
+unit tests cover them. The digest now counts 6 deaths, not 7: see docs/player-profile.md.)
+
+**Match digest** (`buildDigest`, deterministic, at most 9,000 characters; observed facts only, "?" /
 "not read" for unknowns). A private `ReviewTracker` segments matches exactly like the player profile
 and keeps a compact timeline of the current match only (rec12's first ~100 frames are the previous
 Violet match and are not in its digest). Sections: hero, role, result (or "likely win/loss" from the
@@ -607,7 +739,7 @@ improvements[{title, evidence, why_it_matters, how_to_practice}] (1-3), keep_doi
 next_game_focus, hero_tips[], spoken}`; the spoken text opens with genuine, specific praise when the
 game went well (never a generic "good game"), then the fixes, and ends with what to keep doing and the
 next-game focus. The review panel shows "What went well", "Top improvements", "Keep doing" and "Next
-game". The rec12 prompt is about 11,100 characters (~2,780 tokens). Max reply tokens: `max(aiMaxTokens x 3, 3072)`, at
+game". The rec12 prompt is about 12,300 characters (~3,080 tokens). Max reply tokens: `max(aiMaxTokens x 3, 3072)`, at
 most 8,192, plus the same reasoning headroom as live calls; timeout 120 s; a reply cut off by the
 token limit is retried once with 8,192 tokens, then parsed as far as it got (`partial`).
 `parseReview` accepts fenced JSON, text around it, `<think>` blocks and cut-off JSON (closed at the

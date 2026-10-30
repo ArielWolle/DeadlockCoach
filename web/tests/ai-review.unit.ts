@@ -75,11 +75,48 @@ test('prompt: persona, JSON contract, evidence rules; token budget', () => {
   const [m] = ended(match('hero_orion', 30, 900, [450], { postGame: true }));
   const p = buildReviewPrompt(buildDigest({ match: m }), 1024);
   assert.equal(p.system, REVIEW_SYSTEM_PROMPT); assert.match(p.system, /elite Deadlock coach/); assert.match(p.user, /MATCH DIGEST/);
-  for (const k of ['"summary"', '"went_well"', '"improvements"', '"why_it_matters"', '"how_to_practice"', '"next_game_focus"', '"hero_tips"', '"spoken"', '180-300 words', '"keep_doing"']) assert.ok(p.system.includes(k), k);
+  for (const k of ['"summary"', '"went_well"', '"improvements"', '"why_it_matters"', '"how_to_practice"', '"next_game_focus"', '"hero_tips"', '"spoken"', 'about 200 words (150-230)', '"keep_doing"', '"focus_goals"']) assert.ok(p.system.includes(k), k);
+  // One voice with the live coach; the focus goal is scored first; a thrown lead is named.
+  assert.match(p.system, /FOCUS GOALS: score each goal first/); assert.match(p.system, /LEAD AND THROW, name the throw/); assert.match(p.system, /"we" for the team/);
   // Strengths first, why they worked, balance after a good game, praise in the spoken text.
   assert.match(p.system, /Lead with what went well/); assert.match(p.system, /WHY it worked: the cause and its effect on the team's result/);
-  assert.match(p.system, /at least as many went_well items as improvements/); assert.match(p.system, /open with genuine, specific praise/); assert.match(p.system, /end with what to keep doing and the next-game focus/);
+  assert.match(p.system, /at least as many went_well items as improvements/); assert.match(p.system, /when the game went well, then genuine, specific praise/); assert.match(p.system, /end with what to keep doing and the next-game focus/);
   assert.equal(reviewMaxTokens(1024), 3072); assert.equal(reviewMaxTokens(2000), 6000); assert.equal(reviewMaxTokens(4000), 8192); assert.equal(reviewMaxTokens(512), 3072);
+});
+
+test('digest (rec13 items 13-14): the Defeat banner (match_result), the focus goals scored, a thrown lead, structures and the Midboss taker', () => {
+  // A loss after a +30k lead that fell to +5k; Defeat read over the last frames (match_result).
+  const frames = match('hero_orion', 30, 1500, [700, 1300], { postGame: false });
+  for (const f of frames) {
+    const t = f.snapshot.game_clock_secs!;
+    const lead = t < 1100 ? Math.round(t * 30) : Math.round(33000 - (t - 1100) * 70);
+    f.snapshot.ally_networth = 100000 + lead; f.snapshot.enemy_networth = 100000;
+    if (t === 900) { f.snapshot.structures = [{ lane: 'Yellow', kind: 'walker', own: false, alive: true }, { lane: 'Blue', kind: 'guardian', own: false, alive: true }]; f.snapshot.midboss_taken_by = 'ally'; }
+    if (t === 1000) f.snapshot.structures = [{ lane: 'Blue', kind: 'guardian', own: false, alive: false }];
+    if (t === 1250) f.snapshot.midboss_taken_by = 'enemy';
+    if (t >= 1490) f.snapshot.match_result = 'loss';
+  }
+  const [m] = ended(frames);
+  assert.equal(m.record.result, 'loss'); assert.equal(m.timeline.result, 'loss');
+  assert.deepEqual(m.timeline.structures!.map(x => [x.t, x.lane, x.kind, x.alive]), [[900, 'Yellow', 'walker', true], [900, 'Blue', 'guardian', true], [1000, 'Blue', 'guardian', false]]);
+  assert.deepEqual(m.timeline.midboss, [{ t: 900, by: 'ally' }, { t: 1250, by: 'enemy' }]);
+  const d = buildDigest({ match: m, goals: [{ id: 'close_range', text: 'No close-range deaths' }, { id: 'respawn_deaths', text: 'No deaths within 60 s of a respawn' }] });
+  assert.ok(d.chars <= DIGEST_MAX_CHARS); assert.equal(d.result, 'loss');
+  assert.match(d.text, /Result: loss \(the Defeat banner\)/);
+  assert.match(d.text, /FOCUS GOALS \(set at the match start\): score each one first\n- No close-range deaths: (MISSED|not measurable)[^\n]*\n- No deaths within 60 s of a respawn: MET: 2 deaths, none broke it/);
+  assert.deepEqual(d.goals.map(g => g.id), ['close_range', 'respawn_deaths']);
+  assert.match(d.text, /LEAD AND THROW\nTeam souls lead peaked at \+33k at 18:20 and was \+5k at the last read 25:00 \(28k lost; it started to fall by \d+:\d\d\), and the match was lost: name the throw/);
+  assert.match(d.text, /Midboss \(Rejuvenator\) taken by: your team at about 15:00; the enemy at about 20:50\./);
+  assert.match(d.text, /Structures destroyed \(first read gone\): theirs Blue Guardian 16:40; ours none read\.\nStill standing at the last read: theirs Yellow Walker\./);
+  // Without goals set at the start, the earlier matches' goals are scored and marked as not announced.
+  const [prev] = ended(match('hero_orion', 30, 900, [100, 250, 400, 550, 700], { postGame: true, day: -1 }));
+  const fallback = buildDigest({ match: m, previous: [prev.record] });
+  assert.match(fallback.text, /FOCUS GOALS? \(what the earlier matches asked for; not announced live\)/);
+  // The goals reach the stored review; the model's focus_goals are parsed.
+  const stored = storedReview(d, m, { error: 'x' }); assert.deepEqual(stored.goals, d.goals);
+  const r = parseReview(JSON.stringify({ summary: 'Loss.', spoken: 'We lost it.', focus_goals: [{ goal: 'No close-range deaths', met: false, note: '13:20 melee' }, 'junk'] }));
+  assert.ok(r.ok && r.review.focus_goals?.length === 2 && r.review.focus_goals[0].met === false && r.review.focus_goals[1].met === null);
+  const store = new ReviewStore(memory()); store.put(stored); assert.deepEqual(store.get(stored.id)!.goals!.map(g => g.id), ['close_range', 'respawn_deaths']);
 });
 
 const REVIEW = { summary: 'A much cleaner game: 3 deaths and 7% dead.', went_well: ['Only 3 deaths (9:48, 14:50, 22:10)'],

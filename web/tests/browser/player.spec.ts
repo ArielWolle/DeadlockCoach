@@ -44,6 +44,9 @@ test('replay results build a persistent player profile with export, import, rese
   await expect(page.locator('#player-matches tr')).toHaveCount(1);
   await expect(page.locator('#player-matches')).toContainText('Grey Talon');
   await expect(page.locator('#player-matches')).toContainText('Victor x1');
+  // The match focus goal for the next match comes from this match's weaknesses (two close-range deaths holding souls).
+  await expect(page.locator('#player-goal-next')).toContainText('Next match: No close-range deaths · Spend at the usual buy');
+  await expect(page.locator('#player-goal-history')).toContainText('No scored goals yet');
   // The same replay is added only once.
   await page.locator('#player-add-replay').click();
   await expect(page.locator('#notice')).toContainText('Nothing added');
@@ -65,6 +68,17 @@ test('replay results build a persistent player profile with export, import, rese
   await page.locator('#player-import-file').setInputFiles({ name: 'profile.json', mimeType: 'application/json', buffer: Buffer.from(exported) });
   await expect(page.locator('#notice')).toContainText('Imported 1 match');
   await expect(page.locator('#player-weaknesses')).toContainText('Killed at close range');
+  // A match scored against its focus goal: the goal history and the matches table say met / missed.
+  const scored = JSON.parse(exported); scored.matches[0] = { ...scored.matches[0], id: 'scored-1', startedAt: scored.matches[0].startedAt + 60000,
+    goals: [{ id: 'close_range', text: 'No close-range deaths', met: false, detail: 'broken 2 times (13:20, 16:40) in 2 deaths' }, { id: 'respawn_deaths', text: 'No deaths within 60 s of a respawn', met: true, detail: '2 deaths, none broke it' }] };
+  await page.locator('#player-import-file').setInputFiles({ name: 'scored.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(scored)) });
+  await expect(page.locator('#notice')).toContainText('Imported 1 match');
+  await expect(page.locator('#player-goal-history')).toContainText('1 of 2 goals met in the last 1 scored match.');
+  await expect(page.locator('#player-goal-history li.missed')).toContainText('No close-range deaths (broken 2 times (13:20, 16:40) in 2 deaths)');
+  await expect(page.locator('#player-goal-history li.met')).toContainText('No deaths within 60 s of a respawn');
+  await expect(page.locator('#player-matches')).toContainText('Missed: No close-range deaths · Met: No deaths within 60 s of a respawn');
+  const axe = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21aa', 'wcag22aa']).analyze();
+  expect(axe.violations, axe.violations.map(v => v.id).join('; ')).toEqual([]);
 });
 
 test('the player profile setting persists and is on by default', async ({ page }) => {
