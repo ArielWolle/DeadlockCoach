@@ -16,7 +16,7 @@
 //! refreshed by the full scan, so the fast path ([`ActiveCoach::fast`]) runs only the position-
 //! and souls-based calls.
 use crate::{laning::Source, positioning::TeamPicture, Cue, Priority, Rule};
-use coach_core::{GameSnapshot, HeroTrack, Lane, Pt, ZoneArea};
+use coach_core::{GameSnapshot, HeroTrack, Pt, ZoneArea};
 use serde::Deserialize;
 use std::{cell::RefCell, collections::HashMap, sync::{Arc, OnceLock}};
 
@@ -32,7 +32,13 @@ pub struct Thresholds {
     pub hold_dead: usize, pub hold_min_secs: u32, pub hold_soon_secs: u32, pub hold_exit_secs: u32, pub hold_exit_y: f32,
     pub raid_enemies: usize, pub raid_y: f32, pub raid_far: f32, pub raid_min_clock: u32,
     pub urn_dead: usize, pub urn_enemy_radius: f32,
+    pub exit_y: f32, pub exit_back_secs: u32, pub exit_recent_secs: u32, pub exit_back_min: usize, pub exit_unseen: usize,
+    pub exit_allies_near: usize, pub exit_ally_radius: f32,
+    pub ult_half_y: f32, pub ult_unseen: usize, pub escape_missing: usize, pub escape_fresh_cd: u32, pub escape_y: f32, pub forward_min_clock: u32,
 }
+/// A hero's escape ability by HUD slot (slot 4 = ultimate).
+#[derive(Clone, Deserialize)]
+pub struct Escape { pub hero: String, pub slot: u8, pub ability: String, pub source: Source }
 #[derive(Clone, Deserialize)]
 pub struct Debuff { pub status: String, pub hero: String, pub card: String }
 #[derive(Clone, Deserialize)]
@@ -45,6 +51,7 @@ pub struct Card { pub id: String, pub speech: String, pub priority: String, pub 
 pub struct Catalog {
     pub schema_version: u32, pub thresholds: Thresholds, pub debuffs: Vec<Debuff>, pub killers: Vec<Killer>,
     pub roles: Vec<Role>, pub close_sources: Vec<String>, pub generic_sources: Vec<String>, pub cards: Vec<Card>,
+    #[serde(default)] pub escapes: Vec<Escape>,
 }
 
 #[derive(Deserialize)] struct HeroName { class_name: String, name: String }
@@ -105,11 +112,53 @@ struct State {
     /// Last in-base reading, the clock you walked out of base, and the hold-in-base calls of
     /// this wipe (1 = said in base, 2 = said after walking out).
     in_base: Option<bool>, left_base: Option<u32>, hold_said: u8,
+    /// A walk-out after the out-of-base hold call was said: the call is armed again (rec8 41:44).
+    hold_rearmed: bool,
     /// What the calls offered on this step would commit when spoken: hold-in-base bits and the
     /// newest ally death of a losing-fight call.
     hold_offer: u8, loss_offer: u32,
     /// The enemy-dead window named so far (shared with the positioning coach's call).
     window: crate::positioning::WindowMemo,
+    /// Enemy top-bar slots: respawn estimates and respawns.
+    foes: [Foe; 6],
+    /// Enemy slots named in the last "out of their base" call (and when), the unseen variant's clock,
+    /// and what the offered call would commit.
+    exit_said: Vec<usize>, exit_at: Option<u32>, exit_unseen_at: Option<u32>, exit_offer: Vec<usize>,
+    /// Ultimate: the estimated ready clock of the cast already called (and of the offered call).
+    ult_said: Option<u32>, ult_offer: Option<u32>,
+    /// Escape ability: last clock seen ready, whether a cooldown was read since, and the clock the
+    /// cast was called.
+    esc_ready_at: Option<u32>, esc_cast_seen: bool, esc_cast_at: Option<u32>, esc_said_at: Option<u32>,
+}
+
+/// One enemy top-bar slot: dead now, the estimated respawn clock, the clock it came back.
+#[derive(Default, Clone)]
+struct Foe { dead: bool, eta: Option<u32>, back_at: Option<u32>, hero: Option<String> }
+
+fn track_foes(st: &mut State, s: &GameSnapshot, clock: u32) {
+    if s.hero_status.len() != 12 { return; }
+    for h in s.hero_status.iter().filter(|h| !h.ally) {
+        let Some(f) = st.foes.get_mut(h.slot) else { continue };
+        if h.hero.is_some() { f.hero = h.hero.clone(); }
+        match h.dead {
+            Some(true) => {
+                if !f.dead { f.dead = true; f.back_at = None; f.eta = None; }
+                if let Some(t) = h.respawn_secs.filter(|t| *t <= MAX_RESPAWN) { f.eta = Some(clock + t); }
+            }
+            Some(false) => { if f.dead { f.dead = false; f.back_at = Some(f.eta.map_or(clock, |e| e.min(clock))); } }
+            None => {}
+        }
+    }
+}
+/// Enemy slots back within `ahead` seconds (a read timer) or back in the last `recent` seconds,
+/// with the seconds until the last of them is up (0 = all back).
+fn returning(st: &State, clock: u32, ahead: u32, recent: u32) -> (Vec<usize>, u32) {
+    let mut slots = vec![]; let mut left = 0;
+    for (i, f) in st.foes.iter().enumerate() {
+        if f.dead { if let Some(e) = f.eta.filter(|e| *e <= clock + ahead) { slots.push(i); left = left.max(e.saturating_sub(clock)); } }
+        else if f.back_at.is_some_and(|b| clock <= b + recent) { slots.push(i); }
+    }
+    (slots, left)
 }
 
 /// One allied top-bar slot across frames: whether it is dead, the last read respawn timer
@@ -239,6 +288,72 @@ impl ActiveCoach {
     }
 
     fn in_base(&self, s: &GameSnapshot) -> Option<bool> { in_base(s, &self.catalog.thresholds) }
+
+    /// Forward-position calls (docs/coach-review-8.md D4, D5): deep in their half while the
+    /// enemy-dead window closes (top-bar respawn timers) or most of them are unseen; your ultimate
+    /// on cooldown in their half with enemies missing; your escape ability spent on the way in.
+    fn forward_calls(&self, s: &GameSnapshot, st: &mut State, clock: u32, team: Option<&TeamPicture>, me: Option<Pt>, map: Option<&coach_core::MinimapState>) -> Vec<Cue> {
+        let t = &self.catalog.thresholds;
+        let mut out = vec![];
+        // The escape ability's state is tracked on every frame with the bar read.
+        let esc = st.hero.as_ref().and_then(|h| self.catalog.escapes.iter().find(|e| &e.hero == h)).cloned();
+        if let Some(a) = esc.as_ref().and_then(|e| s.abilities.iter().find(|a| a.slot == e.slot)) {
+            match (a.ready, a.cooldown_secs) {
+                (Some(true), _) => { st.esc_ready_at = Some(clock); st.esc_cast_seen = false; st.esc_cast_at = None; }
+                (Some(false), Some(cd)) if !st.esc_cast_seen => {
+                    st.esc_cast_seen = true;
+                    // A fresh cast: ready shortly before, and the first cooldown read since is long.
+                    if cd >= t.escape_fresh_cd && st.esc_ready_at.is_some_and(|r| clock <= r + 15) { st.esc_cast_at = Some(clock); }
+                }
+                _ => {}
+            }
+        }
+        let (Some(me), Some(m), Some(p)) = (me, map, team) else { return out };
+        let allies_close = m.heroes.iter().filter(|h| h.ally && live(h) && h.distance(me) <= t.exit_ally_radius).count();
+        let alone = allies_close < t.exit_allies_near;
+        let deep = me.y < t.exit_y || m.zone_area == Some(ZoneArea::EnemyBase);
+        let half = me.y < t.ult_half_y || m.zone_area == Some(ZoneArea::EnemyBase);
+        let (back, left) = returning(st, clock, t.exit_back_secs, t.exit_recent_secs);
+        // Two or more of them dead for longer: a window being used, not a dive into the unknown.
+        let window_open = st.foes.iter().filter(|f| f.dead && f.eta.is_none_or(|e| e > clock + t.exit_back_secs)).count() >= 2;
+        // 1. Out of their base: the window closes while you are deep and alone (rec8 20:14,
+        //    27:39, 39:00), or most of them are unseen with no window open (rec13 40:33).
+        if deep && alone {
+            let new = back.iter().any(|i| !st.exit_said.contains(i)) || st.exit_at.is_none_or(|a| clock > a + 60);
+            if back.len() >= t.exit_back_min && new {
+                let names: Vec<String> = back.iter().filter_map(|i| st.foes[*i].hero.as_deref().map(hero_name)).collect();
+                let who = if names.len() == back.len() && names.len() <= 2 { names.join(" and ") } else { format!("{} of them", count_word(back.len()).to_lowercase()) };
+                let when = if left >= 3 { format!("in {left} seconds") } else { "now".into() };
+                st.exit_offer = back.clone();
+                out.push(self.cue("forward_exit", "active:forward_exit".into(), &[("who", who), ("is_are", "are".into()), ("when", when)]));
+            } else if p.enemies_unseen >= t.exit_unseen && p.enemies_dead.len() < 2 && st.exit_unseen_at.is_none_or(|a| clock > a + 90) {
+                out.push(self.cue("forward_unseen", "active:forward_exit:unseen".into(), &[("count", count_word(p.enemies_unseen).to_lowercase())]));
+            }
+        }
+        // 2. Your ultimate on cooldown in their half with several of them unseen (once per cast).
+        if let Some(cd) = s.abilities.iter().find(|a| a.slot == 4 && a.ready == Some(false)).and_then(|a| a.cooldown_secs) {
+            let ready_at = clock + cd;
+            if clock >= t.forward_min_clock && half && alone && !window_open && p.enemies_unseen >= t.ult_unseen && !st.ult_said.is_some_and(|r| r.abs_diff(ready_at) <= 15) {
+                st.ult_offer = Some(ready_at);
+                out.push(self.cue("ult_out", "active:ult_out".into(), &[("count", count_word(p.enemies_unseen).to_lowercase()), ("front", front_name(s))]));
+            }
+        }
+        // 3. Your escape ability cast fresh in their half toward enemies off the map (rec8 16:54, 20:27).
+        if let (Some(e), Some(at)) = (esc, st.esc_cast_at) {
+            let missing = p.enemies_unseen + back.len();
+            if clock >= t.forward_min_clock && clock <= at + 4 && st.esc_said_at != Some(at) && me.y < t.escape_y && alone && !window_open && missing >= t.escape_missing {
+                out.push(self.cue("escape_in", "active:escape_in".into(), &[("ability", e.ability), ("count", count_word(missing).to_lowercase())]));
+            }
+        }
+        out
+    }
+}
+
+/// Your front line by name for "back to ...": an alive allied frontliner on the top bar, else "the team".
+pub(crate) fn front_name(s: &GameSnapshot) -> String {
+    let front = &crate::review_catalog().roles.frontline;
+    s.hero_status.iter().filter(|h| h.ally && h.dead == Some(false)).filter_map(|h| h.hero.as_deref()).filter(|h| s.hero.as_deref() != Some(*h))
+        .find(|h| front.iter().any(|f| f == h)).map(hero_name).unwrap_or_else(|| "the team".into())
 }
 
 /// Calls that already tell the player to get out, with the reason (debuff on you, hard CC). The
@@ -266,6 +381,8 @@ fn shared() -> &'static ActiveCoachCards {
     D.get_or_init(|| ActiveCoachCards(ActiveCoach::shipped()))
 }
 struct ActiveCoachCards(Catalog);
+/// Your hero's escape ability: (HUD slot, ability name), from data/coaching/active.json "escapes".
+pub fn escape_of(hero: &str) -> Option<(u8, String)> { shared().0.escapes.iter().find(|e| e.hero == hero).map(|e| (e.slot, e.ability.clone())) }
 
 /// The in-base shopping call, for the souls reminder ([`crate::UnspentSoulsRule`]): alive in your
 /// own base holding at least the cost of a useful upgrade for the game time (the death-screen
@@ -304,9 +421,10 @@ impl Rule for ActiveCoach {
         let dead = s.dead || s.screen.as_deref() == Some("Dead");
         let mut out = vec![];
         st.hold_offer = 0;
-        if self.full { track_ally_deaths(&mut st, s, clock); }
+        st.exit_offer.clear(); st.ult_offer = None;
+        if self.full { track_ally_deaths(&mut st, s, clock); track_foes(&mut st, s, clock); }
         // A respawn is a new walk out of base.
-        if dead { st.in_base = None; st.left_base = None; st.hold_said = 0; }
+        if dead { st.in_base = None; st.left_base = None; st.hold_said = 0; st.hold_rearmed = false; st.esc_ready_at = None; }
 
         // --- Death panels (full scan only): remember them and, after the review had its turn,
         //     name a repeat killer or a pattern of close-range deaths.
@@ -358,16 +476,17 @@ impl Rule for ActiveCoach {
             // Said once per window (rec8 repeated the call 11 times); the key is shared with the
             // positioning coach's generic window call, which commits the same way.
             let new_window = st.window.observe(crate::positioning::dead_set(s, false), clock, 2);
-            if let (Some(p), Some(me), Some(m), true) = (TeamPicture::from(s), me, map, new_window) {
+            if let (Some(p), Some(me), Some(_), true) = (TeamPicture::from(s), me, map, new_window) {
+                // The window lasts while two are dead (the second-longest timer); the count is the
+                // heroes dead for all of it, and the target a lane you reach before it closes.
                 let mut timers: Vec<u32> = p.enemies_dead.iter().flatten().copied().collect();
                 timers.sort_unstable_by(|a, b| b.cmp(a));
                 let window = timers.get(1).copied().unwrap_or(0);
                 if timers.len() >= 2 && window >= t.window_min_secs && p.enemies_dead.len() > p.allies_dead.len()
                     && hp.is_some_and(|h| h >= t.healthy) && confirmed && me.y > 0.5 && !enemy_near {
-                    let deepest = [Lane::Green, Lane::Blue, Lane::Yellow].into_iter().filter_map(|l| m.lane(l).push.map(|v| (l, v))).max_by(|a, b| a.1.total_cmp(&b.1));
-                    if let Some((lane, _)) = deepest {
-                        out.push(self.cue("window", "pos:enemies_down".into(), &[("count", count_word(p.enemies_dead.len())), ("secs", window.to_string()),
-                            ("lane", format!("{} lane", crate::laning::lane_name(lane)))]));
+                    let staying = timers.iter().filter(|r| **r >= window).count();
+                    if let Some(target) = crate::positioning::window_target(s, window, crate::positioning::TRAVEL_SECS_PER_MAP, crate::positioning::WINDOW_MARGIN_SECS) {
+                        out.push(self.cue("window", "pos:enemies_down".into(), &[("count", count_word(staying)), ("secs", window.to_string()), ("target", target)]));
                     }
                 }
             }
@@ -397,10 +516,15 @@ impl Rule for ActiveCoach {
             let team = TeamPicture::from(s);
             // --- Walking out of base while the team is dead (rec8 41:50: three teammates on
             //     61-86 s timers, dead 15 s later) or about to respawn (48:07: two back in 8 s).
-            if st.in_base == Some(true) && in_base == Some(false) { st.left_base = Some(clock); }
+            // Every walk-out gets the call again while the team is still down (rec8 41:44: the
+            // second walk-out with three dead went unwarned, dead at 42:05).
+            if st.in_base == Some(true) && in_base == Some(false) {
+                st.left_base = Some(clock);
+                if st.hold_said & 2 != 0 { st.hold_said &= !2; st.hold_rearmed = true; }
+            }
             if in_base.is_some() { st.in_base = in_base; }
             if let Some(p) = &team {
-                if p.allies_dead.len() < 2 { st.hold_said = 0; }
+                if p.allies_dead.len() < 2 { st.hold_said = 0; st.hold_rearmed = false; }
                 // Dead on a long or unread timer (a teammate back in a few seconds is not missing).
                 let long: Vec<Option<u32>> = p.allies_dead.iter().copied().filter(|r| r.is_none_or(|r| r >= t.hold_min_secs)).collect();
                 let walked_out = in_base == Some(false) && st.left_base.is_some_and(|c| clock <= c + t.hold_exit_secs) && me.is_some_and(|p| p.y > t.hold_exit_y && p.y < t.base_y - 0.1); // clearly out: the base label reaches y 0.78 (rec5 23:09)
@@ -408,7 +532,8 @@ impl Rule for ActiveCoach {
                 if long.len() >= t.hold_dead && (in_base == Some(true) && st.hold_said & 1 == 0 || walked_out && st.hold_said & 2 == 0) {
                     st.hold_offer = if in_base == Some(true) { 1 } else { 3 };
                     let (action, key) = if in_base == Some(true) { ("Hold in base", "active:hold_base") } else { ("Go back to base", "active:hold_base:out") };
-                    out.push(self.cue("hold_base", key.into(), &[("count", count_word(long.len()).to_lowercase()), ("next", next), ("action", action.into())]));
+                    let card = if in_base != Some(true) && st.hold_rearmed { "hold_base_again" } else { "hold_base" };
+                    out.push(self.cue(card, key.into(), &[("count", count_word(long.len()).to_lowercase()), ("next", next), ("action", action.into())]));
                 } else if in_base == Some(true) && st.hold_said == 0 && p.allies_dead.len() >= 2
                     && p.allies_dead.iter().all(|r| r.is_some_and(|r| (3..=t.hold_soon_secs).contains(&r))) {
                     st.hold_offer = 1;
@@ -456,6 +581,7 @@ impl Rule for ActiveCoach {
                     out.push(self.cue("urn_hold", "active:urn_hold".into(), &[("count", count_word(p.allies_dead.len()).to_lowercase())]));
                 }
             }
+            out.extend(self.forward_calls(s, &mut st, clock, team.as_ref(), me, map));
         }
         st.last_alive = Some((clock, s.souls, in_base));
 
@@ -484,9 +610,13 @@ impl Rule for ActiveCoach {
     fn spoken(&self, cue: &Cue) {
         let mut st = self.state.borrow_mut();
         match cue.key.as_str() {
-            "active:hold_base" | "active:hold_base:out" => { let o = st.hold_offer; st.hold_said |= o; }
+            "active:hold_base" | "active:hold_base:out" => { let o = st.hold_offer; st.hold_said |= o; if o & 2 != 0 { st.hold_rearmed = false; } }
             "active:team_losing" => { st.loss_said = st.loss_said.max(st.loss_offer); }
             "pos:enemies_down" => st.window.said(),
+            "active:forward_exit" => { let o = std::mem::take(&mut st.exit_offer); st.exit_said = o; st.exit_at = st.last_clock; }
+            "active:forward_exit:unseen" => { st.exit_unseen_at = st.last_clock; }
+            "active:ult_out" => { st.ult_said = st.ult_offer; }
+            "active:escape_in" => { st.esc_said_at = st.esc_cast_at; }
             _ => {}
         }
     }

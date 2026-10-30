@@ -39,7 +39,7 @@ fn speakable(c: &Cue) {
 fn active_cards_quote_real_document_guidance() {
     let catalog = ActiveCoach::shipped();
     assert_eq!(catalog.schema_version, 1);
-    assert_eq!(catalog.cards.len(), 18);
+    assert_eq!(catalog.cards.len(), 23);
     let check = |id: &str, source: &coach_engine::laning::Source| {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs").join(&source.path);
         let text = std::fs::read_to_string(path).unwrap();
@@ -116,11 +116,11 @@ fn hard_cc_is_called_only_while_health_is_low_or_falling_fast() {
 // ---- Enemy-dead window -----------------------------------------------------------------------
 
 #[test]
-fn enemy_dead_window_on_your_half_names_the_deepest_lane() {
+fn enemy_dead_window_on_your_half_names_a_lane_you_reach_in_time() {
     let mut s = alive(); s.hero_status = team(&[Some(40), Some(22)], 0);
     let cues = eval(&ActiveCoach::default(), &s);
     assert_eq!(keys(&cues), ["pos:enemies_down"]);
-    assert_eq!(cues[0].text, "Two enemies are dead for 22 more seconds. Group up and push Yellow lane now.");
+    assert_eq!(cues[0].text, "Two of them are dead for 22 more seconds: push Blue lane with the team now.");
     speakable(&cues[0]);
 }
 #[test]
@@ -139,9 +139,9 @@ fn the_specific_window_call_wins_over_the_generic_one_and_silences_it() {
     let mut e = Engine::new(default_rules(RulesConfig::default()));
     let mut texts = vec![];
     for t in (1500..1540).step_by(2) { let mut s = at(alive(), t); s.hero_status = team(&[Some(60), Some(50)], 0); texts.extend(e.step(&s).into_iter().map(|c| c.text)); }
-    let windows: Vec<&String> = texts.iter().filter(|t| t.contains("enemies are dead") || t.contains("are dead,")).collect();
+    let windows: Vec<&String> = texts.iter().filter(|t| t.contains("are dead")).collect();
     assert_eq!(windows.len(), 1, "{texts:?}");
-    assert!(windows[0].contains("push Yellow lane"), "{texts:?}");
+    assert!(windows[0].contains("push Blue lane"), "{texts:?}");
 }
 
 // ---- Base and shop ---------------------------------------------------------------------------
@@ -520,4 +520,147 @@ fn default_rules_put_the_debuff_call_first() {
     // In a fight the next call waits 3 s (critical) / 15 s (anything else).
     let mut critical = at(next, 1507); critical.hp = Some(300);
     assert_eq!(keys(&e.step(&critical)), ["lane:critical"]);
+}
+
+// ---- docs/coach-review-8.md D1, D4, D5, D7 ---------------------------------------------------
+
+/// Three teammates dead (unread timers), you at `y` (in base when y > 0.86).
+fn wipe(t: u32, y: f32) -> GameSnapshot {
+    let mut s = at(alive(), t); s.hero_status = team(&[], 3);
+    let m = s.minimap.as_mut().unwrap(); m.you = Some(Pt { x: 0.5, y }); m.zone_area = Some(if y > 0.86 { ZoneArea::OwnBase } else { ZoneArea::Lane });
+    s
+}
+#[test]
+fn every_walk_out_while_three_are_dead_gets_the_hold_call_again() {
+    // rec8 40:45 hold, 40:54 walked out (called), back in base, 41:44 out again: no call, dead 42:05.
+    let mut e = Engine::new(vec![Box::new(ActiveCoach::default())]);
+    let mut said = vec![];
+    for (t, y) in [(2440, 0.9), (2445, 0.9), (2450, 0.7), (2455, 0.7), (2462, 0.9), (2470, 0.9), (2484, 0.7), (2488, 0.7)] {
+        said.extend(e.step(&wipe(t, y)).into_iter().map(|c| (t, c.key, c.text)));
+    }
+    let texts: Vec<(u32, &str)> = said.iter().map(|x| (x.0, x.2.as_str())).collect();
+    assert_eq!(texts, [(2440, "Hold in base: three teammates are dead. Don't walk out alone."), (2450, "Go back to base: three teammates are dead. Don't walk out alone."),
+        (2484, "Still three of us down: back to base, don't walk out alone.")], "{said:?}");
+    // Once the team is back up, a later wipe starts over with the first wording.
+    let mut up = at(alive(), 2520); up.hero_status = team(&[], 0); e.step(&up);
+    e.step(&wipe(2590, 0.9));
+    let c = e.step(&wipe(2600, 0.7));
+    assert!(c[0].text.starts_with("Go back to base"), "{c:?}");
+}
+#[test]
+fn an_ignored_hold_call_is_the_death_cause() {
+    let mut e = Engine::new(default_rules(RulesConfig::default()));
+    for (t, y) in [(2440, 0.9), (2450, 0.7), (2462, 0.9), (2484, 0.7), (2490, 0.7)] { e.step(&wipe(t, y)); }
+    let mut reviews = vec![];
+    for t in 2494..2510 {
+        let mut d = dead(t, &[("Arctic Beam", 1342), ("Frost Grenade", 396), ("Flying Slash", 277)]); d.hero_status = team(&[], 4);
+        d.enemy_heroes = vec!["hero_kelvin".into(), "hero_yamato".into(), "hero_synth".into()];
+        reviews.extend(e.step(&d).into_iter().filter(|c| c.key.starts_with("death:review")).map(|c| c.text));
+    }
+    assert_eq!(reviews.len(), 1, "{reviews:?}");
+    assert!(reviews[0].starts_with("You died because you walked out with three teammates dead after the call to hold."), "{reviews:?}");
+}
+
+/// Deep in their half (y 0.3), alone, at 25:00, enemy slots named.
+fn deep(t: u32) -> GameSnapshot {
+    let mut s = at(alive(), t); s.minimap.as_mut().unwrap().you = Some(Pt { x: 0.5, y: 0.3 });
+    s.hero_status = team(&[], 0);
+    for (i, h) in ["hero_haze", "hero_kelvin", "hero_synth", "hero_yamato", "hero_frank", "hero_chrono"].iter().enumerate() { s.hero_status[6 + i].hero = Some(h.to_string()); }
+    s.hero_status[1].hero = Some("hero_bebop".into());
+    s
+}
+fn kill(s: &mut GameSnapshot, slots: &[usize], secs: u32) { for &i in slots { let h = &mut s.hero_status[6 + i]; h.dead = Some(true); h.respawn_secs = Some(secs); h.bar_visible = Some(false); } }
+#[test]
+fn deep_in_their_half_when_the_window_closes_says_get_out_with_the_respawn_timers() {
+    // rec8 20:14-20:38: deep in their Yellow base, Pocket and Rat King back within seconds; the last
+    // warning came 2.5 s before the death.
+    let mut s = deep(1500); kill(&mut s, &[0, 1], 9);
+    let cues = eval(&ActiveCoach::default(), &s);
+    assert_eq!(keys(&cues), ["active:forward_exit"]);
+    assert_eq!(cues[0].text, "Out of their base: Haze and Kelvin are back in 9 seconds.");
+    assert_eq!(cues[0].priority, Priority::High); speakable(&cues[0]);
+    // Just respawned (back within the last 8 s) counts the same.
+    let c = ActiveCoach::default();
+    let mut s = deep(1500); kill(&mut s, &[0, 1, 2], 2); eval(&c, &s);
+    let cues = eval(&c, &deep(1504));
+    assert_eq!(cues.first().map(|c| c.text.as_str()), Some("Out of their base: three of them are back now."));
+    // Not with two teammates beside you, not on your half, not while the window still has time.
+    let mut s = deep(1500); kill(&mut s, &[0, 1], 9); s.minimap.as_mut().unwrap().heroes = vec![track(true, 0.52, 0.3), track(true, 0.48, 0.32)];
+    assert!(eval(&ActiveCoach::default(), &s).is_empty(), "grouped");
+    let mut s = deep(1500); kill(&mut s, &[0, 1], 9); s.minimap.as_mut().unwrap().you = Some(Pt { x: 0.5, y: 0.55 });
+    assert!(!keys(&eval(&ActiveCoach::default(), &s)).contains(&"active:forward_exit".to_string()), "own half");
+    let mut s = deep(1500); kill(&mut s, &[0, 1], 30);
+    assert!(eval(&ActiveCoach::default(), &s).is_empty(), "30 s left: a window being used");
+}
+#[test]
+fn most_of_them_unseen_while_deep_says_get_out() {
+    // rec13 40:33: five unseen, deep in their Green base, dead at 41:05.
+    let mut s = deep(2433); for h in s.hero_status.iter_mut().filter(|h| !h.ally).take(5) { h.bar_visible = Some(false); }
+    let cues = eval(&ActiveCoach::default(), &s);
+    assert_eq!(cues.first().map(|c| c.text.as_str()), Some("Out of their base: five of them are unseen and you're deep."), "{cues:?}");
+}
+#[test]
+fn ultimate_down_in_their_half_with_enemies_missing_says_back_to_the_team() {
+    let ult = |t: u32, cd: u32| { let mut s = deep(t); s.minimap.as_mut().unwrap().you = Some(Pt { x: 0.5, y: 0.4 });
+        for h in s.hero_status.iter_mut().filter(|h| !h.ally).take(3) { h.bar_visible = Some(false); }
+        s.abilities = vec![coach_core::AbilityState { slot: 4, ready: Some(false), cooldown_secs: Some(cd) }]; s };
+    let mut e = Engine::new(vec![Box::new(ActiveCoach::default())]);
+    let c = e.step(&ult(1500, 80));
+    assert_eq!(c.first().map(|c| c.text.as_str()), Some("Ult's down and three are missing: back to Bebop."), "{c:?}");
+    assert!(e.step(&ult(1505, 75)).is_empty() && e.step(&ult(1570, 10)).is_empty(), "once per cast");
+    assert_eq!(keys(&e.step(&ult(1700, 100))), ["active:ult_out"], "a new cast");
+    // Ready, on your half, or in the laning phase: nothing.
+    let mut ready = ult(1500, 80); ready.abilities[0] = coach_core::AbilityState { slot: 4, ready: Some(true), cooldown_secs: None };
+    assert!(eval(&ActiveCoach::default(), &ready).is_empty());
+    let mut home = ult(1500, 80); home.minimap.as_mut().unwrap().you = Some(Pt { x: 0.5, y: 0.6 });
+    assert!(eval(&ActiveCoach::default(), &home).is_empty());
+    assert!(eval(&ActiveCoach::default(), &ult(700, 80)).is_empty(), "laning phase");
+}
+#[test]
+fn rain_of_arrows_cast_toward_missing_enemies_says_it_is_your_escape() {
+    // rec8 16:54 / 20:27: Rain of Arrows forward with three unseen, dead 6 and 13 s later.
+    let bar = |t: u32, ready: bool, cd: Option<u32>, unseen: usize| { let mut s = deep(t); s.minimap.as_mut().unwrap().you = Some(Pt { x: 0.2, y: 0.38 });
+        for h in s.hero_status.iter_mut().filter(|h| !h.ally).take(unseen) { h.bar_visible = Some(false); }
+        s.abilities = vec![coach_core::AbilityState { slot: 2, ready: Some(ready), cooldown_secs: cd }]; s };
+    let c = ActiveCoach::default();
+    assert!(eval(&c, &bar(1014, true, None, 3)).is_empty());
+    let cues = eval(&c, &bar(1016, false, Some(23), 3));
+    assert_eq!(cues.first().map(|c| c.text.as_str()), Some("Rain of Arrows is your escape: three are missing, back out."), "{cues:?}");
+    // A cooldown already running (not a fresh cast), or everyone seen: nothing.
+    let c = ActiveCoach::default();
+    assert!(eval(&c, &bar(1016, false, Some(23), 3)).is_empty(), "no ready read before");
+    let c = ActiveCoach::default(); eval(&c, &bar(1014, true, None, 0));
+    assert!(eval(&c, &bar(1016, false, Some(23), 0)).is_empty(), "nobody missing");
+    // Another hero has no escape listed.
+    let c = ActiveCoach::default(); let mut a = bar(1014, true, None, 3); a.hero = Some("hero_haze".into()); eval(&c, &a);
+    let mut b = bar(1016, false, Some(23), 3); b.hero = Some("hero_haze".into());
+    assert!(eval(&c, &b).is_empty());
+}
+#[test]
+fn an_enemy_window_names_a_target_you_reach_and_the_heroes_dead_for_all_of_it() {
+    use coach_engine::positioning::window_target;
+    use coach_core::StructureState;
+    // rec8 32:52 said "2 enemies" with three dead and no target; one is back in 9 s.
+    let mut s = alive(); s.hero_status = team(&[Some(40), Some(22), Some(9)], 0);
+    let cues = eval(&ActiveCoach::default(), &s);
+    assert_eq!(cues[0].text, "Two of them are dead for 22 more seconds: push Blue lane with the team now.");
+    // rec8 29:41 / 31:11: "push Yellow" from Blue with 17-19 s left. Your lane wins; a structure
+    // is named when you reach it in time.
+    let s = alive();
+    assert_eq!(window_target(&s, 17, 45.0, 3).as_deref(), Some("push Blue lane with the team"));
+    let mut s = alive(); s.minimap.as_mut().unwrap().your_lane = None; s.minimap.as_mut().unwrap().you = Some(Pt { x: 0.58, y: 0.54 });
+    assert_eq!(window_target(&s, 17, 45.0, 3).as_deref(), Some("push Blue lane with the team"), "the nearest lane, not the deepest");
+    let mut s = alive();
+    s.structures = vec![StructureState { lane: Some(Lane::Blue), kind: "guardian".into(), own: false, alive: true }];
+    assert_eq!(window_target(&s, 20, 45.0, 3).as_deref(), Some("take their Blue Guardian"));
+    assert_eq!(window_target(&s, 15, 45.0, 3).as_deref(), Some("push Blue lane with the team"), "the Guardian is too far for 15 s");
+    s.structures = ["guardian", "walker", "guardian"].iter().map(|k| StructureState { lane: Some(Lane::Blue), kind: k.to_string(), own: false, alive: false })
+        .chain(std::iter::once(StructureState { lane: None, kind: "shrine".into(), own: false, alive: true })).collect();
+    s.minimap.as_mut().unwrap().you = Some(Pt { x: 0.5, y: 0.5 });
+    assert_eq!(window_target(&s, 30, 45.0, 3).as_deref(), Some("hit their Shrines"));
+    let mut s = alive(); s.minimap.as_mut().unwrap().you = None;
+    assert_eq!(window_target(&s, 30, 45.0, 3), None, "position unknown");
+    let mut s = alive(); s.minimap.as_mut().unwrap().your_lane = None; s.minimap.as_mut().unwrap().you = Some(Pt { x: 0.5, y: 0.95 });
+    s.minimap.as_mut().unwrap().green.push = Some(0.95); s.minimap.as_mut().unwrap().blue.push = Some(0.95); s.minimap.as_mut().unwrap().yellow.push = Some(0.95);
+    assert_eq!(window_target(&s, 16, 45.0, 3), None, "every lane front is too far");
 }

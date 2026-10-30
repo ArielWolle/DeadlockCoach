@@ -452,3 +452,72 @@ fn alone_against_two_and_stunned_are_named() {
     let t = &r.evaluate(&d)[0].text;
     assert!(t.starts_with("You died because you got stunned and Graves finished you. Next life: after the first stun, dash out at once."), "{t}");
 }
+
+// ---- docs/coach-review-8.md D6, D8 ----------------------------------------------------------
+
+fn r8_team() -> Vec<String> { ["hero_kelvin", "hero_yamato", "hero_synth", "hero_haze", "hero_chrono", "hero_frank"].map(String::from).to_vec() }
+fn r8_death(r: &ReviewCoach, from: u32, panel_rows: &[(&str, u32)]) -> String {
+    let p = Pt { x: 0.5, y: 0.55 };
+    for (t, hp) in [(from, 2300), (from + 4, 2300), (from + 8, 1200), (from + 11, 300)] {
+        let mut s = alive(t, hp, p, Some(Lane::Blue), vec![track(1, true, 0.52, 0.56)], team(0, 0), 500); s.hero = Some("hero_orion".into()); s.enemy_heroes = r8_team(); r.evaluate(&s);
+    }
+    let mut out = String::new();
+    for t in from + 13..from + 30 { let mut d = dead(t, Some(panel_rows[0].0)); d.death_damage = rows(panel_rows); d.enemy_heroes = r8_team(); d.hero = Some("hero_orion".into());
+        if let Some(c) = r.evaluate(&d).into_iter().find(|c| c.key.starts_with("death:review")) { out = c.text; } }
+    let mut back = alive(from + 40, 2500, p, Some(Lane::Blue), vec![], team(0, 0), 500); back.hero = Some("hero_orion".into()); r.evaluate(&back);
+    out
+}
+#[test]
+fn the_death_review_names_the_killing_ability_and_its_counter() {
+    // rec8 42:05: Kelvin's Arctic Beam 1,342 of 2,670 (the review said "Kelvin and Yamato focused you").
+    let t = r8_death(&ReviewCoach::default(), 2500, &[("Arctic Beam", 1342), ("Frost Grenade", 396), ("Flying Slash", 277), ("Gun Damage", 153)]);
+    assert!(t.starts_with("You died because Kelvin's Arctic Beam froze you in place. Next life: break line of sight at the first tick of Kelvin's beam."), "{t}");
+    short(&t);
+    // rec8 49:42: Haze's Bullet Dance (2.0k) -> the Snare and Metal Skin answer.
+    let t = r8_death(&ReviewCoach::default(), 2970, &[("Bullet Dance", 2021), ("Gun Damage", 400)]);
+    assert!(t.starts_with("You died because Haze's Bullet Dance caught you. Next life: stay with the team and Snare her landing; Metal Skin answers Bullet Dance."), "{t}");
+    // A burst by nobody named: lower case mid-sentence (rec8 21:10 "You died because They burst you").
+    let t = r8_death(&ReviewCoach::default(), 1230, &[("Gun Damage", 2200)]);
+    assert!(!t.contains("They") && !t.contains("because They"), "{t}");
+}
+#[test]
+fn a_repeat_killer_is_folded_into_the_one_death_review() {
+    // rec8 47:38: "Pocket's Affliction topped 2 of your deaths" as a second death-screen message.
+    let r = ReviewCoach::default();
+    r8_death(&r, 2700, &[("Affliction", 2200), ("Frost Grenade", 300)]);
+    let t = r8_death(&r, 2800, &[("Affliction", 2210), ("Frost Grenade", 310)]);
+    assert!(t.contains("Pocket") && t.contains("Affliction") && (t.contains("topped 2 of your deaths") || t.contains("killed you 2 times")), "{t}");
+    short(&t);
+    // In the engine the active coach's repeat-killer message stays quiet after that review.
+    let mut e = coach_engine::Engine::new(coach_engine::default_rules(coach_engine::RulesConfig::default()));
+    let mut keys = vec![];
+    for (from, dmg) in [(2700u32, 2200u32), (2800, 2210)] {
+        let p = Pt { x: 0.5, y: 0.55 };
+        for (t, hp) in [(from, 2300), (from + 4, 2300), (from + 8, 1200), (from + 11, 300)] {
+            let mut s = alive(t, hp, p, Some(Lane::Blue), vec![], team(0, 0), 500); s.hero = Some("hero_orion".into()); s.enemy_heroes = r8_team(); keys.extend(e.step(&s).into_iter().map(|c| c.key));
+        }
+        for t in from + 13..from + 40 { let mut d = dead(t, Some("Affliction")); d.death_damage = rows(&[("Affliction", dmg), ("Frost Grenade", 300)]); d.enemy_heroes = r8_team(); d.hero = Some("hero_orion".into()); d.respawn_secs = Some(from + 45 - t);
+            keys.extend(e.step(&d).into_iter().map(|c| c.key)); }
+        for t in from + 46..from + 60 { let mut s = alive(t, 2500, p, Some(Lane::Blue), vec![], team(0, 0), 500); s.hero = Some("hero_orion".into()); keys.extend(e.step(&s).into_iter().map(|c| c.key)); }
+    }
+    assert_eq!(keys.iter().filter(|k| k.starts_with("death:review")).count(), 2, "{keys:?}");
+    assert!(!keys.iter().any(|k| k.starts_with("active:repeat") || k == "active:close"), "{keys:?}");
+}
+fn slots(allies_dead: usize, enemies_dead: usize) -> Vec<HeroStatus> {
+    (0..12).map(|i| { let ally = i < 6; let slot = i % 6; HeroStatus { ally, slot, dead: Some(if ally { slot < allies_dead } else { slot < enemies_dead }), bar_visible: Some(true), ..Default::default() } }).collect()
+}
+#[test]
+fn fight_lost_is_only_called_when_we_lost_the_trade() {
+    let p = Pt { x: 0.5, y: 0.5 };
+    let foe = vec![track(9, false, 0.55, 0.5)];
+    let run = |steps: &[(u32, usize, usize)]| { let r = ReviewCoach::default(); let mut out = vec![];
+        for &(t, a, e) in steps { out.extend(r.evaluate(&alive(t, 2000, p, Some(Lane::Blue), foe.clone(), slots(a, e), 500)).into_iter().filter(|c| c.key == "review:fight-lost")); } out };
+    // rec8 13:51: three of theirs and three of ours: an even trade.
+    assert!(run(&[(800, 0, 0), (805, 0, 2), (810, 1, 3), (815, 3, 3)]).is_empty());
+    // rec8 33:40: 2-for-2 within the minute.
+    assert!(run(&[(800, 0, 0), (810, 0, 1), (840, 0, 2), (850, 2, 2)]).is_empty());
+    // Lost: two of ours, none of theirs; or two down now after their dead respawned (rec13 13:40).
+    let c = run(&[(800, 0, 0), (806, 2, 0)]);
+    assert_eq!(c.len(), 1); assert_eq!(c[0].text, "Back out: 2 teammates are down.");
+    assert_eq!(run(&[(760, 0, 0), (770, 0, 2), (790, 0, 0), (800, 0, 0), (806, 2, 0)]).len(), 1);
+}

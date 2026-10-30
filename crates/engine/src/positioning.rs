@@ -120,9 +120,14 @@ impl PositionCoach {
         // A window is only worth calling with time left: rec8 said "the first back in about 1
         // seconds" twice. Enemies count with a read timer of WINDOW_MIN_SECS or more (an unread
         // timer is not a window); teammates count unless their timer is nearly done.
-        let window: Vec<Option<u32>> = p.enemies_dead.iter().copied().filter(|r| r.is_some_and(|r| r >= WINDOW_MIN_SECS)).collect();
+        // The count is the heroes dead for the whole window it names (rec8 32:52 said "2 enemies"
+        // with three dead), and the call needs a target you reach in time (rec8 29:41, 31:11).
+        let window: Vec<u32> = p.enemies_dead.iter().flatten().copied().filter(|r| *r >= WINDOW_MIN_SECS).collect();
         if window.len() >= t.team_down && p.enemies_dead.len() > p.allies_dead.len() && !near_enemy && health.is_some_and(|h| h >= 0.5) {
-            return Some(self.advice("enemies_down", &[("count", count(window.len(), "enemy")), ("respawn", respawn_note(&window))], ev));
+            let secs = window.iter().copied().min().unwrap_or(0);
+            if let Some(target) = window_target(s, secs, TRAVEL_SECS_PER_MAP, WINDOW_MARGIN_SECS) {
+                return Some(self.advice("enemies_down", &[("count", count_word(window.len())), ("secs", secs.to_string()), ("target", target)], ev));
+            }
         }
         let down: Vec<Option<u32>> = p.allies_dead.iter().copied().filter(|r| r.is_none_or(|r| r >= 8)).collect();
         if down.len() >= t.team_down && p.allies_dead.len() > p.enemies_dead.len() {
@@ -251,8 +256,76 @@ impl PositionCoach {
     }
 }
 
+/// Minimap x of a lane: Blue in the centre, Yellow right unless the layout is mirrored.
+pub fn lane_x(l: Lane, mirrored: Option<bool>) -> f32 {
+    let yellow_right = mirrored != Some(true);
+    match l { Lane::Blue => 0.5, Lane::Yellow => if yellow_right { 0.85 } else { 0.15 }, Lane::Green => if yellow_right { 0.15 } else { 0.85 } }
+}
+/// Rough minimap y of an enemy lane structure (their base at the top): outer Guardian, Walker,
+/// base Guardian. A coach estimate for walking times only.
+fn structure_y(i: usize) -> f32 { [0.3, 0.22, 0.14].get(i).copied().unwrap_or(0.14) }
+/// The next standing enemy structure of a lane as read on the minimap, in lane order (outer
+/// Guardian, Walker, base Guardian): (index in that order, spoken name). None when the lane's
+/// structures were not read or all are down.
+pub fn next_structure(s: &GameSnapshot, l: Lane) -> Option<(usize, &'static str)> {
+    let lane: Vec<&coach_core::StructureState> = s.structures.iter().filter(|x| !x.own && x.lane == Some(l)).collect();
+    if lane.is_empty() { return None; }
+    let mut guardians = 0;
+    for x in lane {
+        let (order, name) = match x.kind.as_str() { "guardian" => { guardians += 1; if guardians == 1 { (0, "Guardian") } else { (2, "base Guardian") } } "walker" => (1, "Walker"), _ => continue };
+        if x.alive { return Some((order, name)); }
+    }
+    None
+}
+/// Every enemy lane structure of some lane is down and their Shrines are read standing.
+pub fn shrines_open(s: &GameSnapshot) -> bool {
+    let lanes = [Lane::Green, Lane::Blue, Lane::Yellow];
+    let lane_down = |l: Lane| { let v: Vec<_> = s.structures.iter().filter(|x| !x.own && x.lane == Some(l) && x.kind != "shrine").collect(); v.len() >= 3 && v.iter().all(|x| !x.alive) };
+    lanes.into_iter().any(lane_down) && s.structures.iter().any(|x| !x.own && x.kind == "shrine" && x.alive)
+}
+/// What to do with an enemy-dead window of `secs` seconds, reachable from where you stand
+/// (rec8 29:41 / 31:11 said "push Yellow" from Blue with 17-19 s left): your lane when you are on
+/// one, else the nearest lane you reach with `margin` seconds to spare at `secs_per_map` seconds
+/// per minimap width; its next standing enemy structure when that is reachable too. None when no
+/// lane is reachable in time or your position is unknown.
+pub fn window_target(s: &GameSnapshot, secs: u32, secs_per_map: f32, margin: u32) -> Option<String> {
+    let m = s.minimap.as_ref()?;
+    let me = m.you?;
+    let budget = secs.saturating_sub(margin) as f32;
+    let walk = |x: f32, y: f32| (me.x - x).hypot(me.y - y) * secs_per_map;
+    // Joining a lane: its x at your height, or forward to its front when the front is ahead of you.
+    let join = |l: Lane| { let front = m.lane(l).push.map(|p| 0.92 - 0.84 * p).unwrap_or(me.y); walk(lane_x(l, m.lanes_mirrored), front.min(me.y)) };
+    let lane = match m.your_lane.filter(|l| join(*l) <= budget) {
+        Some(l) => l,
+        None => [Lane::Green, Lane::Blue, Lane::Yellow].into_iter().map(|l| (l, join(l))).filter(|x| x.1 <= budget).min_by(|a, b| a.1.total_cmp(&b.1))?.0,
+    };
+    let name = lane_name(lane);
+    if let Some((i, structure)) = next_structure(s, lane) {
+        if walk(lane_x(lane, m.lanes_mirrored), structure_y(i)) <= budget { return Some(format!("take their {name} {structure}")); }
+    } else if shrines_open(s) && s.structures.iter().filter(|x| !x.own && x.lane == Some(lane) && x.kind != "shrine").count() >= 3 && walk(0.5, 0.1) <= budget {
+        return Some("hit their Shrines".into());
+    }
+    Some(format!("push {name} lane with the team"))
+}
+/// The objective for a long window (our Rejuvenator): their Shrines when a lane is open to
+/// them, else the most pushed lane into its next standing structure, else the most pushed lane.
+pub fn push_target(s: &GameSnapshot) -> Option<String> {
+    if shrines_open(s) { return Some("their Shrines".into()); }
+    let m = s.minimap.as_ref();
+    let mut lanes: Vec<(Lane, f32)> = [Lane::Green, Lane::Blue, Lane::Yellow].into_iter().map(|l| (l, m.and_then(|m| m.lane(l).push).unwrap_or(0.0))).collect();
+    lanes.sort_by(|a, b| b.1.total_cmp(&a.1));
+    if let Some((l, (_, st))) = lanes.iter().find_map(|(l, _)| next_structure(s, *l).map(|x| (*l, x))) { return Some(format!("{} lane into their {st}", lane_name(l))); }
+    lanes.first().filter(|x| x.1 > 0.0).map(|x| format!("{} lane", lane_name(x.0)))
+}
+
 /// Seconds an enemy-dead window must still last to be worth a call.
 pub const WINDOW_MIN_SECS: u32 = 15;
+/// Seconds to walk one minimap width (a coach estimate) and the spare seconds a window target
+/// must leave on arrival.
+pub const TRAVEL_SECS_PER_MAP: f32 = 45.0;
+pub const WINDOW_MARGIN_SECS: u32 = 3;
+/// "Two", "Three"... for spoken counts at the start of a sentence.
+pub fn count_word(n: usize) -> String { match n { 1 => "One".into(), 2 => "Two".into(), 3 => "Three".into(), 4 => "Four".into(), 5 => "Five".into(), 6 => "Six".into(), n => n.to_string() } }
 /// One team-wide window (two or more heroes of a team dead) as named so far. A window is said
 /// once: again only when none of the heroes named is still dead (a new window), and it ends when
 /// fewer than two are dead for WINDOW_GAP_SECS (top-bar flicker does not end it).

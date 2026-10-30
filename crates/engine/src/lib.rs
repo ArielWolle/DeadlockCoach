@@ -105,7 +105,7 @@ impl CounterRule { pub fn new(defs: Vec<CounterDef>) -> Self { Self { defs, memo
 /// hero by vote, and the death state.
 #[derive(Default)]
 struct CounterMemo { deaths: Vec<(u32, Vec<(String, String, u32)>)>, dead: bool, me: Option<String>, votes: HashMap<String, u32>, enemies: Vec<String>, last_clock: u32 }
-fn review_catalog() -> &'static review::Catalog {
+pub(crate) fn review_catalog() -> &'static review::Catalog {
     static C: std::sync::OnceLock<review::Catalog> = std::sync::OnceLock::new();
     C.get_or_init(|| serde_json::from_str(include_str!("../../../data/coaching/review.json")).expect("shipped review policy"))
 }
@@ -525,9 +525,27 @@ pub fn is_chatter(key: &str) -> bool {
 /// "Back off" calls that say the same thing in different words: one per [`RETREAT_GAP_SECS`]
 /// (rec11 30:35-30:52 said gank, outnumbered and hold your side in 17 s). The critical-health call
 /// and the debuff / crowd-control escapes are not in it.
-pub fn is_retreat_call(key: &str) -> bool { matches!(key, "pos:gank" | "pos:outnumbered" | "lane:hold" | "lane:back_off" | "review:fight-lost") }
+/// The forward-position calls (out of their base, ult down, escape spent) are in the family.
+pub fn is_retreat_call(key: &str) -> bool { matches!(key, "pos:gank" | "pos:outnumbered" | "lane:hold" | "lane:back_off" | "review:fight-lost" | "active:ult_out" | "active:escape_in") || key.starts_with("active:forward_exit") }
 pub const RETREAT_GAP_SECS: u32 = 20;
 pub fn is_wave_call(key: &str) -> bool { key.starts_with("map:wave:") || key == "wave:overview" }
+/// Calls that send you to an objective, a push or a fight (docs/coach-review-8.md D9).
+pub fn is_go_call(key: &str) -> bool {
+    const PREFIX: [&str; 8] = ["plan:urn", "plan:midboss", "plan:rejuv", "plan:guardian", "plan:walker", "map:urn-ground", "map:urn-ally", "map:midboss"];
+    PREFIX.iter().any(|p| key.starts_with(p))
+        || matches!(key, "pos:enemies_down" | "pos:go_in" | "pos:join" | "pos:kill_window" | "pos:help" | "lane:push" | "lane:objective" | "lane:rotate" | "lane:gank" | "active:fight" | "map:farm-window")
+}
+/// Calls that hold you back: while one applies (or [`HOLD_COVERS_SECS`] after it), no call sends
+/// you to an objective or a push (rec8 40:42 "check who is missing before you grab the Urn" 3 s
+/// before "Hold in base"; 27:09 "push a lane" while carrying the Urn; rec13 26:00 a Midboss plan
+/// while carrying the Urn).
+pub fn is_hold_call(key: &str) -> bool {
+    matches!(key, "active:hold_base" | "active:hold_base:out" | "active:urn_hold" | "review:fight-lost" | "active:team_losing" | "active:ult_out" | "active:escape_in" | "pos:outnumbered")
+        || key.starts_with("active:forward_exit")
+}
+pub const HOLD_COVERS_SECS: u32 = 20;
+/// The same sentence is not spoken twice within this many seconds (docs/coach-review-8.md D10).
+pub const SAME_TEXT_SECS: u32 = 180;
 /// Lane-income advice that has no place in a fight.
 fn is_farm_call(key: &str) -> bool {
     matches!(key, "lane:last_hit" | "lane:wave_good" | "lane:poke" | "lane:push" | "lane:shop" | "lane:rotate" | "lane:objective" | "map:farm-window" | "unspent" | "active:close") || key.starts_with("active:repeat")
@@ -581,10 +599,12 @@ pub struct Engine {
     /// Clocks of the praise calls spoken, and of the last compliment of any kind (praise or the
     /// farm-pace compliment): the praise budget ([`praise::budget_allows`]).
     praise_at: Vec<u32>, compliment_at: Option<u32>,
+    /// Spoken sentences and when (the same-text guard).
+    said_text: HashMap<String, u32>,
 }
 
 impl Engine {
-    pub fn new(rules: Vec<Box<dyn Rule>>) -> Self { Engine { fight: FightState::default(), in_fight: false, life: LifeTracker::default(), rules, last_said: HashMap::new(), max_per_step: 1, min_gap_secs: 8, budget: true, last_cue_at: None, fight_calls: vec![], wave_at: None, wave_text: None, praise_at: vec![], compliment_at: None } }
+    pub fn new(rules: Vec<Box<dyn Rule>>) -> Self { Engine { fight: FightState::default(), in_fight: false, life: LifeTracker::default(), rules, last_said: HashMap::new(), max_per_step: 1, min_gap_secs: 8, budget: true, last_cue_at: None, fight_calls: vec![], wave_at: None, wave_text: None, praise_at: vec![], compliment_at: None, said_text: HashMap::new() } }
     /// Whether the last step was in fight mode.
     pub fn in_fight(&self) -> bool { self.in_fight }
     /// Deaths as one event each (first death screen to the confirmed respawn).
@@ -600,7 +620,7 @@ impl Engine {
         if snap.screen.as_deref().is_some_and(|s|!matches!(s,"Gameplay"|"Scoreboard"|"Dead")){return vec![];}
         let Some(now) = snap.game_clock_secs else { return vec![] };
         if let Some(last)=self.last_cue_at {if now<last {
-            if last-now>120 {self.last_said.clear();self.last_cue_at=None;self.praise_at.clear();self.compliment_at=None;self.fight_calls.clear();self.wave_at=None;}
+            if last-now>120 {self.last_said.clear();self.said_text.clear();self.last_cue_at=None;self.praise_at.clear();self.compliment_at=None;self.fight_calls.clear();self.wave_at=None;}
             else {return vec![];} // small OCR backsteps are not a new match
         }}
         self.in_fight = self.fight.observe(snap, now);
@@ -614,7 +634,29 @@ impl Engine {
             Some(&t) if now >= t && now - t < c.cooldown_secs => false,
             _ => true,
         });
+        // The same sentence twice within 3 minutes is a repeat whatever its key (rec8 "Go defend our
+        // Patron: it's under attack." 48:20 and 49:34); a death review is always new.
+        // Debuff and crowd-control escapes are said on every new badge (their cooldown dedupes them).
+        // So is the hold-in-base call of a new wipe (its own episode logic decides).
+        out.retain(|c| c.key.starts_with("death:review") || c.key.starts_with("active:hold_base") || active::is_escape_call(&c.key) || self.said_text.get(&c.text).is_none_or(|t| now < *t || now - t >= SAME_TEXT_SECS));
         let recent = |k: &str, secs: u32| self.last_said.get(k).is_some_and(|t| now >= *t && now - t < secs);
+        // Contradiction guard: no objective pickup or push while a hold / back-out call applies,
+        // while three or more teammates are dead, or (other than the Urn itself) while you carry it.
+        let held_back = self.last_said.iter().any(|(k, t)| is_hold_call(k) && now >= *t && now - t < HOLD_COVERS_SECS);
+        let team_down = positioning::TeamPicture::from(snap).is_some_and(|p| p.allies_dead.len() >= 3);
+        let carrying = snap.minimap.as_ref().is_some_and(|m| m.urn == Some(coach_core::UrnState::CarriedByYou)) || snap.status_effects.iter().any(|e| e == "carrying_urn");
+        out.retain(|c| !is_go_call(&c.key) || !(held_back || team_down || carrying && !c.key.starts_with("plan:urn") && !c.key.starts_with("map:urn")));
+        // Nor a wave chore ("catch the farm before you roam") that walks you out alone.
+        if held_back || team_down { out.retain(|c| !is_wave_call(&c.key) && !is_farm_call(&c.key)); }
+        // A summary waits while three of us are dead (rec8 40:42: "come help" 3 s before "Hold in base").
+        if team_down { out.retain(|c| !c.key.starts_with("review:pattern")); }
+        // One death, one message: the death review folds in the repeat killer and the close-range
+        // pattern (rec8 28:50 / 47:38 spoke them as second death-screen messages).
+        // (Only once the review was spoken for this death: without a review rule the lessons stay.)
+        let reviewed = self.life.dead_since.is_some_and(|d| self.last_said.iter().any(|(k, t)| k.starts_with("death:review") && *t >= d));
+        if reviewed { out.retain(|c| !(c.key.starts_with("active:") || c.key.starts_with("review:pattern:death"))); }
+        // A throw call is for the living (rec8 42:30 named the lead to a dead player); it waits for the respawn with fresh numbers.
+        if self.life.dead_since.is_some() || snap.dead { out.retain(|c| !c.key.starts_with("lead:falling")); }
         // Praise is rationed: at most 3 per 10 minutes, a minute apart (praise.rs); never during or
         // within a minute after a death, nor right after the opposite mistake (rec13: "keep it up,
         // you went 9 minutes without dying" 5 s after a death).
@@ -676,7 +718,8 @@ impl Engine {
         let first = |c: &Cue| c.key == "lane:critical" || c.key.starts_with("death:review");
         out.sort_by(|a, b| b.priority.cmp(&a.priority).then(first(b).cmp(&first(a))).then(call_value(&b.key).cmp(&call_value(&a.key))));
         out.truncate(self.max_per_step);
-        for c in &out { self.last_said.insert(c.key.clone(), now); }
+        for c in &out { self.last_said.insert(c.key.clone(), now); self.said_text.insert(c.text.clone(), now); }
+        self.said_text.retain(|_, t| now < *t || now - *t < SAME_TEXT_SECS);
         for c in &out { for r in &self.rules { r.spoken(c); } }
         // A debuff / crowd-control call already says "get out" with the reason: the generic
         // health back-off would repeat it a second later (rec5 17:53 aura, 17:54 back off).

@@ -363,6 +363,8 @@ const FULL_ONLY=['counter','death','review','lead','behind','unspent-dead','play
   'active:debuff','active:cc','active:heal','active:unsecured','active:repeat','active:close','pos:enemies_down',
   // Top-bar deaths, structure banners and the urn carrier (full scan only).
   'active:hold_base','active:team_losing','active:base_attack','active:urn_hold',
+  // Forward-position calls: enemy respawn timers on the top bar and the ability bar.
+  'active:forward_exit','active:ult_out','active:escape_in',
   // Praise (crates/engine/src/praise.rs) needs the top bar, status effects and the structure banner.
   'praise',
   // Plans / threats / reset (crates/engine/src/plans.rs) need the top bar ('lead' covers lead:*).

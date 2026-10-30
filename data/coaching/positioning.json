@@ -31,8 +31,8 @@
       "rationale": "Every enemy that could be near you is low (from their top-bar health) while you are healthy: a pick creates a numbers advantage.",
       "sources": [
         { "path": "strategy/teamfighting.md", "section": "## 1. Wiki-grounded mechanics that shape fights", "basis": "WIKI", "excerpt": "Pick = killing a separated enemy / targeting low health or high threat to gain a numbers advantage." } ] },
-    { "id": "enemies_down", "speech": "{count} are dead{respawn}. We push a lane or take an objective now.", "priority": "normal", "cooldown_secs": 45,
-      "rationale": "Greyed enemy portraits with respawn timers are a temporary numbers advantage to convert into objectives.",
+    { "id": "enemies_down", "speech": "{count} of them are dead for {secs} more seconds: {target} now.", "priority": "normal", "cooldown_secs": 45,
+      "rationale": "Greyed enemy portraits with respawn timers are a temporary numbers advantage to convert into objectives. The call names the heroes dead for the whole window and a lane or structure you reach before it closes (TRAVEL_SECS_PER_MAP); without one it says nothing (rec8 32:52 'push a lane or take an objective' had no target).",
       "sources": [
         { "path": "strategy/teamfighting.md", "section": "## 4. Engage / disengage", "basis": "COMMUNITY", "excerpt": "count survivors and take the highest-value safe action (objective, wave, reset) rather than chasing" } ] },
     { "id": "allies_down", "speech": "{count} are dead{respawn}. Play safe near our guardian until they're back.", "priority": "normal", "cooldown_secs": 45,

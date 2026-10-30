@@ -179,7 +179,7 @@ fn a_falling_lead_is_called_once() {
     let said = lead_series(&c, 2000, 2400, |t| if t < 2100 { 30_000 } else { 30_000 - (t as i64 - 2100) * 80 });
     let falling: Vec<_> = said.iter().filter(|x| x.1.key.starts_with("lead:falling")).collect();
     assert_eq!(falling.len(), 1, "{said:?}");
-    assert!(falling[0].1.text.starts_with("Our lead dropped from 30k to"), "{}", falling[0].1.text);
+    assert!(falling[0].1.text.starts_with("Back to our base together") && falling[0].1.text.contains("from 30k to 20k"), "{}", falling[0].1.text);
     // A steady lead is not a throw.
     let c = PlanCoach::default();
     assert!(lead_series(&c, 2000, 2400, |_| 30_000).is_empty());
@@ -291,4 +291,96 @@ fn plans_register_in_the_default_engine_and_degrade_without_the_top_bar() {
     e.max_per_step = 20; e.min_gap_secs = 0;
     let s = snap(560);
     assert!(e.step(&s).iter().any(|c| c.key == "plan:urn:600"));
+}
+
+// ---- docs/coach-review-8.md D2, D3, D10 -----------------------------------------------------
+
+#[test]
+fn our_midboss_gives_one_rejuvenator_push_call_to_a_reachable_target() {
+    // rec8 38:41 and rec13 30:13: our Midboss, no plan.
+    let c = PlanCoach::default();
+    let said = midboss_kill(&c, 1800, (194_000, 199_000), (172_000, 173_000), 0, 0, Some("ally"));
+    let first = said.iter().find(|x| x.1.key.starts_with("plan:rejuv")).expect("rejuvenator plan");
+    assert_eq!(first.1.text, "All five push their base now: we have Rejuvenator for three minutes.");
+    assert_eq!(first.1.priority, Priority::High);
+    assert!(words(&first.1.text) <= 20);
+    c.spoken(&first.1.clone());
+    let mut s = snap(1840); you(&mut s, 0.5, 0.6);
+    assert!(find(&eval(&c, &s), "plan:rejuv").is_none(), "once per kill");
+    // Their Shrines when a lane is open to them; it lasts three minutes.
+    let c = PlanCoach::default();
+    midboss_kill(&c, 1800, (194_000, 199_000), (172_000, 173_000), 0, 0, Some("ally"));
+    let mut s = snap(1900);
+    s.structures = ["guardian", "walker", "guardian"].iter().map(|k| StructureState { lane: Some(Lane::Blue), kind: k.to_string(), own: false, alive: false })
+        .chain(std::iter::once(StructureState { lane: None, kind: "shrine".into(), own: false, alive: true })).collect();
+    assert_eq!(find(&eval(&c, &s), "plan:rejuv").unwrap().text, "All five push their Shrines now: we have Rejuvenator for 80 seconds.");
+    assert!(find(&eval(&c, &snap(1950)), "plan:rejuv").is_none(), "under 45 s left");
+    // Their Midboss: no push call.
+    let c = PlanCoach::default();
+    let said = midboss_kill(&c, 1800, (194_000, 195_000), (172_000, 178_000), 0, 0, Some("enemy"));
+    assert!(!said.iter().any(|x| x.1.key.starts_with("plan:rejuv")));
+}
+#[test]
+fn a_late_taker_read_is_the_same_midboss_kill() {
+    // rec13: "They took Midboss" at 39:50 (souls swing) and again at 40:38 (the taker read later).
+    let c = PlanCoach::default();
+    let mut said = midboss_kill(&c, 2378, (293_000, 295_000), (247_000, 254_000), 2, 3, None);
+    for t in (2410..2470).step_by(4) { let mut s = snap(t); s.minimap.as_mut().unwrap().midboss_up = false; s.midboss_taken_by = Some("enemy".into());
+        for cue in eval(&c, &s) { if cue.key.starts_with("lead:") { c.spoken(&cue); } said.push((t, cue)); } }
+    assert_eq!(said.iter().filter(|x| x.1.key.starts_with("lead:midboss")).count(), 1, "{said:?}");
+}
+#[test]
+fn the_fed_call_never_says_without_rejuvenator_while_we_hold_it() {
+    // rec13 32:18: "No fights in their base without Rejuvenator" two minutes after our Midboss.
+    let c = PlanCoach::default();
+    let mut said = vec![];
+    for t in (1800..1960).step_by(5) {
+        let mut s = snap(t); s.midboss_taken_by = Some("ally".into());
+        let nws = [40_000u32, 30_000, 28_000, 31_000, 29_000, 27_000];
+        for (h, nw) in ENEMIES.iter().zip(nws) { enemy(&mut s, h).networth = Some(nw); }
+        let e: u32 = nws.iter().sum(); s.enemy_networth = Some(e); s.ally_networth = Some(e + 45_000);
+        for cue in eval(&c, &s).into_iter().filter(|c| c.key.starts_with("lead:fed")) { c.spoken(&cue); said.push(cue.text); }
+    }
+    assert_eq!(said, ["We're 45k up with our Rejuvenator, but Infernus is their whole game: push only together."]);
+}
+#[test]
+fn a_throw_is_called_within_seconds_with_the_newest_numbers() {
+    // rec8 41:07: 38k -> 27k in seconds, called at 43:01 ("39k to 6k"); rec13 42:08 "46k to 35k" at 10k.
+    let c = PlanCoach::default();
+    let said = lead_series(&c, 2400, 2600, |t| if t < 2460 { 38_000 } else if t < 2470 { 30_000 } else if t < 2520 { 20_000 } else { 8_000 });
+    let falling: Vec<_> = said.iter().filter(|x| x.1.key.starts_with("lead:falling")).collect();
+    assert_eq!(falling.len(), 1, "one call per throw: {said:?}");
+    assert_eq!(falling[0].0, 2470, "10 s after the drop began");
+    assert_eq!(falling[0].1.text, "Back to our base together, nobody fights alone: our lead fell from 38k to 20k.");
+    assert_eq!(falling[0].1.priority, Priority::High);
+    // In their half: get out and regroup; our structure under attack is named.
+    let c = PlanCoach::default();
+    let mut out = vec![];
+    for t in (2400..2500).step_by(5) {
+        let mut s = snap(t); you(&mut s, 0.5, 0.3);
+        let e = 200_000 + (t - 2400) * 50; s.enemy_networth = Some(e); s.ally_networth = Some(e + if t < 2460 { 38_000 } else { 26_000 });
+        out.extend(eval(&c, &s).into_iter().filter(|c| c.key.starts_with("lead:falling")).map(|c| c.text));
+    }
+    assert_eq!(out.first().map(String::as_str), Some("Out of their base and regroup: our lead fell from 38k to 26k."));
+    // A one-read spike is not the peak (rec8 34:18 read +38k once between +33k reads).
+    let c = PlanCoach::default();
+    let said = lead_series(&c, 2000, 2200, |t| if t == 2050 { 45_000 } else { 33_000 });
+    assert!(said.is_empty(), "{said:?}");
+}
+#[test]
+fn the_same_missing_threat_waits_six_minutes_and_is_said_shorter() {
+    // rec13: "Abrams is missing: his Shoulder Charge stuns on walls. Snare at your feet." four times.
+    let c = PlanCoach::default();
+    let missing = |t: u32| { let mut s = snap(t); you(&mut s, 0.3, 0.3); for h in s.hero_status.iter_mut().filter(|h| !h.ally) { h.bar_visible = Some(true); } enemy(&mut s, "hero_necro").bar_visible = Some(false); s };
+    let seen = |t: u32| { let mut s = missing(t); enemy(&mut s, "hero_necro").bar_visible = Some(true); s };
+    eval(&c, &missing(1350));
+    speak(&c, &missing(1362), "threat:").expect("first call");
+    eval(&c, &seen(1580));
+    for t in (1585..1610).step_by(5) { assert!(find(&eval(&c, &missing(t)), "threat:hero_necro").is_none(), "{t}: 4 minutes after the first"); }
+    eval(&c, &seen(1700));
+    let mut again = None;
+    for t in (1705..1740).step_by(5) { if let Some(cue) = speak(&c, &missing(t), "threat:hero_necro") { again = Some((t, cue)); break; } }
+    let (t, cue) = again.expect("said again after six minutes");
+    assert!(t >= 1362 + 360, "{t}");
+    assert_eq!(cue.text, "Graves is missing again. Walk behind a teammate, not on ziplines.");
 }

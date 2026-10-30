@@ -19,7 +19,9 @@ use std::{cell::RefCell, collections::{HashMap, VecDeque}, sync::{Arc, OnceLock}
 pub struct Thresholds { pub death_window_secs: u32, pub alone_distance: f32, pub unseen_enemies: usize, pub souls_at_death: u32,
     pub pattern_window_secs: u32, pub fight_radius: f32, pub missed_fight_distance: f32, pub hoard_souls: u32, pub respawn_window_secs: u32 }
 #[derive(Clone, Deserialize)]
-pub struct Card { pub id: String, pub speech: String, pub lesson: String, pub sources: Vec<Source> }
+pub struct Card { pub id: String, pub speech: String, pub lesson: String, pub sources: Vec<Source>,
+    /// Other phrasings of a live call, said in rotation.
+    #[serde(default)] pub variants: Vec<String> }
 /// An ability with its own death reason and lesson (matched by panel source or debuff badge).
 #[derive(Clone, Deserialize)]
 pub struct Threat { pub source: String, pub hero: String, pub close: bool, pub counter: String,
@@ -91,6 +93,10 @@ struct Sample {
     alive: bool, respawn: Option<u32>,
     /// Allied heroes shown dead / alive on the top bar (class names), and an enemy structure banner.
     allies_dead_heroes: Vec<String>, allies_alive_heroes: Vec<String>, banner: Option<String>,
+    /// Enemy top-bar slots shown dead (None = top bar not read).
+    enemies_dead_slots: Option<Vec<usize>>, allies_dead_slots: Option<Vec<usize>>,
+    /// Your escape ability cast fresh on this frame in their half: (ability, enemies unseen or back soon).
+    cast: Option<(String, usize)>,
 }
 
 /// What one death came down to, kept for repeat killers and pattern summaries.
@@ -116,6 +122,12 @@ struct State {
     prev_pattern: Option<String>,
     /// Your hero, the enemy team, enemy item owners (item name lower -> hero classes), your items.
     me: Option<String>, enemies: Vec<String>, owners: HashMap<String, Vec<String>>, own_items: Vec<String>,
+    /// Calls the engine spoke that a death can ignore: (clock, "hold" | "urn" | "outnumbered" | "exit").
+    calls: Vec<(u32, &'static str)>,
+    /// Live fight-lost calls spoken (phrasing rotation).
+    fight_lost_said: usize,
+    /// Escape ability: last clock seen ready, and whether a cooldown was read since.
+    esc_ready_at: Option<u32>, esc_seen: bool,
 }
 
 /// The review coach. One instance per engine; it keeps its own history.
@@ -312,11 +324,13 @@ impl ReviewCoach {
             enemies_dead: team.as_ref().map(|p| p.enemies_dead.len()), souls: s.souls, fight_at, deep_wave, effects,
             alive: area != Area::Dead && s.screen.as_deref() == Some("Gameplay"), respawn: if area == Area::Dead { s.respawn_secs } else { None },
             allies_dead_heroes: s.hero_status.iter().filter(|h| h.ally && h.dead == Some(true)).filter_map(|h| h.hero.clone()).collect(),
+            enemies_dead_slots: if s.hero_status.len() == 12 { Some(s.hero_status.iter().filter(|h| !h.ally && h.dead == Some(true)).map(|h| h.slot).collect()) } else { None },
+            allies_dead_slots: if s.hero_status.len() == 12 { Some(s.hero_status.iter().filter(|h| h.ally && h.dead == Some(true)).map(|h| h.slot).collect()) } else { None },
             allies_alive_heroes: s.hero_status.iter().filter(|h| h.ally && h.dead == Some(false)).filter_map(|h| h.hero.clone()).filter(|h| s.hero.as_ref() != Some(h)).collect(),
             banner: s.objective_banner.as_ref().filter(|b| b.own != Some(true) && !b.name.trim().is_empty()).map(|b| {
                 let n = b.name.trim().to_ascii_uppercase();
                 if n.contains("HIDDEN") || n.contains("ARCHMOTHER") || n.contains("PATRON") { "Patron".to_string() } else { b.name.trim().to_string() }
-            }) }
+            }), cast: None }
     }
 
     /// Why the last death happened, from the samples before it and the damage panel: one coach
@@ -368,10 +382,18 @@ impl ReviewCoach {
             if a.troopers > 0 && (a.troopers * 10 >= a.listed || a.troopers >= 300) { add(&mut cands, 10, "troopers", &[("dmg", num(a.troopers))]); }
             if let Some((src, _)) = a.structures.iter().max_by_key(|x| x.1) { add(&mut cands, 10, "structure", &[("source", src.clone())]); }
         }
+        // The top hero's biggest ability, named with its owner ("Kelvin's Arctic Beam"): the death
+        // review says what hit you, not only who (rec8: "They burst you", "X and Y focused you").
+        let top_ability: Option<(String, String)> = attr.as_ref().and_then(|a| a.heroes.first().filter(|x| x.1 * 5 >= a.listed))
+            .and_then(|(h, _, srcs)| srcs.first().map(|s| (data.hero_name(h), s.clone())));
+        let owned = |hero: &str, ability: &str| if hero.ends_with('s') { format!("{hero}' {ability}") } else { format!("{hero}'s {ability}") };
         let names: Vec<String> = attr.as_ref().map(|a| a.heroes.iter().take(2).map(|x| data.hero_name(&x.0)).collect()).unwrap_or_default();
+        let mut names_ab = names.clone();
+        if let (Some(first), Some((h, ab))) = (names_ab.first_mut(), top_ability.as_ref()) { if first == h { *first = owned(h, ab); } }
         let many = attr.as_ref().is_some_and(|a| a.min_heroes() >= 2);
         let who = if names.len() >= 2 { and_list(&names) } else if many { format!("{} enemies", attr.as_ref().map(|a| a.min_heroes()).unwrap_or(2)) } else { String::new() };
-        if many { add(&mut cands, 11, "involved", &[("names", who.clone()), ("front", front.clone())]); }
+        let who_ab = if names_ab.len() >= 2 { and_list(&names_ab) } else { who.clone() };
+        if many { add(&mut cands, 11, "involved", &[("names", who_ab.clone()), ("front", front.clone())]); }
         // Without panel rows, a cause naming a threat ability is that threat (rec5 death 3).
         if attr.is_none() { if let Some(th) = death.cause.as_deref().and_then(|c| self.threat(c)) { threats_seen.push(th); } }
         // Debuff badges seen on you before the death are threats too (Stalker's Mark 4-6 s
@@ -405,6 +427,9 @@ impl ReviewCoach {
         // --- Repeat killer by hero (the counter item is the buy line), else by cause family.
         let souls_at = before.iter().rev().filter_map(|x| x.souls).next().or(if no_frames { death.souls_dead } else { None });
         let mut buy: Option<String> = None;
+        // A repeat killer is folded into the one death review (rec8 47:38 said "Pocket's Affliction
+        // topped 2 of your deaths" as a second death-screen message): (hero, ability, deaths).
+        let mut repeat: Option<(String, String, usize)> = None;
         if let Some(main) = &summary.main {
             let n = 1 + st.deaths.iter().filter(|d| d.clock != death.clock).filter(|d| d.summary.as_ref().and_then(|s| s.main.as_ref()) == Some(main)).count();
             if n >= 2 {
@@ -412,6 +437,8 @@ impl ReviewCoach {
                 let th = threats_seen.iter().find(|t| &t.hero == main && !t.counter.is_empty());
                 let need = th.map(|t| t.counter.as_str()).unwrap_or("spirit");
                 add(&mut cands, 9, "repeat_killer", &[("count", n.to_string()), ("hero", hero.clone())]);
+                let ability = th.map(|t| t.source.clone()).or_else(|| attr.as_ref().and_then(|a| a.heroes.iter().find(|x| &x.0 == main)).and_then(|x| x.2.first().cloned()));
+                if let Some(ab) = ability { repeat = Some((hero.clone(), ab, n)); }
                 if let Some((item, cost)) = self.counter_item(need, st) {
                     if souls_now.or(souls_at).is_none_or(|s| s >= cost) { buy = Some(self.fill("buy_item", &[("item", item)]).0); }
                 }
@@ -426,6 +453,32 @@ impl ReviewCoach {
 
         // --- What the frames before the death showed.
         if !no_frames {
+            // A call the player did not follow in the last 60 s is the decision that killed him
+            // (rec8 27:33 "hold the urn" -> dead 27:57; 41:46 "back to base" -> dead 42:05: the
+            // review said "Kelvin and Yamato focused you").
+            let last = before.iter().rev().find(|x| x.you.is_some() || x.area != Area::Unknown);
+            let out_of_base = last.is_some_and(|x| x.area != Area::Base && x.you.is_none_or(|p| p.y < 0.86));
+            let allies_dead = before.iter().rev().find_map(|x| x.allies_dead);
+            let in_half = last.and_then(|x| x.you).is_some_and(|p| p.y < 0.5);
+            let dead_count = || match allies_dead { Some(2) => "two", Some(3) => "three", Some(4) => "four", Some(5) => "five", _ => "several" }.to_string();
+            // The most important ignored call, the newest among equals (hold / urn before exit).
+            let ignored = st.calls.iter().rev().filter(|c| c.0 <= end && c.0 + 60 >= end).filter_map(|c| match c.1 {
+                "hold" if out_of_base && allies_dead.is_some_and(|n| n >= 2) => Some(("ignored_hold", 0u8)),
+                "urn" if before.iter().rev().take(4).any(|x| x.effects.iter().any(|e| e == "carrying_urn")) => Some(("ignored_urn", 0)),
+                "outnumbered" if c.0 + 30 >= end => Some(("ignored_outnumbered", 0)),
+                "exit" if in_half => Some(("ignored_exit", 1)),
+                _ => None,
+            }).min_by_key(|c| c.1);
+            // Walked out of base (in base within the last 45 s) while three or more were dead.
+            let walked_out = st.samples.iter().filter(|x| x.clock <= end && x.clock + 45 >= end).skip_while(|x| x.area != Area::Base)
+                .find(|x| x.area != Area::Base && x.area != Area::Unknown).and_then(|x| x.allies_dead).is_some_and(|n| n >= 3);
+            // Your escape ability spent on the way in, toward enemies off the map (rec8 16:54, 20:27).
+            if let Some((ability, n)) = before.iter().rev().find_map(|x| x.cast.clone()).filter(|c| c.1 >= 2) {
+                add(&mut cands, 0, "escape_in", &[("ability", ability), ("count", match n { 2 => "two".into(), 3 => "three".into(), 4 => "four".into(), 5 => "five".into(), n => n.to_string() })]);
+            }
+            if let Some((id, rank)) = ignored { add(&mut cands, rank, id, &[("count", dead_count())]); }
+            // Walked out of base while three or more teammates were dead, without a call heard.
+            else if out_of_base && walked_out && allies_dead.is_some_and(|n| n >= 3) { add(&mut cands, 1, "walked_out_dead", &[("count", dead_count())]); }
             // Won the fight, then hit a structure nearly dead: three or more enemies dead, you under
             // 30%, and structure damage on the panel or a structure banner up (rec13 29:25: five
             // enemies dead, 15% health, their Walker).
@@ -442,7 +495,8 @@ impl ReviewCoach {
             if let Some(h) = alive_known.iter().find(|x| x.hp.is_some_and(|h| h >= 0.3 && h >= peak - 0.03)) {
                 let secs = (if h.clock == end { death.clock } else { end }).saturating_sub(h.clock).max(2);
                 if secs <= 15 {
-                    let by = killer.clone().or_else(|| (!who.is_empty()).then(|| who.clone())).unwrap_or_else(|| "They".into());
+                    // Mid-sentence: "You died because Kelvin's Arctic Beam burst you" (never "because They").
+                    let by = top_ability.as_ref().filter(|_| !many).map(|(h, ab)| owned(h, ab)).or_else(|| killer.clone()).or_else(|| (!who_ab.is_empty()).then(|| who_ab.clone())).unwrap_or_else(|| "they".into());
                     let id = if ranged { "burst_ranged" } else { "burst" };
                     add(&mut cands, 11, id, &[("by", by), ("from", format!("{:.0}", h.hp.unwrap() * 100.0)), ("secs", secs.to_string()), ("you", you.clone()), ("front", front.clone())]);
                 }
@@ -488,6 +542,10 @@ impl ReviewCoach {
         }
         let souls = souls_now.or(souls_at).filter(|v| *v >= t.souls_at_death.max(crate::economy::death_spend(death.clock)));
         if buy.is_none() { if let Some(v) = souls { buy = Some(self.fill("spend", &[("souls", num(v))]).0); } }
+        // The counter to the ability that hit you replaces the generic "fight behind ..." line.
+        if let Some(next) = top_ability.as_ref().and_then(|(h, ab)| self.ability_counter(h, ab, &you, ranged)) {
+            for c in cands.iter_mut().filter(|c| matches!(c.1.as_str(), "killer" | "involved" | "burst" | "burst_ranged")) { c.3 = next.clone(); }
+        }
         cands.sort_by_key(|c| c.0);
         let text = match cands.first() {
             Some((_, _, because, next)) => {
@@ -496,8 +554,32 @@ impl ReviewCoach {
             }
             None => self.card("no_reason").speech.clone(),
         };
-        let text = match &buy { Some(b) if words(&text) + words(b) <= REVIEW_WORDS => format!("{text} {b}"), _ => text };
+        let first_id = cands.first().map(|c| c.1.clone()).unwrap_or_default();
+        let text = match repeat.filter(|_| first_id != "repeat_killer") {
+            Some((h, ab, n)) => {
+                let owner = if h.ends_with('s') { format!("{h}'") } else { format!("{h}'s") };
+                let note = self.fill("repeat_note", &[("owner", owner), ("ability", ab), ("count", n.to_string())]).0;
+                if words(&text) + words(&note) <= REVIEW_WORDS { format!("{text} {note}") } else { text }
+            }
+            None => text,
+        };
+        // The buy line is not repeated when the lesson already names the item.
+        let named = |b: &str| b.strip_prefix("Buy ").and_then(|x| x.strip_suffix(" now.")).is_some_and(|item| text.contains(item));
+        let text = match &buy { Some(b) if words(&text) + words(b) <= REVIEW_WORDS && !named(b) => format!("{text} {b}"), _ => text };
         (text, cands.first().map(|c| vec![c.1.clone()]).unwrap_or_default(), summary)
+    }
+
+    /// What to do next time against one enemy ability: the review threat's lesson, else the live
+    /// threat call's counter-play for your role (data/coaching/plans.json).
+    fn ability_counter(&self, hero: &str, ability: &str, you: &str, ranged: bool) -> Option<String> {
+        if let Some(th) = self.threat(ability).filter(|t| !t.next.is_empty()) {
+            let next = if ranged && !th.next_ranged.is_empty() { &th.next_ranged } else { &th.next };
+            return Some(next.replace("{hero}", hero).replace("{you}", you));
+        }
+        let role = if ranged { "long_range" } else { "default" };
+        let cat = crate::plans::catalog();
+        let t = cat.threats.iter().find(|t| t.ability.eq_ignore_ascii_case(ability))?;
+        t.counter.get(role).or_else(|| t.counter.get("default")).map(|c| format!("against {hero}'s {ability}, {c}"))
     }
 
     /// The counter item for `need` not owned yet: (name, cost).
@@ -644,6 +726,27 @@ impl ReviewCoach {
 }
 
 impl ReviewCoach {
+    /// Your escape ability cast fresh on this frame (ready shortly before, then a long cooldown
+    /// read) in their half: (ability, enemies unseen or back within 12 s). rec8 16:54 / 20:27:
+    /// Grey Talon flew Rain of Arrows toward enemies off the map and died 6 and 13 s later.
+    fn escape_cast(st: &mut State, s: &GameSnapshot, clock: u32, x: &Sample) -> Option<(String, usize)> {
+        let (slot, ability) = st.me.as_deref().and_then(crate::active::escape_of)?;
+        let a = s.abilities.iter().find(|a| a.slot == slot)?;
+        match (a.ready, a.cooldown_secs) {
+            (Some(true), _) => { st.esc_ready_at = Some(clock); st.esc_seen = false; None }
+            (Some(false), Some(cd)) if !st.esc_seen => {
+                st.esc_seen = true;
+                let fresh = cd >= 6 && st.esc_ready_at.is_some_and(|r| clock <= r + 15);
+                let deep = x.you.is_some_and(|p| p.y < 0.42);
+                let p = TeamPicture::from(s);
+                let back = p.as_ref().map_or(0, |p| p.enemies_dead.iter().filter(|r| r.is_some_and(|r| r <= 12)).count());
+                // Not while a window is open (two or more of them dead for longer).
+                let window = p.as_ref().is_some_and(|p| p.enemies_dead.iter().filter(|r| r.is_none_or(|r| r > 12)).count() >= 2);
+                (fresh && deep && !window && clock >= 900).then(|| (ability, x.unseen.unwrap_or(0) + back))
+            }
+            _ => None,
+        }
+    }
     /// The same summary is never offered under a new key (a new block saying the same thing);
     /// under its own key it is re-offered until the engine speaks it (another cue may have taken
     /// the frame's slot).
@@ -679,7 +782,8 @@ impl Rule for ReviewCoach {
             st.owners = owners;
         }
         if !s.items.is_empty() && !s.dead { st.own_items = s.items.clone(); }
-        let sample = self.sample(s, clock);
+        let mut sample = self.sample(s, clock);
+        if sample.area == Area::Dead { st.esc_ready_at = None; } else { sample.cast = Self::escape_cast(&mut st, s, clock, &sample); }
         let dead = sample.area == Area::Dead;
         let mut cues = vec![];
         // A new death: entering the death screen, or, while it shows, more than 60 s without any
@@ -748,7 +852,24 @@ impl Rule for ReviewCoach {
             // within 0.2): top-bar slots have no position, a death across the map is not yours.
             let near = |ally: bool| me.map_or(0, |me| s.minimap.as_ref().map_or(0, |m| m.heroes.iter().filter(|h| h.ally == ally && h.confirmed() && h.unseen_ms <= 3000 && dist(h.pos, me) <= 0.2).count()));
             let front_fell = fell.iter().any(|h| self.catalog.roles.frontline.contains(h)) && near(true) >= 1 && near(false) >= 2;
-            if let (Some(a), Some(b)) = (earlier, sample.allies_dead) { if (b >= a + 2 || b > a && front_fell) && enemy_close {
+            // Only a lost trade: more of ours fell in those 10 s than of theirs (rec8 13:51 was
+            // 3-for-3 and 33:40 2-for-2 at +33k, both called "back out").
+            // The trade is the last 60 s: top-bar slots that turned dead on each side (slots, not
+            // hero names: rec8 13:3x read one ally as Paige and as another hero).
+            let trade = |pick: &dyn Fn(&Sample) -> Option<Vec<String>>| {
+                let mut seen: Option<Vec<String>> = None; let mut fell: Vec<String> = vec![];
+                for x in st.samples.iter().filter(|x| x.clock + 60 >= clock).chain(std::iter::once(&sample)) {
+                    let Some(now) = pick(x) else { continue };
+                    if let Some(prev) = &seen { for d in &now { if !prev.contains(d) && !fell.contains(d) { fell.push(d.clone()); } } }
+                    seen = Some(now);
+                }
+                fell.len()
+            };
+            let theirs_fell = trade(&|x: &Sample| x.enemies_dead_slots.as_ref().map(|v| v.iter().map(|s| s.to_string()).collect()));
+            let ours_fell = trade(&|x: &Sample| x.allies_dead_slots.as_ref().map(|v| v.iter().map(|s| s.to_string()).collect()));
+            if let (Some(a), Some(b)) = (earlier, sample.allies_dead) { // Lost = more of ours fell than of theirs in the last minute, or two heroes down now (rec13 13:40).
+            let down_now = sample.enemies_dead.is_some_and(|e| b > e + 1);
+            if (b >= a + 2 || b > a && front_fell) && (ours_fell.max(b - a) > theirs_fell || down_now) && enemy_close {
                 let data = game_data();
                 let names: Vec<String> = fell.iter().take(2).map(|h| data.hero_name(h)).collect();
                 let down = match (names.len(), b - a) {
@@ -756,7 +877,10 @@ impl Rule for ReviewCoach {
                     (n, k) if n >= 2 && n == k => format!("{} are down", and_list(&names)),
                     (_, k) => format!("{} are down", plural(k, "teammate", "teammates")),
                 };
-                let (text, _) = self.fill("live_fight_lost", &[("down", down)]);
+                // Rotating phrasings (rec8 said "Back out: Shiv and Baba are down." twice, 20 minutes apart).
+                let c = self.card("live_fight_lost");
+                let all: Vec<&String> = std::iter::once(&c.speech).chain(c.variants.iter()).collect();
+                let text = all[st.fight_lost_said % all.len()].replace("{down}", &down);
                 cues.push(Cue::card("review.live_fight_lost", "review:fight-lost", text, Priority::High, 30));
             }}
             // Live: leaving base alone right after a respawn with enemies unseen.
@@ -776,5 +900,20 @@ impl Rule for ReviewCoach {
         let keep = t.pattern_window_secs + 60;
         while st.samples.front().is_some_and(|x| x.clock + keep < clock) { st.samples.pop_front(); }
         cues
+    }
+    /// The calls a death can ignore, as spoken by the engine (docs/coach-review-8.md D1).
+    fn spoken(&self, cue: &Cue) {
+        let mut st = self.state.borrow_mut();
+        let Some(now) = st.last_clock else { return };
+        let kind = match cue.key.as_str() {
+            "active:hold_base" | "active:hold_base:out" => "hold",
+            "active:urn_hold" => "urn",
+            "pos:outnumbered" => "outnumbered",
+            k if k.starts_with("active:forward_exit") || k == "active:ult_out" || k == "active:escape_in" => "exit",
+            "review:fight-lost" => { st.fight_lost_said += 1; return; }
+            _ => return,
+        };
+        st.calls.push((now, kind));
+        st.calls.retain(|c| c.0 + 120 >= now);
     }
 }

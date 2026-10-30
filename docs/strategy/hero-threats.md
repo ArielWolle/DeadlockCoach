@@ -172,3 +172,34 @@ Grey Talon loss) died to Lady Geist's Essence Bomb (7:07), to Graves' Grasping H
 - [WIKI] Midboss page: "While the Midboss is alive, a golden Rejuvenator symbol will appear at its location in the minimap."
 - [INFERENCE] A team holding Rejuvenator credits revives in place for 3 minutes: fighting them in
   their base during that time trades your lives for nothing.
+
+---
+
+# Part 5: escape abilities, Kelvin's beam and respawn windows (r8 coach review)
+
+Retrieved: 2026-10-29
+
+Sources:
+- https://deadlock.wiki/Grey_Talon [WIKI]
+- https://deadlock.wiki/Kelvin [WIKI]
+
+Purpose: rec8 (Grey Talon) died twice right after casting Rain of Arrows toward enemies that were
+not on the map (16:54, 20:27), and once to Kelvin's Arctic Beam on a walk-out with three teammates
+dead (42:05). The ability bar is read on the HUD (slot 4 = ultimate). Quotes are verbatim from the
+pages above (markup removed).
+
+## Grey Talon: Rain of Arrows (ability 2) and Guided Owl (ultimate)
+- [WIKI] Rain of Arrows: "Launches you high in the air, allowing you to glide slowly. While airborne, you gain Weapon Damage and multishot on your weapon."
+- [WIKI] Rain of Arrows tip: "Cancelling Rain of Arrows while rising keeps the launch momentum, which can be used for mobility and evasion."
+- [WIKI] Rain of Arrows note: "Holding a direction while activating Rain of Arrows influences the direction Talon launches in. If cast without holding a direction, Talon jumps backwards."
+- [WIKI] Guided Owl (the ultimate, 125s cooldown): "After 1.5s cast time, launch a spirit owl that you control and which explodes on impact, damaging and stunning enemies."
+- [INFERENCE] Rain of Arrows is Grey Talon's mobility: cast toward enemies that are not on the map,
+  it spends the escape on the way in. With the ultimate on cooldown and several enemies unseen in
+  their half, there is nothing left to win the next fight with: walk back to the team.
+
+## Kelvin: Arctic Beam
+- [WIKI] Kelvin page intro: "He can conjure an Ice Path under his feet for faster movement for himself and his team, throwing Frost Grenades and firing his Arctic Beam at nearby enemies to set them up for his companions' attacks."
+- [WIKI] Arctic Beam: "Shoot freezing cold energy out in front of you, damaging targets and progressively reducing their movement and fire rate the longer you sustain the beam on them."
+- [INFERENCE] The beam ramps up the longer it stays on you: break line of sight at the first tick
+  (a wall, a corner), never trade inside it. Its damage is spirit (T2 "increased Spirit Scaling"):
+  spirit resist (Spirit Shielding) answers it.

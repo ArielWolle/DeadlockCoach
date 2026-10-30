@@ -26,7 +26,7 @@ impl Rule for Script { fn evaluate(&self, s: &GameSnapshot) -> Vec<Cue> { (self.
 /// Offers a new key each step (so cooldowns never hold it back).
 struct Stream(&'static str, RefCell<u32>, Priority);
 impl Rule for Stream {
-    fn evaluate(&self, _: &GameSnapshot) -> Vec<Cue> { let mut n = self.1.borrow_mut(); *n += 1; vec![cue(&format!("{}:{n}", self.0), "Say it.", self.2)] }
+    fn evaluate(&self, _: &GameSnapshot) -> Vec<Cue> { let mut n = self.1.borrow_mut(); *n += 1; vec![cue(&format!("{}:{n}", self.0), &format!("Say it {n}."), self.2)] }
 }
 fn stream(prefix: &'static str, p: Priority) -> Box<Stream> { Box::new(Stream(prefix, RefCell::new(0), p)) }
 fn cue(key: &str, text: &str, priority: Priority) -> Cue { Cue { key: key.into(), text: text.into(), priority, cooldown_secs: 1, skill: None } }
@@ -268,3 +268,68 @@ fn a_walk_out_praise_never_follows_a_walked_out_alone_warning() {
 }
 trait IntoBox { fn into_box(self) -> Box<dyn Rule>; }
 impl IntoBox for Script { fn into_box(self) -> Box<dyn Rule> { Box::new(self) } }
+
+// ---- docs/coach-review-8.md D9, D10 ---------------------------------------------------------
+
+#[test]
+fn no_objective_call_while_a_hold_applies_or_three_are_dead() {
+    // rec8 40:42: "The urn is at the Green side bridge. Check who is missing before you grab it."
+    // three seconds before "Hold in base: three teammates are dead".
+    let mut e = Engine::new(vec![Box::new(Script(Box::new(|t| match t {
+        1500 => vec![cue("active:hold_base", "Hold in base.", Priority::High)],
+        _ => vec![cue("map:urn-ground", &format!("The urn is at the bridge {t}."), Priority::Normal), cue("plan:urn:1800", &format!("Urn in {t}."), Priority::Normal)],
+    })))]);
+    assert_eq!(spoken(&mut e, &alive(1500)), ["active:hold_base"]);
+    for t in [1510, 1515] { assert!(spoken(&mut e, &alive(t)).is_empty(), "{t}: the hold call still applies"); }
+    assert!(!spoken(&mut e, &alive(1560)).is_empty(), "20 s later the objective is back");
+    // Three teammates dead on the top bar: no objective call, no wave chore.
+    let mut e = Engine::new(vec![Offer::new(vec![cue("pos:enemies_down", "Push now.", Priority::Normal), cue("map:wave:Green", "Catch Green.", Priority::Low)])]);
+    let mut s = alive(1600); s.hero_status = (0..12).map(|i| HeroStatus { ally: i < 6, slot: i % 6, dead: Some(i < 3), ..Default::default() }).collect();
+    assert!(e.step(&s).is_empty());
+    // Carrying the Urn: the Urn plan may speak, a push call may not (rec8 27:09).
+    let mut e = Engine::new(vec![Offer::new(vec![cue("pos:enemies_down", "Push now.", Priority::Normal)])]);
+    let mut s = alive(1700); s.status_effects = vec!["carrying_urn".into()];
+    assert!(e.step(&s).is_empty());
+}
+#[test]
+fn the_same_sentence_is_not_repeated_within_three_minutes() {
+    // rec8: "Go defend our Patron: it's under attack." at 48:20 and 49:34.
+    let mut e = Engine::new(vec![Box::new(Script(Box::new(|t| vec![cue(&format!("k:{t}"), "Go defend our Patron: it's under attack.", Priority::High)])))]);
+    assert_eq!(e.step(&alive(2900)).len(), 1);
+    assert!(e.step(&alive(2974)).is_empty());
+    assert_eq!(e.step(&alive(3090)).len(), 1);
+}
+#[test]
+fn health_calls_rotate_and_critical_is_never_said_above_30_percent() {
+    // rec8 said "Back behind cover: you're getting low." six times; rec13 "Health critical" at 48%.
+    let lane = || { let mut s = alive(1500); s.max_hp = Some(1000); s.minimap.as_mut().unwrap().your_lane = Some(Lane::Blue); s };
+    let mut e = Engine::new(vec![Box::new(LaneCoach::default())]); e.min_gap_secs = 0;
+    let mut backs = vec![];
+    let mut t = 1500;
+    for _ in 0..4 {
+        for hp in [900u32, 900, 900] { let mut s = lane(); s.game_clock_secs = Some(t); s.hp = Some(hp); e.step(&s); t += 5; }
+        let mut s = lane(); s.game_clock_secs = Some(t); s.hp = Some(600); e.step(&s); t += 5;
+        let mut s = lane(); s.game_clock_secs = Some(t); s.hp = Some(400); s.health_observations = 3;
+        backs.extend(e.step(&s).into_iter().filter(|c| c.key == "lane:back_off").map(|c| c.text)); t += 5;
+        let mut s = lane(); s.game_clock_secs = Some(t); s.hp = Some(400); e.step(&s); t += 60;
+    }
+    assert_eq!(backs.len(), 4, "{backs:?}");
+    let mut uniq = backs.clone(); uniq.sort(); uniq.dedup();
+    assert_eq!(uniq.len(), 4, "four phrasings in rotation: {backs:?}");
+    // A fast fall to 45%: the emergency, but not "Health critical".
+    let mut e = Engine::new(vec![Box::new(LaneCoach::default())]); e.min_gap_secs = 0;
+    let mut s = lane(); s.hp = Some(800); e.step(&s);
+    let mut s = lane(); s.game_clock_secs = Some(1503); s.hp = Some(450); s.health_delta_ratio = Some(-0.35);
+    let c = e.step(&s);
+    assert_eq!(c[0].key, "lane:critical");
+    assert!(!c[0].text.contains("critical"), "{}", c[0].text);
+    assert!(c[0].text.contains("45%") || c[0].text.contains("fast"), "{}", c[0].text);
+    // Under 30% the card's own words.
+    let mut e = Engine::new(vec![Box::new(LaneCoach::default())]); e.min_gap_secs = 0;
+    let mut s = lane(); s.hp = Some(100); s.health_observations = 1;
+    assert!(e.step(&s)[0].text.starts_with("Health critical"));
+    // Afflicted: the situation instead of the stock line.
+    let mut e = Engine::new(vec![Box::new(LaneCoach::default())]); e.min_gap_secs = 0;
+    let mut s = lane(); s.hp = Some(400); s.status_effects = vec!["afflicted".into()]; s.enemy_heroes = vec!["hero_synth".into(), "hero_haze".into(), "hero_kelvin".into()];
+    assert_eq!(e.step(&s)[0].text, "Afflicted at 40%: get out of Pocket's range now.");
+}
