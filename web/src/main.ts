@@ -345,7 +345,10 @@ const FULL_ONLY=['counter','death','review','lead','behind','unspent-dead','play
   // Top-bar deaths, structure banners and the urn carrier (full scan only).
   'active:hold_base','active:team_losing','active:base_attack','active:urn_hold',
   // Praise (crates/engine/src/praise.rs) needs the top bar, status effects and the structure banner.
-  'praise'];
+  'praise',
+  // Plans / threats / reset (crates/engine/src/plans.rs) need the top bar ('lead' covers lead:*).
+  'plan','threat','reset'];
+
 /** One coach voice across both analysis paths (each engine keeps its own budget): a Normal / Low
  *  rule call waits the phase gap after any rule call (Engine::phase_gap: 60 s before 8:00, then
  *  45 s, game clock); High safety calls always pass. */

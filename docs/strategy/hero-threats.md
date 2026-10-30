@@ -108,3 +108,67 @@ panels (rec8: Pocket's Affliction, Haze's Bullet Dance). Quotes are verbatim (ma
 - [WIKI] Haze "eliminates solitary enemies swiftly."
 - [INFERENCE] Bullet Dance is gun damage: bullet resist items (Weapon Shielding, Bullet Resilience,
   Metal Skin) answer it.
+
+---
+
+# Part 4: named threat calls and Grey Talon counter-play (live plans)
+
+Retrieved: 2026-10-29
+
+Sources:
+- https://deadlock.wiki/Abrams (Shoulder Charge redirects here) [WIKI]
+- https://deadlock.wiki/Graves (Grasping Hands redirects here) [WIKI]
+- https://deadlock.wiki/Lady_Geist (Essence Bomb redirects here) [WIKI]
+- https://deadlock.wiki/Infernus [WIKI]
+- https://deadlock.wiki/Kelvin [WIKI]
+- https://deadlock.wiki/Grey_Talon (Spirit Snare redirects here) [WIKI]
+- https://deadlock.wiki/Midboss [WIKI]
+
+Purpose: the live threat call (`crates/engine/src/plans.rs`, `data/coaching/plans.json`) names the
+enemy hero that is close to you or missing near your lane, the ability that makes it dangerous, and
+what your hero does about it. Quotes are verbatim from the pages above (markup removed). rec13 (a
+Grey Talon loss) died to Lady Geist's Essence Bomb (7:07), to Graves' Grasping Hands off a zipline
+(23:09), to Infernus' Afterburn (29:25, 43:18) and after an Abrams charge (40:38).
+
+## Abrams: Shoulder Charge
+- [WIKI] Abrams page intro: "With a sudden Shoulder Charge or area stun from his Seismic Impact, he can aggressively initiate fights and isolate fragile targets from the rest of their team to set up a devastating burst of damage."
+- [WIKI] Shoulder Charge: "Charge forward, pulling enemies you hit. Pushing a hero into a wall applies stun."
+- [WIKI] Shoulder Charge note: "At base duration, Shoulder Charge travels approximately 17.5m."
+- [WIKI] Shoulder Charge item interactions: "Triggers Reactive Barrier" (counter need "cc").
+- [INFERENCE] The charge needs a straight path and a wall behind you: a trap on the path and open
+  ground behind you (not a wall) take the stun away.
+
+## Graves: Grasping Hands
+- [WIKI] Grasping Hands: "Unearth a line of grasping hands, summoning a Ghoul and leaving behind a rift. Enemies who pass through take spirit damage and receive immobilize."
+- [WIKI] Grasping Hands cast range 24m, immobilize 1s (T3 +0.75s).
+- [WIKI] Grasping Hands item interactions: "Triggers Reactive Barrier" (counter need "cc").
+- [INFERENCE] An immobilize on a zipline or in a narrow approach holds you in place for the rest of
+  her team: walk in behind a teammate when she is not on the map.
+
+## Lady Geist: Essence Bomb
+- [WIKI] Essence Bomb: "Sacrifice some of your health to launch a bomb that deals damage after a brief arm time."
+- [WIKI] Essence Bomb radius 7m, arming duration 0.65s; 90 Spirit Damage (counter need "spirit").
+- [INFERENCE] The arm time is the window: keep moving when the bomb lands, and do not trade at low
+  health inside her range.
+
+## Infernus: Afterburn
+- [WIKI] Infernus page intro: "Infernus can chase down and ignite his foes with a deadly Afterburn."
+- [WIKI] Afterburn: "Weapon hits build up a burning effect, dealing spirit damage over time." (counter need "spirit")
+- [INFERENCE] Afterburn builds per hit: every second spent in his gun range adds burn. Distance and
+  breaking line of sight end the build-up.
+
+## Kelvin: Frost Grenade
+- [WIKI] Frost Grenade: "Throw a grenade that explodes in a cloud of freezing ice that heals allies and applies spirit damage and move speed reduction to enemies." (counter need "spirit")
+- [INFERENCE] The slow sets up the rest of his team: keep stamina for the escape after the grenade.
+
+## Grey Talon counter-play
+- [WIKI] Spirit Snare: "Once armed, the trap will trigger when an enemy enters its radius, applying Curse and Movement Slow that interrupts, Silences, Disarms, and prevents item usage."
+- [WIKI] Spirit Snare tip: "Placing a snare in narrow areas where enemies are likely to ambush from (or escape to) can force them to either be hit by the snare or take a less ideal path."
+- [WIKI] Guided Owl tip: "Guided Owl can be used as a targeted, long-range stun that is capable of interrupting hard-to-reach channeled ults from behind cover"
+- [INFERENCE] Against a diver the snare goes on the dive path (at your feet or on the approach), the
+  owl is cast from cover, and the bow is used from max range behind the front line.
+
+## Midboss and Rejuvenator (for the lead / throw calls)
+- [WIKI] Midboss page: "While the Midboss is alive, a golden Rejuvenator symbol will appear at its location in the minimap."
+- [INFERENCE] A team holding Rejuvenator credits revives in place for 3 minutes: fighting them in
+  their base during that time trades your lives for nothing.

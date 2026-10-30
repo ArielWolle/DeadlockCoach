@@ -28,7 +28,8 @@ pub fn tooltip(class:&str)->Option<String>{
     }
 }
 /// The evidence behind a suggestion. counters.json lifts are observed win-rate differences, not
-/// a mechanism, and are said as such.
+/// a mechanism, and are said as such. (No longer spoken: the live tip is <= 15 words.)
+#[allow(dead_code)]
 pub fn statistical_reason(reason:&str,who:&str)->String{
     if reason.starts_with("Wins ") {if let Some(lift)=reason.split_whitespace().nth(1).filter(|v|v.parse::<f32>().is_ok()){
         return format!("In recorded matches, players who bought it won {lift} percentage points more often against {who}.");
