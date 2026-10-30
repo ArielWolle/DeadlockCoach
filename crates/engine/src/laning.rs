@@ -152,12 +152,13 @@ impl LaneCoach {
             return Some(self.plan("hold",Action::HoldWave,s,Priority::High,evidence,missing,true));
         }
         if state.push.is_some_and(|p| p<cfg.danger_front) && state.enemy_troopers>=2 && state.enemy_progress.is_some_and(|p| p<0.4) {
-            return Some(self.plan("catch",Action::CatchWave,s,Priority::High,evidence,missing,false));
+            // A wave call is lane income, never a safety call (rec13 "catch that wave" at High in sieges).
+            return Some(self.plan("catch",Action::CatchWave,s,Priority::Low,evidence,missing,false));
         }
         let healthy=health.is_some_and(|h| h>=cfg.healthy) && s.health_observations>=2;
         let in_lane=map.your_lane==Some(lane) && map.you.is_some();
         if in_lane && nearby.is_some_and(|(_,e)|e>=1) && map.your_progress.zip(state.ally_progress).is_some_and(|(you,wave)|you>0.55 && you>wave+0.12) {
-            return Some(self.plan("overextended",Action::BackOff,s,Priority::High,evidence,missing,true));
+            return Some(self.plan("overextended",Action::BackOff,s,Priority::Normal,evidence,missing,true));
         }
         let crashed=state.push.is_some_and(|p| p>=cfg.crashed_front) && state.ally_troopers>=2 && state.ally_progress.is_some_and(|p| p>=0.65);
         let endangered=[Lane::Green,Lane::Blue,Lane::Yellow].iter().any(|l| {

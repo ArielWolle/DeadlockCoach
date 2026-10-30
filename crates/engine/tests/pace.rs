@@ -7,7 +7,7 @@ fn state(own:u32)->GameSnapshot{
 fn band(s:&GameSnapshot)->Option<String>{PaceRule::default().assess(s).map(|(b,_)|b.to_string())}
 #[test]fn personal_pace_uses_earned_souls_and_rewards_on_track_farm(){
     assert!(PaceRule::default().assess(&state(3000)).unwrap().1.text.contains("behind"));
-    assert!(PaceRule::default().assess(&state(5000)).unwrap().1.text.contains("Good farming"));
+    assert!(PaceRule::default().assess(&state(5000)).unwrap().1.text.contains("Good farm, on pace"));
     assert!(PaceRule::default().assess(&state(6500)).unwrap().1.text.contains("ahead"));
     let mut s=state(3000);s.own_networth=None;s.souls=Some(6000);assert!(band(&s).is_none());
     s=state(5000);s.hero_status[0].networth_observations=1;assert!(band(&s).is_none());

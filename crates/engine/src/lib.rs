@@ -58,7 +58,7 @@ impl Rule for TimerRule {
             vec![Cue {
                 key: format!("timer:{}:{}", d.name, next),
                 text: format!("{} in {} seconds", d.name, until),
-                priority: Priority::Normal,
+                priority: Priority::Low,
                 cooldown_secs: d.interval_secs.max(30),
             }]
         } else { vec![] }
@@ -172,7 +172,7 @@ impl Rule for CounterRule {
             let name = data.hero_name(hero);
             let why = counter.why.replace("{hero}", &name).replace("{threat}", &threat.source);
             cues.push(Cue { key: format!("counter:{hero}:{}", item.class_name),
-                text: format!("{name}'s {} did {} damage when you last died. Consider {} for {} souls: {why}.", threat.source, thousands_souls(dmg), item.name, thousands_souls(item.cost)),
+                text: format!("{name}'s {} did {} damage last death. Get {} for {} souls: {why}.", threat.source, thousands_souls(dmg), item.name, thousands_souls(item.cost)),
                 priority: Priority::Low, cooldown_secs: 1200 });
         }
         // 2. Statistical counters. Once death panels name who hurts you, only those heroes
@@ -192,10 +192,11 @@ impl Rule for CounterRule {
             let who = if first.label.is_empty() { trigger.as_str() } else { first.label.as_str() };
             // What the item does (curated summary, else the game's tooltip), what it costs, and
             // the evidence for it against this opponent.
+            // Short: a long tooltip is not read out (rec13 read a 60-word Spirit Shredder tooltip): the description, not its numbers.
             let what=counter_explanations::summary(&first.suggest_class).map(str::to_string)
-                .or_else(||counter_explanations::tooltip(&first.suggest_class));
+                .or_else(||counter_explanations::tooltip(&first.suggest_class)).map(|w|w.split(':').next().unwrap_or(&w).trim().to_string()).filter(|w|w.split_whitespace().count()<=14);
             let cost=counter_explanations::cost(&first.suggest_class).map(|c|format!(" for {c} souls")).unwrap_or_default();
-            let why=counter_explanations::statistical_reason(&first.reason,who);
+            let why=counter_explanations::statistical_reason(&first.reason,who).replace("In recorded matches, players who bought it won","Buyers won");
             let text=match what {
                 Some(w)=>format!("Against {who}, consider {}{cost}. {}. {why}",first.suggest,w.trim_end_matches('.')),
                 None=>format!("Against {who}, consider {}{cost}. {why}",first.suggest),
@@ -241,13 +242,14 @@ impl Default for RulesConfig {
 pub struct UnspentSoulsRule(pub RulesConfig, std::cell::Cell<SoulsEpisode>);
 impl UnspentSoulsRule { pub fn new(cfg: RulesConfig) -> Self { Self(cfg, Default::default()) } }
 #[derive(Default, Clone, Copy)]
-pub struct SoulsEpisode { peak: u32, said: u8, said_at: u32, dead_said: bool, base_said: bool, dead_since: Option<u32> }
+pub struct SoulsEpisode { peak: u32, said: u8, said_at: u32, dead_said: bool, base_said: bool, dead_since: Option<u32>, clock: u32 }
 fn thousands_souls(v: u32) -> String { if v >= 1000 { format!("{},{:03}", v / 1000, v % 1000) } else { v.to_string() } }
 impl Rule for UnspentSoulsRule {
     fn evaluate(&self, snap: &GameSnapshot) -> Vec<Cue> {
         if snap.minimap.as_ref().is_some_and(|m| m.urn == Some(coach_core::UrnState::CarriedByYou)) { return vec![]; }
         let (Some(s), Some(clock)) = (snap.souls, snap.game_clock_secs) else { return vec![] };
         let mut cur = self.1.get();
+        cur.clock = clock;
         let out = (|| { let ep = &mut cur;
             // A purchase (souls fall well below the episode's peak) or a new match starts over.
             if s + 400 < ep.peak || clock + 120 < ep.said_at { let dead_since = ep.dead_since; *ep = SoulsEpisode::default(); ep.dead_since = dead_since; }
@@ -263,9 +265,8 @@ impl Rule for UnspentSoulsRule {
                 // A revive (rec8 39:17: health back 5 s later, no timer ever read) is not a
                 // shop window: without a respawn timer, wait 5 s into the death screen.
                 if snap.respawn_secs.is_none() && clock < since + 5 { return vec![]; }
-                ep.dead_said = true;
-                let wait = snap.respawn_secs.map(|r| format!(" You respawn in {r} seconds.")).unwrap_or_default();
-                return vec![Cue { key: "unspent-dead".into(), text: format!("You are dead with {} souls. Buy items now.{wait}", thousands_souls(s)), priority: Priority::High, cooldown_secs: 90 }];
+                let wait = snap.respawn_secs.map(|r| format!(" You are back in {r} seconds.")).unwrap_or_default();
+                return vec![Cue { key: "unspent-dead".into(), text: format!("You are dead with {} souls. Buy now.{wait}", thousands_souls(s)), priority: Priority::High, cooldown_secs: 90 }];
             }
             if snap.screen.as_deref() == Some("Gameplay") && snap.hp.is_some() { ep.dead_since = None; ep.dead_said = false; }
             // In your own base the call is specific ("spend them before you walk out"), from the
@@ -274,7 +275,7 @@ impl Rule for UnspentSoulsRule {
             if let Some(base) = active::base_spend(snap) {
                 let Some(c) = base else { return vec![] };
                 if ep.base_said { return vec![]; }
-                ep.base_said = true; ep.said = ep.said.max(1); ep.said_at = clock; return vec![c];
+                return vec![c];
             }
             if s < target { return vec![]; } // saving for the next item
             if ep.said >= 2 || ep.said == 1 && clock < ep.said_at + 180 { return vec![]; }
@@ -285,15 +286,26 @@ impl Rule for UnspentSoulsRule {
                 if clock<900 && snap.minimap.as_ref().is_some_and(|m| m.lane(lane).push.is_none_or(|p|p<0.7)) {return vec![];}
             }
             let text = if ep.said == 0 {
-                format!("You can afford a {}-soul item: you have {} souls. Shop when the wave and route are safe.", thousands_souls(target), thousands_souls(s))
+                format!("You have {} souls: that is a {}-soul item. Shop when the wave is safe.", thousands_souls(s), thousands_souls(target))
             } else {
-                format!("Still holding {} souls. Buy on your next safe moment: unspent souls do nothing in a fight.", thousands_souls(s))
+                format!("Still holding {} souls. Buy at the next safe moment; unspent souls do nothing.", thousands_souls(s))
             };
-            ep.said += 1; ep.said_at = clock;
             vec![Cue { key: "unspent".into(), text, priority: Priority::Normal, cooldown_secs: 150 }]
         })();
         self.1.set(cur);
         out
+    }
+    /// Committed when spoken: a call the engine held back (cadence, a death review first) is offered again.
+    fn spoken(&self, cue: &Cue) {
+        let mut ep = self.1.get();
+        match cue.key.as_str() {
+            // The death review names the buy for this death.
+            k if k == "unspent-dead" || k.starts_with("death:review") => ep.dead_said = true,
+            "unspent:base" => { ep.base_said = true; ep.said = ep.said.max(1); ep.said_at = ep.clock; }
+            "unspent" => { ep.said += 1; ep.said_at = ep.clock; }
+            _ => {}
+        }
+        self.1.set(ep);
     }
 }
 
@@ -310,16 +322,26 @@ impl Rule for DeathCauseRule {
 pub fn death_cause_advice(cause: &str) -> (&'static str, &'static str) {
         let c = cause.to_lowercase();
         if c.contains("temple") || c.contains("midboss") || c.contains("mid boss") {
-            ("midboss", "You died to the Midboss. Only take it with your whole team, and wait for its shield to drop.")
+            ("midboss", "The Midboss killed you. Next life: take it only with all of us, after its shield drops.")
         } else if c.contains("walker") {
-            ("walker", "A Walker killed you. Let troopers tank its shots before you push in.")
+            ("walker", "Their Walker killed you. Next life: let our troopers tank its shots first.")
         } else if c.contains("guardian") || c.contains("shrine") || c.contains("patron") {
-            ("structure", "A structure killed you. Stay out of its range unless your troopers are in front.")
+            ("structure", "Their structure killed you. Next life: stay out of its range until our troopers are in.")
         } else if c.contains("trooper") {
-            ("trooper", "Troopers killed you. Watch your health when you walk into waves.")
+            ("trooper", "Troopers killed you. Next life: fight from behind our wave, not inside theirs.")
         } else {
-            ("heroes", "Enemy heroes killed you. Check the scoreboard before you re-engage.")
+            ("heroes", "Enemy heroes killed you. Next life: check the scoreboard before you go back in.")
         }
+}
+/// A non-hero killer as a death-review cause: ("because" fragment, next-life change).
+pub fn death_cause_parts(cause: &str) -> Option<(&'static str, &'static str)> {
+    match death_cause_advice(cause).0 {
+        "midboss" => Some(("the Midboss hit you", "take it only with all of us, after its shield drops")),
+        "walker" => Some(("their Walker shot you", "let our troopers tank its shots first")),
+        "structure" => Some(("you stood in their structure's range", "stay out of its range until our troopers are in")),
+        "trooper" => Some(("you fought inside their wave", "fight from behind our wave, not inside theirs")),
+        _ => None,
+    }
 }
 /// Speaks only after the same state (ahead/behind) is seen on 4 snapshots in a row and the gap
 /// is at least `lead_min_abs` souls, so noisy reads near parity do not flip-flop. The same state
@@ -347,9 +369,9 @@ impl Rule for NetworthLeadRule {
         self.streak.set((state, n));
         if state == 0 || n < 4 { return vec![]; }
         let (key, text) = if state > 0 {
-            ("lead", "Your team is ahead in souls. Take objectives and avoid risky fights.")
+            ("lead", "We are ahead in souls. Take objectives, skip risky fights.")
         } else {
-            ("behind", "Your team is behind in souls. Farm safely and fight near your structures.")
+            ("behind", "We are behind in souls. Farm safe and fight near our structures.")
         };
         vec![Cue { key: key.into(), text: text.into(), priority: Priority::Normal, cooldown_secs: LEAD_REPEAT_SECS }]
     }
@@ -364,14 +386,177 @@ pub fn default_rules(cfg: RulesConfig) -> Vec<Box<dyn Rule>> {
     vec![Box::new(active::ActiveCoach::default()), Box::new(positioning::PositionCoach::default()), Box::new(jungle::JungleCoach::default()), Box::new(laning::LaneCoach::default()), Box::new(map_rules::MapRule), Box::new(UnspentSoulsRule::new(cfg.clone())), Box::new(review::ReviewCoach::default()), Box::new(NetworthLeadRule::new(cfg)), Box::new(praise::PraiseCoach::default()), Box::new(economy::PaceRule::default()),Box::new(economy::WaveReportRule::default())]
 }
 
+/// One death is one event: from the first death screen to a confirmed respawn. rec13 41:05-42:34
+/// showed Unknown, Shop, Scoreboard and single Gameplay frames (no health read) inside one death
+/// and produced two extra death reviews with a false "died 0 / 5 s after respawning". A respawn is
+/// confirmed by the respawn timer running out ([`review::respawn_estimate`] over the timer reads),
+/// or by [`RESPAWN_HP_FRAMES`] gameplay frames in a row with your health read while no timer says
+/// you are still dead; a gameplay frame with health read within 10 s of the death screen and no
+/// longer timer is the grey "Respawn in: 1" revive (rec11 25:17), not a death. Without any health
+/// read, [`RESPAWN_BLIND_SECS`] of gameplay frames without a death screen end it. Frames inside the
+/// death that do not confirm the respawn reach the rules as death frames (dead, no personal HUD).
+pub const RESPAWN_HP_FRAMES: u8 = 2;
+pub const RESPAWN_BLIND_SECS: u32 = 20;
+#[derive(Default, Clone, Debug)]
+pub struct LifeTracker {
+    /// First death-screen clock of the current death (None while alive).
+    pub dead_since: Option<u32>,
+    /// Clock of the last confirmed respawn, and the start of the last death.
+    pub respawned_at: Option<u32>, pub last_death: Option<u32>,
+    ends: Vec<u32>, last_dead: u32, hp_frames: u8, first_hp: Option<u32>, blind_since: Option<u32>, last_clock: Option<u32>,
+}
+impl LifeTracker {
+    /// The snapshot as the rules should see it: None = this frame unchanged.
+    pub fn observe(&mut self, s: &GameSnapshot) -> Option<GameSnapshot> {
+        let Some(clock) = s.game_clock_secs else { return None };
+        if self.last_clock.is_some_and(|c| clock + 120 < c) { *self = LifeTracker::default(); }
+        self.last_clock = Some(clock);
+        let death_frame = s.dead || s.screen.as_deref() == Some("Dead");
+        if death_frame {
+            // More than a minute without any frame on a death screen is a new death (a recording gap).
+            if self.dead_since.is_none() || clock > self.last_dead + 60 { self.dead_since = Some(clock); self.last_death = Some(clock); self.ends.clear(); }
+            if let Some(r) = s.respawn_secs.filter(|r| *r <= 120) { self.ends.push(clock + r); }
+            self.last_dead = clock; self.hp_frames = 0; self.first_hp = None; self.blind_since = None;
+            return None;
+        }
+        let Some(start) = self.dead_since else { return None };
+        let est = review::respawn_estimate(&self.ends, self.last_dead);
+        let mut respawn = None;
+        if s.screen.as_deref() == Some("Gameplay") {
+            let hp = s.hp.zip(s.max_hp).is_some_and(|(h, m)| m >= 100 && h <= m && h > 0);
+            if hp { self.hp_frames = self.hp_frames.saturating_add(1); self.first_hp.get_or_insert(clock); } else { self.hp_frames = 0; self.first_hp = None; }
+            let blind = *self.blind_since.get_or_insert(clock);
+            let timer_far = est.is_some_and(|e| e > clock + 10);
+            if est.is_some_and(|e| clock >= e) { respawn = Some(est.unwrap_or(clock).max(self.last_dead).min(clock)); }
+            else if hp && !timer_far && (self.hp_frames >= RESPAWN_HP_FRAMES || clock < start + 10 && est.is_none_or(|e| e < start + 10)) { respawn = self.first_hp; }
+            else if self.hp_frames >= RESPAWN_HP_FRAMES + 1 { respawn = self.first_hp; }
+            else if est.is_none() && clock >= blind + RESPAWN_BLIND_SECS { respawn = Some(blind); }
+        }
+        if let Some(r) = respawn {
+            self.dead_since = None; self.respawned_at = Some(r.max(start)); self.ends.clear(); self.hp_frames = 0; self.first_hp = None; self.blind_since = None;
+            return None;
+        }
+        // Still dead: the frame is part of the death, without the personal HUD.
+        let mut d = s.clone();
+        d.dead = true;
+        if d.screen.as_deref() == Some("Gameplay") { d.screen = Some("Dead".into()); }
+        d.hp = None; d.max_hp = None; d.health_delta_ratio = None; d.health_observations = 0; d.status_effects.clear(); d.unsecured_souls = None;
+        Some(d)
+    }
+    /// Seconds since the current or last death ended (None: dead now or no death yet).
+    pub fn since_respawn(&self, now: u32) -> Option<u32> { if self.dead_since.is_some() { None } else { self.respawned_at.map(|r| now.saturating_sub(r)) } }
+}
+
+/// Fight detection for the arbitration (Engine::step): a fight is >= [`FIGHT_HEROES`] heroes (at
+/// least one enemy) within [`FIGHT_RANGE`] of you on the minimap, your health falling fast, or a
+/// teammate dying in the last [`FIGHT_ALLY_DEATH_SECS`]; it holds [`FIGHT_HOLD_SECS`] after the
+/// last signal (a frame without reads in the middle of a fight is still the fight).
+pub const FIGHT_HEROES: usize = 4;
+pub const FIGHT_RANGE: f32 = 0.15;
+pub const FIGHT_FALL: f32 = 0.10;
+pub const FIGHT_ALLY_DEATH_SECS: u32 = 8;
+pub const FIGHT_HOLD_SECS: u32 = 6;
+#[derive(Default, Clone)]
+struct FightState { last_signal: Option<u32>, allies_dead: Option<usize>, ally_death_at: Option<u32> }
+impl FightState {
+    fn observe(&mut self, s: &GameSnapshot, now: u32) -> bool {
+        if s.dead || s.screen.as_deref() != Some("Gameplay") { self.last_signal = None; return false; }
+        let map = s.minimap.as_ref();
+        let me = map.and_then(|m| m.you);
+        let near: Vec<&coach_core::HeroTrack> = me.zip(map).map(|(me, m)| m.heroes.iter()
+            .filter(|h| h.confirmed() && h.unseen_ms <= 3000 && h.distance(me) <= FIGHT_RANGE).collect()).unwrap_or_default();
+        let crowd = near.len() >= FIGHT_HEROES && near.iter().any(|h| !h.ally);
+        let falling = s.health_delta_ratio.is_some_and(|d| d < -FIGHT_FALL);
+        if let Some(p) = positioning::TeamPicture::from(s) {
+            let n = p.allies_dead.len();
+            if self.allies_dead.is_some_and(|prev| n > prev) { self.ally_death_at = Some(now); }
+            self.allies_dead = Some(n);
+        }
+        let ally_died = self.ally_death_at.is_some_and(|t| now >= t && now - t <= FIGHT_ALLY_DEATH_SECS);
+        if crowd || falling || ally_died { self.last_signal = Some(now); }
+        self.last_signal.is_some_and(|t| now >= t && now - t <= FIGHT_HOLD_SECS)
+    }
+}
+
+/// Normal / Low calls per phase (docs/coach-review-13.md, item 14): one per [`LANING_GAP_SECS`]
+/// before [`LANING_END_SECS`], then one per [`MID_LATE_GAP_SECS`]. High safety calls bypass the
+/// budget (their own cooldowns still dedupe them).
+pub const LANING_END_SECS: u32 = 480;
+pub const LANING_GAP_SECS: u32 = 60;
+pub const MID_LATE_GAP_SECS: u32 = 45;
+/// In a fight: one call per [`FIGHT_GAP_SECS`], High safety / threat / exit calls only, at most
+/// [`FIGHT_WORDS`] words.
+pub const FIGHT_GAP_SECS: u32 = 15;
+pub const FIGHT_WORDS: usize = 10;
+pub const FIGHT_PER_30: usize = 2;
+/// At most one wave call (deep wave or overview) per [`WAVE_GAP_SECS`].
+pub const WAVE_GAP_SECS: u32 = 90;
+/// A timer readout waits while an objective plan (key prefix "plan:") was spoken this recently.
+pub const PLAN_COVERS_SECS: u32 = 60;
+/// Praise waits this long after a death (and after the opposite mistake).
+pub const PRAISE_AFTER_DEATH_SECS: u32 = 60;
+/// The dead-with-souls reminder waits this long into a death: the death review names the buy.
+pub const DEAD_SOULS_WAIT_SECS: u32 = 25;
+
+/// Calls that announce state rather than a plan: never in a fight or a siege.
+pub fn is_chatter(key: &str) -> bool {
+    const PREFIX: [&str; 12] = ["map:wave", "wave:", "timer:", "map:urn-ground", "map:urn-ally", "map:midboss", "map:farm-window", "pace:", "counter:", "praise:", "review:pattern", "jungle:spawn"];
+    PREFIX.iter().any(|p| key.starts_with(p)) || matches!(key, "lead" | "behind")
+}
+/// "Back off" calls that say the same thing in different words: one per [`RETREAT_GAP_SECS`]
+/// (rec11 30:35-30:52 said gank, outnumbered and hold your side in 17 s). The critical-health call
+/// and the debuff / crowd-control escapes are not in it.
+pub fn is_retreat_call(key: &str) -> bool { matches!(key, "pos:gank" | "pos:outnumbered" | "lane:hold" | "lane:back_off" | "review:fight-lost") }
+pub const RETREAT_GAP_SECS: u32 = 20;
+pub fn is_wave_call(key: &str) -> bool { key.starts_with("map:wave:") || key == "wave:overview" }
+/// Lane-income advice that has no place in a fight.
+fn is_farm_call(key: &str) -> bool {
+    matches!(key, "lane:last_hit" | "lane:wave_good" | "lane:poke" | "lane:push" | "lane:shop" | "lane:rotate" | "lane:objective" | "map:farm-window" | "unspent" | "active:close") || key.starts_with("active:repeat")
+}
+/// Which Normal / Low call takes a budget slot: the time-sensitive, contextual ones first (a window
+/// being used, a praise within a minute of the play, an objective plan), state readouts last (a
+/// missing enemy, a wave, a timer, a summary). rec12 lost every window praise to "you're ahead of
+/// your trooper wave" taking the slot first.
+pub fn call_value(key: &str) -> u8 {
+    const NOW: [&str; 9] = ["praise:", "plan:", "pos:enemies_down", "pos:kill_window", "pos:go_in", "pos:help", "lane:gank", "review:respawn-alone", "active:"];
+    const STATE: [&str; 13] = ["pos:missing", "pos:unseen", "pos:join", "lane:overextended", "lane:last_hit", "lane:wave_good", "unspent", "review:pattern", "pace:", "counter:", "jungle:", "map:", "timer:"];
+    if NOW.iter().any(|p| key.starts_with(p)) { 3 } else if STATE.iter().any(|p| key.starts_with(p)) || is_wave_call(key) || matches!(key, "lead" | "behind") { 1 } else { 2 }
+}
+/// A call cut to its first sentence (or clause) for a fight, at most [`FIGHT_WORDS`] words.
+pub fn fight_text(text: &str) -> String {
+    let first = text.split_inclusive(['.', '!', '?']).next().unwrap_or(text).trim().to_string();
+    let first = if first.split_whitespace().count() > FIGHT_WORDS { first.split(':').next().unwrap_or(&first).trim().trim_end_matches(['.', ',']).to_string() + "." } else { first };
+    let words: Vec<&str> = first.split_whitespace().collect();
+    if words.len() <= FIGHT_WORDS { first } else { words[..FIGHT_WORDS].join(" ").trim_end_matches([',', ':']).to_string() + "." }
+}
+/// A siege: a structure / Patron banner up, or you in their half with two or more teammates.
+fn sieging(s: &GameSnapshot) -> bool {
+    s.objective_banner.as_ref().is_some_and(|b| !b.name.trim().is_empty()) || allies_near(s, 0.2) >= 2 && s.minimap.as_ref().and_then(|m| m.you).is_some_and(|p| p.y < 0.5)
+}
+fn allies_near(s: &GameSnapshot, r: f32) -> usize {
+    let Some(m) = s.minimap.as_ref() else { return 0 };
+    let Some(me) = m.you else { return 0 };
+    m.heroes.iter().filter(|h| h.ally && h.confirmed() && h.unseen_ms <= 3000 && h.distance(me) <= r).count()
+}
+/// Wave calls are about lane income alone: not with three teammates around you, not in their
+/// half, not while a structure banner is up.
+fn wave_call_allowed(s: &GameSnapshot) -> bool {
+    !(allies_near(s, 0.2) >= 3 || s.minimap.as_ref().and_then(|m| m.you).is_some_and(|p| p.y < 0.5) || s.objective_banner.as_ref().is_some_and(|b| !b.name.trim().is_empty()))
+}
+
 pub struct Engine {
+    fight: FightState, in_fight: bool, life: LifeTracker,
     rules: Vec<Box<dyn Rule>>,
     last_said: HashMap<String, u32>,
     /// Max cues returned per step (rest are held back and retried next step).
     pub max_per_step: usize,
     /// Minimum game-seconds between any two spoken cues.
     pub min_gap_secs: u32,
+    /// The phase cadence budget and fight mode (on by default; unit tests of single rules turn it off).
+    pub budget: bool,
     last_cue_at: Option<u32>,
+    /// Clocks of the calls spoken in fight mode (last 30 s), and of the last wave call.
+    fight_calls: Vec<u32>, wave_at: Option<u32>,
     /// Text of the last spoken wave overview (which lanes it named).
     wave_text: Option<String>,
     /// Clocks of the praise calls spoken, and of the last compliment of any kind (praise or the
@@ -380,16 +565,26 @@ pub struct Engine {
 }
 
 impl Engine {
-    pub fn new(rules: Vec<Box<dyn Rule>>) -> Self { Engine { rules, last_said: HashMap::new(), max_per_step: 1, min_gap_secs: 8, last_cue_at: None, wave_text: None, praise_at: vec![], compliment_at: None } }
+    pub fn new(rules: Vec<Box<dyn Rule>>) -> Self { Engine { fight: FightState::default(), in_fight: false, life: LifeTracker::default(), rules, last_said: HashMap::new(), max_per_step: 1, min_gap_secs: 8, budget: true, last_cue_at: None, fight_calls: vec![], wave_at: None, wave_text: None, praise_at: vec![], compliment_at: None } }
+    /// Whether the last step was in fight mode.
+    pub fn in_fight(&self) -> bool { self.in_fight }
+    /// Deaths as one event each (first death screen to the confirmed respawn).
+    pub fn life(&self) -> &LifeTracker { &self.life }
+    /// Seconds between Normal / Low calls at this game clock.
+    pub fn phase_gap(now: u32) -> u32 { if now < LANING_END_SECS { LANING_GAP_SECS } else { MID_LATE_GAP_SECS } }
 
     /// Evaluate all rules; returns cues not suppressed by cooldown, highest priority first.
-    pub fn step(&mut self, snap: &GameSnapshot) -> Vec<Cue> {
+    pub fn step(&mut self, raw: &GameSnapshot) -> Vec<Cue> {
+        // Deaths first: menus and flicker frames inside a death reach the rules as death frames.
+        let masked = self.life.observe(raw);
+        let snap = masked.as_ref().unwrap_or(raw);
         if snap.screen.as_deref().is_some_and(|s|!matches!(s,"Gameplay"|"Scoreboard"|"Dead")){return vec![];}
         let Some(now) = snap.game_clock_secs else { return vec![] };
         if let Some(last)=self.last_cue_at {if now<last {
-            if last-now>120 {self.last_said.clear();self.last_cue_at=None;self.praise_at.clear();self.compliment_at=None;}
+            if last-now>120 {self.last_said.clear();self.last_cue_at=None;self.praise_at.clear();self.compliment_at=None;self.fight_calls.clear();self.wave_at=None;}
             else {return vec![];} // small OCR backsteps are not a new match
         }}
+        self.in_fight = self.fight.observe(snap, now);
         let mut out: Vec<Cue> = self.rules.iter().flat_map(|r| r.evaluate(snap)).collect();
         // In danger only safety calls speak: rec3 said "secure last hits" at 38% health falling
         // 15 points a read, five seconds before dying.
@@ -400,25 +595,59 @@ impl Engine {
             Some(&t) if now >= t && now - t < c.cooldown_secs => false,
             _ => true,
         });
-        // Praise is rationed: at most 3 per 10 minutes, a minute apart (praise.rs).
+        let recent = |k: &str, secs: u32| self.last_said.get(k).is_some_and(|t| now >= *t && now - t < secs);
+        // Praise is rationed: at most 3 per 10 minutes, a minute apart (praise.rs); never during or
+        // within a minute after a death, nor right after the opposite mistake (rec13: "keep it up,
+        // you went 9 minutes without dying" 5 s after a death).
         out.retain(|c| praise::budget_allows(&c.key, &self.praise_at, self.compliment_at, now));
+        let after_death = self.life.dead_since.is_some() || self.life.since_respawn(now).is_some_and(|s| s < PRAISE_AFTER_DEATH_SECS);
+        let lost = recent("review:fight-lost", PRAISE_AFTER_DEATH_SECS) || recent("active:team_losing", PRAISE_AFTER_DEATH_SECS);
+        out.retain(|c| !praise::is_compliment(&c.key) || !(after_death || lost
+            || c.key.starts_with("praise:group:") && (recent("review:respawn-alone", PRAISE_AFTER_DEATH_SECS) || recent("active:hold_base:out", PRAISE_AFTER_DEATH_SECS))
+            || c.key.starts_with("praise:lead:") && recent("behind", PRAISE_AFTER_DEATH_SECS)));
         // "Your lead grew from X to Y" says more than the generic "your team is ahead".
         if out.iter().any(|c| c.key.starts_with("praise:lead:")) { out.retain(|c| c.key != "lead"); }
         // A counter item is suggested once per match (rec8 suggested Long Range twice, 31 min apart).
         out.retain(|c|!c.key.starts_with("counter:")||(
             self.last_said.get("$counter-category").is_none_or(|t|now.saturating_sub(*t)>=180)
             &&!self.last_said.contains_key(&format!("$counter-item:{}",c.key.rsplit(':').next().unwrap_or("")))));
-        // One wave call per lane per minute: the lane-by-lane overview is not said within 60 s of a
-        // deep-wave call, and a deep-wave call is not said for a lane the overview just named as
-        // coming toward you (rec8 spoke both families 25 times).
-        let recent = |k: &str, secs: u32| self.last_said.get(k).is_some_and(|t| now >= *t && now - t < secs);
-        let deep_recent = self.last_said.iter().any(|(k, t)| k.starts_with("map:wave:") && now >= *t && now - t < 60);
+        // One wave call per 90 s across both wave families, and a deep-wave call is not said for a
+        // lane the overview just named as coming toward you (rec8 spoke both families 25 times).
+        // Wave calls are about lane income alone: never with three teammates around you, in their
+        // half or during a structure push (rec13 "catch that wave" in late-game sieges).
         let overview = self.wave_text.clone().filter(|_| recent("wave:overview", 60)).unwrap_or_default();
+        let wave_ok = wave_call_allowed(snap) && self.wave_at.is_none_or(|t| now < t || now - t >= WAVE_GAP_SECS);
+        out.retain(|c| if !is_wave_call(&c.key) { true } else if !wave_ok { false }
+            else if let Some(lane) = c.key.strip_prefix("map:wave:") { !overview.contains(&format!("{lane} is coming")) } else { true });
+        // An objective plan covers the timer readout (plans.rs, "plan:*").
+        let planned = self.last_said.iter().any(|(k, t)| k.starts_with("plan:") && now >= *t && now - t < PLAN_COVERS_SECS);
+        if planned { out.retain(|c| !c.key.starts_with("timer:")); }
+        if recent("$retreat", RETREAT_GAP_SECS) { out.retain(|c| !is_retreat_call(&c.key)); }
         // "Hold in base" already covers "play safe until they're back".
         let held = recent("active:hold_base", 60) || recent("active:hold_base:out", 60);
         out.retain(|c| !(held && c.key.starts_with("pos:allies_down")));
-        out.retain(|c| if c.key == "wave:overview" { !deep_recent }
-            else if let Some(lane) = c.key.strip_prefix("map:wave:") { !overview.contains(&format!("{lane} coming toward")) } else { true });
+        // The death review names what to buy; the generic dead-with-souls reminder is the fallback.
+        if self.budget { if let Some(d) = self.life.dead_since { if now < d + DEAD_SOULS_WAIT_SECS { out.retain(|c| c.key != "unspent-dead"); } } }
+        if self.budget {
+            let siege = sieging(snap);
+            if self.in_fight {
+                // One call per fight beat: a High safety / threat / exit call, short.
+                // The critical-health exit may follow another call after 3 s; never more than
+                // [`FIGHT_PER_30`] calls in 30 s.
+                self.fight_calls.retain(|t| now >= *t && now - t < 30);
+                let last = self.fight_calls.last().copied();
+                let gap_ok = |c: &Cue| last.is_none_or(|t| now - t >= FIGHT_GAP_SECS || c.key == "lane:critical" && now - t >= 3 && !self.last_said.get("lane:critical").is_some_and(|x| *x == t));
+                let room = self.fight_calls.len() < FIGHT_PER_30;
+                out.retain(|c| room && gap_ok(c) && c.priority == Priority::High && !is_chatter(&c.key) && !is_farm_call(&c.key));
+                for c in out.iter_mut() { c.text = fight_text(&c.text); }
+            } else if siege {
+                out.retain(|c| !is_chatter(&c.key));
+            }
+            // The phase budget for everything that is not a High safety call; a state readout
+            // ([`call_value`] 1) needs twice the gap, leaving the slots to time-sensitive calls.
+            let gap = Self::phase_gap(now);
+            out.retain(|c| c.priority == Priority::High || self.last_cue_at.is_none_or(|l| now - l >= if call_value(&c.key) <= 1 { 2 * gap } else { gap }));
+        }
         if let Some(l)=self.last_cue_at { if now-l<self.min_gap_secs {
             out.retain(|c| c.priority==Priority::High && (now-l>=3 || c.key=="lane:back_off" || c.key=="lane:critical"));
         }}
@@ -426,7 +655,7 @@ impl Engine {
         // beats a gank warning (rec3 spoke the gank and died before the critical call).
         // The death review goes before the generic dead-with-souls reminder (it names the souls too).
         let first = |c: &Cue| c.key == "lane:critical" || c.key.starts_with("death:review");
-        out.sort_by(|a, b| b.priority.cmp(&a.priority).then(first(b).cmp(&first(a))));
+        out.sort_by(|a, b| b.priority.cmp(&a.priority).then(first(b).cmp(&first(a))).then(call_value(&b.key).cmp(&call_value(&a.key))));
         out.truncate(self.max_per_step);
         for c in &out { self.last_said.insert(c.key.clone(), now); }
         for c in &out { for r in &self.rules { r.spoken(c); } }
@@ -437,16 +666,20 @@ impl Engine {
         if out.iter().any(|c| c.key == "active:urn_hold") { self.last_said.insert("map:urn-you".into(), now); }
         // A growing-lead praise already says the team is ahead: the generic call waits its repeat time.
         if out.iter().any(|c| c.key.starts_with("praise:lead:")) { self.last_said.insert("lead".into(), now); }
+        // The death review said what to buy: no second souls call on this death screen.
+        if out.iter().any(|c| c.key.starts_with("death:review")) { self.last_said.insert("unspent-dead".into(), now); }
         for c in out.iter().filter(|c| praise::is_compliment(&c.key)) {
             self.compliment_at = Some(now);
             if praise::is_praise(&c.key) { self.praise_at.push(now); }
         }
         if let Some(c) = out.iter().find(|c| c.key == "wave:overview") { self.wave_text = Some(c.text.clone()); }
+        if out.iter().any(|c| is_wave_call(&c.key)) { self.wave_at = Some(now); }
+        if out.iter().any(|c| is_retreat_call(&c.key)) { self.last_said.insert("$retreat".into(), now); }
         for c in out.iter().filter(|c|c.key.starts_with("counter:")){
             self.last_said.insert("$counter-category".into(),now);
             self.last_said.insert(format!("$counter-item:{}",c.key.rsplit(':').next().unwrap_or("")),now);
         }
-        if !out.is_empty() { self.last_cue_at = Some(now); }
+        if !out.is_empty() { self.last_cue_at = Some(now); if self.in_fight { self.fight_calls.push(now); } }
         out.sort_by(|a, b| b.priority.cmp(&a.priority));
         out
     }
@@ -500,7 +733,7 @@ mod tests {
         let mut e = Engine::new(default_rules(RulesConfig::default()));
         let mut s = at(400);
         s.souls = Some(2000); s.ally_networth = Some(20000); s.enemy_networth = Some(15000);
-        e.max_per_step = 5;
+        e.max_per_step = 5; e.budget = false;
         e.min_gap_secs = 0;
         let mut texts: Vec<String> = vec![];
         for t in [400, 405, 410, 415] { let mut s2 = s.clone(); s2.game_clock_secs = Some(t); texts.extend(e.step(&s2).into_iter().map(|c| c.text)); }
@@ -515,12 +748,21 @@ mod tests {
         e.max_per_step = 5;
         let mut s = at(850);
         s.dead = true; s.souls = Some(2000); s.respawn_secs = Some(20); s.death_cause = Some("Temple Guardia".into());
+        // The death review names the buy: the generic souls reminder waits for it.
         let mut t: Vec<String> = e.step(&s).into_iter().map(|c| c.text).collect();
-        assert!(t.iter().any(|x| x.contains("dead with 2,000 souls") && x.contains("20 seconds")), "{t:?}");
+        assert!(t.is_empty(), "{t:?}");
         // The death review waits ~5 s for the damage panel to fill in.
         s.game_clock_secs = Some(856); s.respawn_secs = Some(14);
         t.extend(e.step(&s).into_iter().map(|c| c.text));
-        assert!(t.iter().any(|x| x.contains("Midboss")), "{t:?}");
+        assert!(t.iter().any(|x| x.contains("Midboss") && x.contains("Spend 2,000 souls now.")), "{t:?}");
+        for c in [860, 866] { s.game_clock_secs = Some(c); t.extend(e.step(&s).into_iter().map(|c| c.text)); }
+        assert!(!t.iter().any(|x| x.contains("dead with")), "one souls call per death: {t:?}");
+        // Without a review (no rule for it), the reminder still comes, 25 s into the death.
+        let mut e = Engine::new(vec![Box::new(UnspentSoulsRule::new(RulesConfig::default()))]);
+        let mut s = at(850); s.dead = true; s.souls = Some(2000); s.respawn_secs = Some(30);
+        let mut said = vec![];
+        for c in (850..=880).step_by(5) { s.game_clock_secs = Some(c); s.respawn_secs = Some(880 - c); said.extend(e.step(&s).into_iter().map(|x| (c, x.text))); }
+        assert!(said.len() == 1 && said[0].0 >= 875 && said[0].1.contains("dead with 2,000 souls"), "{said:?}");
     }
 
     #[test]
@@ -575,7 +817,7 @@ mod tests {
     #[test]
     fn a_growing_lead_praise_replaces_the_generic_lead_call() {
         let mut e = Engine::new(default_rules(RulesConfig::default()));
-        e.min_gap_secs = 0;
+        e.min_gap_secs = 0; e.budget = false;
         let mut keys: Vec<String> = vec![];
         for t in (600..1100).step_by(10) {
             let mut s = at(t); s.screen = Some("Gameplay".into()); s.hp = Some(1800); s.max_hp = Some(2000); s.health_observations = 3;

@@ -77,7 +77,10 @@ let replayCollect: Snapshot[] | null = null, lastReplay: { snapshots: Snapshot[]
 function playerFrame(analysis: Analysis, timestamp: number) {
   if (!settings.playerProfile || !isDeadlock(activeProfile)) return;
   const ev = playerProfile.observe(analysis.snapshot, timestamp);
-  if (ev.matchStarted || ev.respawned) { const cue = playerProfile.focusCue(); if (cue) analysis.cues = [...analysis.cues, cue]; }
+  // Praise from the profile ("Keep it up: ...", "Great game: ...") is never said right after a death
+  // (rec13 6:17: "Keep it up: last game you went 9 minutes without dying" 5 s after dying); on a
+  // respawn only a fix-it focus line may be said.
+  if (ev.matchStarted || ev.respawned) { const cue = playerProfile.focusCue(); if (cue && !(ev.respawned && /^(Keep it up|Great game)\b/.test(cue.text))) analysis.cues = [...analysis.cues, cue]; }
   if (ev.ended && location.hash === '#player') playerPage?.render();
 }
 /** Compact profile text for the AI coach prompt (null when off or empty): setProfileProvider(playerPromptText). */
@@ -343,13 +346,21 @@ const FULL_ONLY=['counter','death','review','lead','behind','unspent-dead','play
   'active:hold_base','active:team_losing','active:base_attack','active:urn_hold',
   // Praise (crates/engine/src/praise.rs) needs the top bar, status effects and the structure banner.
   'praise'];
+/** One coach voice across both analysis paths (each engine keeps its own budget): a Normal / Low
+ *  rule call waits the phase gap after any rule call (Engine::phase_gap: 60 s before 8:00, then
+ *  45 s, game clock); High safety calls always pass. */
+let lastRuleClock:number|null=null;
+function phaseGap(clock:number){return clock<480?60:45;}
 function deliver(analysis:Analysis,timestamp:number,fast=false){
   const now=Date.now(),age=Math.max(0,now-timestamp);const delivered:Cue[]=[];
+  const clk=analysis.snapshot.game_clock_secs??null;
+  if(clk!=null&&lastRuleClock!=null&&clk+120<lastRuleClock)lastRuleClock=null; // a new match
   for(const original of analysis.cues){
     // While the fast path is live it speaks the shared rules; only full-scan-only cues pass here.
     if(!fast&&now-quick.lastResultAt<3000&&!FULL_ONLY.some(p=>original.key===p||original.key.startsWith(p+':')))continue;
     const cue=freshCue(original,analysis.snapshot.game_clock_secs,age);if(!cue)continue;
     if(now-(spokenAt.get(cue.key)??-Infinity)<cue.cooldown_secs*1000)continue;
+    if(cue.priority!=='High'&&clk!=null&&lastRuleClock!=null&&clk>=lastRuleClock&&clk-lastRuleClock<phaseGap(clk))continue;
     if(cue.key.startsWith('counter:')){
       const item=`$counter-item:${cue.key.slice(cue.key.lastIndexOf(':')+1)}`;
       if(now-(spokenAt.get('$counter-category')??-Infinity)<180000||now-(spokenAt.get(item)??-Infinity)<1200000)continue;
@@ -360,6 +371,7 @@ function deliver(analysis:Analysis,timestamp:number,fast=false){
     // (often from the fast path a second later) for its cooldown, as the engine does.
     if(cue.key.startsWith('active:debuff:')||cue.key==='active:cc')spokenAt.set('lane:back_off',now);
     cue.text=cue.text.replace(/hero_[a-z_]+/g,id=>heroNames[id]||id.replace('hero_','').replaceAll('_',' '));
+    if(clk!=null)lastRuleClock=clk;
     speaker.say(cue);delivered.push(cue);logCue(cue,analysis.snapshot,fast);
   }
   return {...analysis,cues:delivered};

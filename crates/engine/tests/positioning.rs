@@ -77,7 +77,7 @@ fn teammates_fighting_nearby_get_help_or_join_calls() {
     let mut ally = hero(2, true, 0.8, 0.6); ally.lane = Some(Lane::Yellow);
     let fight = vec![ally.clone(), hero(5, false, 0.83, 0.62), hero(6, false, 0.78, 0.57)];
     let a = PositionCoach::default().assess(&snap(fight)).unwrap();
-    assert_eq!(a.id, "help"); assert!(a.text.contains("Yellow lane") && a.text.contains("1 ally against 2 enemies"), "{}", a.text);
+    assert_eq!(a.id, "help"); assert!(a.text.contains("Yellow lane") && a.text.contains("1 ally on 2 enemies"), "{}", a.text);
     let winning = vec![ally.clone(), hero(3, true, 0.82, 0.58), hero(5, false, 0.83, 0.62)];
     assert_eq!(advice(&snap(winning)).as_deref(), Some("join"));
     // Too far, or you are hurt: no rotation call.
@@ -112,7 +112,7 @@ fn low_enemies_do_not_count_as_a_real_outnumber_and_become_a_kill_window() {
     let mut with_ally = two.clone(); with_ally.push(hero(3, true, 0.48, 0.6));
     let mut s = snap(with_ally); team(&mut s, [Some(0.9), FULL, FULL, FULL, FULL, FULL], [Some(0.2), Some(0.15), None, None, None, None]);
     let a = PositionCoach::default().assess(&s).unwrap();
-    assert_eq!(a.id, "kill_window"); assert!(a.text.contains("2 enemies near you are below 20%"), "{}", a.text);
+    assert_eq!(a.id, "kill_window"); assert!(a.text.contains("2 enemies near you are under 20%"), "{}", a.text);
     // Healthy enemies: the outnumber is real.
     let mut s = snap(two); team(&mut s, [Some(0.9), FULL, FULL, FULL, FULL, FULL], [FULL, FULL, None, None, None, None]);
     assert_eq!(advice(&s).as_deref(), Some("outnumbered"));
@@ -122,7 +122,7 @@ fn low_enemies_do_not_count_as_a_real_outnumber_and_become_a_kill_window() {
 fn one_v_one_kill_window_needs_every_visible_enemy_to_be_low() {
     let one = vec![hero(1, false, 0.55, 0.6)];
     let mut s = snap(one.clone()); team(&mut s, [Some(0.9), FULL, FULL, FULL, FULL, FULL], [Some(0.25), None, None, None, None, None]);
-    let a = PositionCoach::default().assess(&s).unwrap(); assert_eq!(a.id, "kill_window"); assert!(a.text.contains("1 enemy near you is below 25%"), "{}", a.text);
+    let a = PositionCoach::default().assess(&s).unwrap(); assert_eq!(a.id, "kill_window"); assert!(a.text.contains("1 enemy near you is under 25%"), "{}", a.text);
     // A healthy enemy with a visible bar elsewhere could be the one near you.
     let mut s = snap(one); team(&mut s, [Some(0.9), FULL, FULL, FULL, FULL, FULL], [Some(0.25), FULL, None, None, None, None]);
     assert_ne!(advice(&s).as_deref(), Some("kill_window"));
@@ -176,7 +176,7 @@ fn dead_teammates_and_unseen_enemies_while_pushed_up() {
     let a = PositionCoach::default().assess(&s).unwrap(); assert_eq!(a.id, "allies_down"); assert!(a.text.contains("2 teammates are dead"), "{}", a.text);
     let mut s = snap(vec![]); s.minimap.as_mut().unwrap().your_progress = Some(0.62);
     team(&mut s, [Some(0.9), FULL, FULL, FULL, FULL, FULL], [FULL, FULL, FULL, None, None, None]);
-    let a = PositionCoach::default().assess(&s).unwrap(); assert_eq!(a.id, "unseen"); assert!(a.text.starts_with("3 enemies haven't been seen"), "{}", a.text);
+    let a = PositionCoach::default().assess(&s).unwrap(); assert_eq!(a.id, "unseen"); assert!(a.text.starts_with("3 enemies unseen"), "{}", a.text);
     s.minimap.as_mut().unwrap().your_progress = Some(0.3); assert_eq!(advice(&s), None, "near your guardian, unseen enemies are not a push warning");
 }
 
@@ -186,7 +186,7 @@ fn lane_plan_defers_to_gank_warnings_instead_of_contradicting_them() {
     let mut s = snap(vec![e]);
     for l in [&mut s.minimap.as_mut().unwrap().blue] { l.push = Some(0.55); l.ally_troopers = 4; l.enemy_troopers = 2; l.ally_progress = Some(0.6); l.enemy_progress = Some(0.5); }
     let d = LaneCoach::default().decide(&s).unwrap();
-    assert_eq!(d.action, Action::HoldWave); assert!(!d.speak); assert!(d.text.starts_with("Gank warning"));
+    assert_eq!(d.action, Action::HoldWave); assert!(!d.speak); assert!(d.text.starts_with("Fall back"));
     let mut engine = Engine::new(coach_engine::default_rules(RulesConfig::default())); engine.max_per_step = 5;
     let spoken = engine.step(&s);
     assert_eq!(spoken[0].key, "pos:gank");
@@ -216,7 +216,7 @@ fn an_even_fight_elsewhere_is_not_a_teammate_in_trouble() {
 
 #[test]
 fn positional_calls_need_two_consistent_reads_and_do_not_flip() {
-    let mut e = Engine::new(vec![Box::new(PositionCoach::default())]); e.min_gap_secs = 0;
+    let mut e = Engine::new(vec![Box::new(PositionCoach::default())]); e.min_gap_secs = 0; e.budget = false;
     let out = vec![hero(1, false, 0.55, 0.6), hero(2, false, 0.5, 0.66)];
     let at = |t: u32, h: Vec<HeroTrack>| { let mut s = snap(h); s.game_clock_secs = Some(t); s };
     assert!(e.step(&at(500, out.clone())).is_empty(), "one read");

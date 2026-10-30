@@ -4,47 +4,47 @@
   "thresholds": { "near_radius": 0.12, "fight_radius": 0.09, "watch_radius": 0.28, "closing_speed": 0.01, "missing_min_ms": 4000, "missing_max_ms": 30000, "help_max_distance": 0.45, "healthy": 0.6, "low_enemy": 0.35, "low_ally": 0.35, "strength_margin": 1.2, "team_down": 2, "unseen_forward": 3, "forward_progress": 0.5 },
   "health_note": "Top-bar health bars are not tied to specific minimap rings. Rings near you are some subset of the enemies with visible bars, so the coach uses the guaranteed range: worst case (healthiest) for danger, best case only when every candidate is low.",
   "cards": [
-    { "id": "gank", "speech": "Gank warning: {count} closing on you {direction}. Fall back toward your guardian or a teammate.", "priority": "high", "cooldown_secs": 20,
+    { "id": "gank", "speech": "Fall back: {count} closing {direction}. Get to our guardian or a teammate.", "priority": "high", "cooldown_secs": 20,
       "rationale": "Enemies moving toward you from outside your fight are the visible start of a gank; without an advantage, reset.",
       "sources": [
         { "path": "strategy/laning-phase.md", "section": "## 7. When to rotate", "basis": "WIKI", "excerpt": "Ganks: players might leave a lane to assist another." },
         { "path": "strategy/teamfighting.md", "section": "## 4. Engage / disengage", "basis": "COMMUNITY", "excerpt": "No advantage -> reset." } ] },
-    { "id": "outnumbered", "speech": "You're outnumbered: {enemies} near you against {allies}. Back off until help arrives.", "priority": "high", "cooldown_secs": 25,
+    { "id": "outnumbered", "speech": "Back off, you're outnumbered: {enemies} on {allies}. Wait for help.", "priority": "high", "cooldown_secs": 25,
       "rationale": "More visible enemies than allies around you is a numbers disadvantage.",
       "sources": [
         { "path": "strategy/teamfighting.md", "section": "## 4. Engage / disengage", "basis": "COMMUNITY", "excerpt": "Engage only with an advantage: pick available, key ability landed, ult advantage, numbers/respawns" } ] },
-    { "id": "missing", "speech": "{count} near you went missing {seconds} seconds ago. Watch your back and don't push past your wave.", "priority": "normal", "cooldown_secs": 90,
+    { "id": "missing", "speech": "{count} near you went missing {seconds} seconds ago. Don't push past your wave.", "priority": "normal", "cooldown_secs": 90,
       "rationale": "Enemies seen near you that left the minimap may be repositioning for a gank. Said at most every 90 s: rec8 repeated it 11 times, often about the same enemies under new track ids.",
       "sources": [
         { "path": "strategy/common-mistakes.md", "section": "## 22. Ignoring the minimap / missing alerts", "basis": "WIKI", "excerpt": "enemy markers disappear from the minimap while the player pushes forward" },
         { "path": "strategy/midgame-macro.md", "section": "## 5. Rotations and presence", "basis": "WIKI", "excerpt": "Missing: pinging an enemy portrait (Tab + middle-click) warns allies the enemy is unaccounted for." } ] },
-    { "id": "go_in", "speech": "You have the numbers: {allies} against {enemies} nearby. Commit together.", "priority": "normal", "cooldown_secs": 30,
+    { "id": "go_in", "speech": "We have the numbers, {allies} on {enemies}. Go in together.", "priority": "normal", "cooldown_secs": 30,
       "rationale": "A visible numbers advantage, with your health confirmed and nobody near you missing, is a reason to engage as a group.",
       "sources": [
         { "path": "strategy/teamfighting.md", "section": "## 4. Engage / disengage", "basis": "COMMUNITY", "excerpt": "Group before committing; pick the fight location" } ] },
-    { "id": "help", "speech": "Teammate in trouble at {area}: {allies} against {enemies}. Rotate to help if your wave is safe.", "priority": "normal", "cooldown_secs": 35,
+    { "id": "help", "speech": "Teammate in trouble at {area}, {allies} on {enemies}. Rotate if your wave is safe.", "priority": "normal", "cooldown_secs": 35,
       "rationale": "A nearby ally fighting at a disadvantage can be turned by a rotation, if leaving does not cost your own lane.",
       "sources": [
         { "path": "strategy/laning-phase.md", "section": "## 7. When to rotate", "basis": "COMMUNITY", "excerpt": "neighbor lane winnable" },
         { "path": "strategy/common-mistakes.md", "section": "## 16. Fighting split / piecemeal", "basis": "COMMUNITY", "excerpt": "Fall back and regroup. Don't fight split." } ] },
-    { "id": "kill_window", "speech": "Kill window: {count} near you {is_are} below {pct}% health. Commit if no one else is coming.", "priority": "normal", "cooldown_secs": 25,
+    { "id": "kill_window", "speech": "Kill window: {count} near you {is_are} under {pct}%. Commit if no one else is coming.", "priority": "normal", "cooldown_secs": 25,
       "rationale": "Every enemy that could be near you is low (from their top-bar health) while you are healthy: a pick creates a numbers advantage.",
       "sources": [
         { "path": "strategy/teamfighting.md", "section": "## 1. Wiki-grounded mechanics that shape fights", "basis": "WIKI", "excerpt": "Pick = killing a separated enemy / targeting low health or high threat to gain a numbers advantage." } ] },
-    { "id": "enemies_down", "speech": "{count} are dead{respawn}. Use the window with your team: push a lane or an objective.", "priority": "normal", "cooldown_secs": 45,
+    { "id": "enemies_down", "speech": "{count} are dead{respawn}. We push a lane or take an objective now.", "priority": "normal", "cooldown_secs": 45,
       "rationale": "Greyed enemy portraits with respawn timers are a temporary numbers advantage to convert into objectives.",
       "sources": [
         { "path": "strategy/teamfighting.md", "section": "## 4. Engage / disengage", "basis": "COMMUNITY", "excerpt": "count survivors and take the highest-value safe action (objective, wave, reset) rather than chasing" } ] },
-    { "id": "allies_down", "speech": "{count} are dead{respawn}. Play safe near your guardian until they're back.", "priority": "normal", "cooldown_secs": 45,
+    { "id": "allies_down", "speech": "{count} are dead{respawn}. Play safe near our guardian until they're back.", "priority": "normal", "cooldown_secs": 45,
       "rationale": "With teammates respawning your side has no numbers advantage; avoid taking fights alone.",
       "sources": [
         { "path": "strategy/teamfighting.md", "section": "## 4. Engage / disengage", "basis": "COMMUNITY", "excerpt": "No advantage -> reset." } ] },
-    { "id": "unseen", "speech": "{count} haven't been seen for a while and you're pushed up. Expect a gank; stay near your wave.", "priority": "normal", "cooldown_secs": 40,
+    { "id": "unseen", "speech": "{count} unseen and you're pushed up. Stay near your wave.", "priority": "normal", "cooldown_secs": 40,
       "rationale": "Enemies without a top-bar health bar have not been seen recently; pushing forward without that information invites a gank.",
       "sources": [
         { "path": "strategy/coach-cue-library.md", "section": "## Cue table", "basis": "WIKI", "excerpt": "An enemy marker not seen on minimap for 20s+ while pushing" },
         { "path": "strategy/common-mistakes.md", "section": "## 22. Ignoring the minimap / missing alerts", "basis": "WIKI", "excerpt": "enemy markers disappear from the minimap while the player pushes forward" } ] },
-    { "id": "join", "speech": "Your team has the numbers at {area}: {allies} against {enemies}. Join the fight if you can reach it.", "priority": "low", "cooldown_secs": 45,
+    { "id": "join", "speech": "We have the numbers at {area}, {allies} on {enemies}. Join if you can reach it.", "priority": "low", "cooldown_secs": 45,
       "rationale": "Joining a fight your team is winning converts the advantage; nearby enemies around you must be absent.",
       "sources": [
         { "path": "strategy/common-mistakes.md", "section": "## 25. Spending too long in a dead lane", "basis": "COMMUNITY", "excerpt": "Lane is dead. Shove it and go help." } ] }

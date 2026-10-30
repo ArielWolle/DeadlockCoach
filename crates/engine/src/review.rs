@@ -22,15 +22,19 @@ pub struct Thresholds { pub death_window_secs: u32, pub alone_distance: f32, pub
 pub struct Card { pub id: String, pub speech: String, pub lesson: String, pub sources: Vec<Source> }
 /// An ability with its own death reason and lesson (matched by panel source or debuff badge).
 #[derive(Clone, Deserialize)]
-pub struct Threat { pub source: String, pub hero: String, pub close: bool, pub counter: String, pub reason: String, pub lesson: String,
-    pub lesson_ranged: String, pub rank: u8, pub replaces: Vec<String>, pub sources: Vec<Source> }
+pub struct Threat { pub source: String, pub hero: String, pub close: bool, pub counter: String,
+    /// The death-review cause ("You died because {because}") and the next-life change (ranged heroes: `next_ranged`).
+    #[serde(default)] pub because: String, #[serde(default)] pub next: String, #[serde(default)] pub next_ranged: String,
+    pub sources: Vec<Source> }
 /// Counter items for one need ("spirit", "debuff", "cc", "bullet"), in order of preference.
 #[derive(Clone, Deserialize)]
 pub struct Counter { pub need: String, pub items: Vec<String>, pub keyword: String, pub why: String, pub sources: Vec<Source> }
 #[derive(Clone, Default, Deserialize)]
 pub struct Roles { #[serde(default)] pub ranged: Vec<String>,
     /// Items whose effect is a melee attack (class names): never suggested to a ranged hero.
-    #[serde(default)] pub melee_items: Vec<String> }
+    #[serde(default)] pub melee_items: Vec<String>,
+    /// Frontliners (tanks and brawlers who stand in front): "Bebop went down first".
+    #[serde(default)] pub frontline: Vec<String> }
 #[derive(Clone, Deserialize)]
 pub struct Catalog { pub schema_version: u32, pub thresholds: Thresholds, pub cards: Vec<Card>,
     #[serde(default)] pub threats: Vec<Threat>, #[serde(default)] pub counters: Vec<Counter>, #[serde(default)] pub roles: Roles }
@@ -85,6 +89,8 @@ struct Sample {
     /// A live gameplay frame (alive even when your position was not read), and the respawn
     /// timer on a death screen.
     alive: bool, respawn: Option<u32>,
+    /// Allied heroes shown dead / alive on the top bar (class names), and an enemy structure banner.
+    allies_dead_heroes: Vec<String>, allies_alive_heroes: Vec<String>, banner: Option<String>,
 }
 
 /// What one death came down to, kept for repeat killers and pattern summaries.
@@ -94,7 +100,9 @@ struct Summary { main: Option<String>, cc: Vec<String>, close: Vec<String> }
 #[derive(Debug, Clone, Default)]
 struct Death { clock: u32, cause: Option<String>, cause_at: Option<u32>, panel: Vec<DamageRow>, kb: Option<String>, total: Option<u32>,
     /// Souls on the first death-screen frame (before any shopping while dead).
-    souls_dead: Option<u32>, summary: Option<Summary> }
+    souls_dead: Option<u32>, summary: Option<Summary>,
+    /// Structure sources (Walker, Shrine, Guardian, Patron) seen on any panel read of this death.
+    structures_seen: Vec<String> }
 
 #[derive(Default)]
 struct State {
@@ -117,6 +125,9 @@ impl Default for ReviewCoach {
 }
 
 fn dist(a: Pt, b: Pt) -> f32 { (a.x - b.x).hypot(a.y - b.y) }
+/// A spoken death review is at most this many words (docs/coach-review-13.md: death screen ≤ 30).
+pub const REVIEW_WORDS: usize = 30;
+fn words(s: &str) -> usize { s.split_whitespace().count() }
 fn plural(n: usize, one: &str, many: &str) -> String { if n == 1 { format!("1 {one}") } else { format!("{n} {many}") } }
 fn minutes(secs: u32) -> String { if secs < 90 { format!("{secs} seconds") } else { format!("{:.1} minutes", secs as f32 / 60.0) } }
 fn num(v: u32) -> String { if v >= 1000 { format!("{},{:03}", v / 1000, v % 1000) } else { v.to_string() } }
@@ -130,7 +141,7 @@ fn and_list(v: &[String]) -> String {
 /// digit (rec4 read 9 / 5 / 7 for 49 / 45 / 27), so neither the first nor the last read is trusted.
 /// A read refuted by a later death screen (implied respawn before `last_dead`) is dropped: rec4
 /// 30:52 read 8, 5, 4, 2, 0 for 68-60 and was still dead at 31:06.
-fn respawn_estimate(ends: &[u32], last_dead: u32) -> Option<u32> {
+pub(crate) fn respawn_estimate(ends: &[u32], last_dead: u32) -> Option<u32> {
     let ends: Vec<u32> = ends.iter().copied().filter(|&e| e + 1 >= last_dead).collect();
     let near = |a: u32, b: u32| a.abs_diff(b) <= 2;
     let best = ends.iter().copied().max_by_key(|&e| (ends.iter().filter(|&&f| near(f, e)).count(), e))?;
@@ -197,11 +208,9 @@ struct Attribution {
     /// (hero class, damage, sources), largest first.
     heroes: Vec<(String, u32, Vec<String>)>,
     guns: usize, troopers: u32, structures: Vec<(String, u32)>, neutral: Vec<(String, u32)>,
-    listed: u32, total: Option<u32>, zipline: bool, top: Option<(String, u32)>,
+    listed: u32, zipline: bool, top: Option<(String, u32)>,
 }
 impl Attribution {
-    /// The panel lists (nearly) everything: `total` read and the rows add up to 90% of it.
-    fn complete(&self) -> bool { self.total.is_some_and(|t| self.listed * 10 >= t * 9) }
     /// Fewest distinct enemy heroes: named ones, or one per separate gun row if more.
     fn min_heroes(&self) -> usize { self.heroes.len().max(self.guns) }
 }
@@ -242,7 +251,7 @@ impl ReviewCoach {
 
     fn attribute(&self, d: &Death, st: &State) -> Option<Attribution> {
         if d.panel.is_empty() { return None; }
-        let mut a = Attribution { total: d.total, ..Default::default() };
+        let mut a = Attribution::default();
         for r in &d.panel {
             a.listed += r.damage;
             if r.source.to_lowercase().contains("zipline") { a.zipline = true; }
@@ -301,12 +310,21 @@ impl ReviewCoach {
         Sample { clock, area, hp: s.hp.zip(s.max_hp).filter(|(h, m)| *m >= 100 && h <= m).map(|(h, m)| h as f32 / m as f32), you, nearest_ally,
             unseen: team.as_ref().map(|p| p.enemies_unseen), allies_dead: team.as_ref().map(|p| p.allies_dead.len()),
             enemies_dead: team.as_ref().map(|p| p.enemies_dead.len()), souls: s.souls, fight_at, deep_wave, effects,
-            alive: area != Area::Dead && s.screen.as_deref() == Some("Gameplay"), respawn: if area == Area::Dead { s.respawn_secs } else { None } }
+            alive: area != Area::Dead && s.screen.as_deref() == Some("Gameplay"), respawn: if area == Area::Dead { s.respawn_secs } else { None },
+            allies_dead_heroes: s.hero_status.iter().filter(|h| h.ally && h.dead == Some(true)).filter_map(|h| h.hero.clone()).collect(),
+            allies_alive_heroes: s.hero_status.iter().filter(|h| h.ally && h.dead == Some(false)).filter_map(|h| h.hero.clone()).filter(|h| s.hero.as_ref() != Some(h)).collect(),
+            banner: s.objective_banner.as_ref().filter(|b| b.own != Some(true) && !b.name.trim().is_empty()).map(|b| {
+                let n = b.name.trim().to_ascii_uppercase();
+                if n.contains("HIDDEN") || n.contains("ARCHMOTHER") || n.contains("PATRON") { "Patron".to_string() } else { b.name.trim().to_string() }
+            }) }
     }
 
-    /// Why the last death happened, from the samples before it and the damage panel.
-    /// Returns (spoken text, reason ids, summary).
-    fn death_review(&self, st: &State, death: &Death) -> (String, Vec<String>, Summary) {
+    /// Why the last death happened, from the samples before it and the damage panel: one coach
+    /// sentence of at most [`REVIEW_WORDS`] words, "You died because <cause>. Next life: <one
+    /// change>. <Buy X now | Spend N souls now>." The single most important cause is picked
+    /// (rec13: a 90-word list of facts missed "5 enemies dead, you at 15% hitting their Walker").
+    /// Returns (spoken text, the cause id, summary).
+    fn death_review(&self, st: &State, death: &Death, souls_now: Option<u32>) -> (String, Vec<String>, Summary) {
         let t = &self.catalog.thresholds;
         let data = game_data();
         let you = st.me.as_deref().map(|m| data.hero_name(m)).unwrap_or_default();
@@ -320,199 +338,175 @@ impl ReviewCoach {
         let before: Vec<&Sample> = st.samples.iter().filter(|x| x.area != Area::Dead && x.clock + t.death_window_secs >= end && x.clock <= end).collect();
         let alive_known: Vec<&&Sample> = before.iter().filter(|x| x.hp.is_some()).collect();
         let no_frames = before.iter().all(|x| x.area == Area::Unknown && x.hp.is_none());
-        // (rank, id, text) and (rank, id, lesson); lower rank = stronger evidence.
-        let mut reasons: Vec<(u8, String, String)> = vec![];
-        let mut lessons: Vec<(u8, String, String)> = vec![];
+        // (rank, id, because, next): lower rank = the more important cause.
+        let mut cands: Vec<(u8, String, String, String)> = vec![];
         let mut summary = Summary::default();
-        let add = |reasons: &mut Vec<(u8, String, String)>, lessons: &mut Vec<(u8, String, String)>, rank: u8, lrank: u8, id: &str, vars: &[(&str, String)]| {
+        let add = |cands: &mut Vec<(u8, String, String, String)>, rank: u8, id: &str, vars: &[(&str, String)]| {
             let (a, b) = self.fill(id, vars);
-            if !a.is_empty() { reasons.push((rank, id.to_string(), a)); }
-            if !b.is_empty() { lessons.push((lrank, id.to_string(), b)); }
+            if !a.is_empty() { cands.push((rank, id.to_string(), a, b)); }
         };
-        if no_frames { reasons.push((0, "no_frames".into(), self.card("no_frames").speech.clone())); }
+        // Your front line by name: the allied frontliner standing last (else "your front line").
+        let front_alive = before.last().map(|x| x.allies_alive_heroes.clone()).unwrap_or_default();
+        let front = front_alive.iter().find(|h| self.catalog.roles.frontline.contains(h)).map(|h| data.hero_name(h)).unwrap_or_else(|| "your front line".into());
 
         // --- The damage panel: who did it.
         let attr = self.attribute(death, st);
         let mut threats_seen: Vec<&Threat> = vec![];
+        let mut killer: Option<String> = None;
         if let Some(a) = &attr {
             for r in &death.panel { if let Some(th) = self.threat(&r.source) { if !threats_seen.iter().any(|x| x.source == th.source) { threats_seen.push(th); } } }
-            let pct = |d: u32| (d * 100 + a.listed / 2) / a.listed.max(1);
-            // A named hero leads the review only with a real share of the listed damage (rec3: an
-            // unnamed gun did 461 and Viscous 20).
-            let lead = a.heroes.first().filter(|x| x.1 * 5 >= a.listed);
-            if lead.is_none() {
-                if let Some((src, dmg)) = &a.top {
-                    let id = if a.heroes.is_empty() { "panel_generic" } else { "panel_top" };
-                    let src = if src.eq_ignore_ascii_case("gun damage") { "An enemy gun".to_string() } else { src.clone() };
-                    add(&mut reasons, &mut lessons, 0, 9, id, &[("source", src), ("dmg", num(*dmg))]);
-                }
-            }
-            if let Some((h, dmg, srcs)) = lead {
-                let name = data.hero_name(h);
-                let abilities = and_list(srcs);
+            // A named hero leads only with a real share of the listed damage (rec3: an unnamed gun
+            // did 461 and Viscous 20).
+            if let Some((h, _, srcs)) = a.heroes.first().filter(|x| x.1 * 5 >= a.listed) {
                 summary.main = Some(h.clone());
-                if a.heroes.len() == 1 && a.guns <= 1 && dmg * 10 >= a.listed * 4 {
-                    add(&mut reasons, &mut lessons, 0, 9, "solo", &[("hero", name.clone()), ("abilities", abilities)]);
-                } else {
-                    let id = if a.complete() { "killer" } else { "killer_partial" };
-                    add(&mut reasons, &mut lessons, 0, 9, id, &[("hero", name.clone()), ("dmg", num(*dmg)), ("pct", pct(*dmg).to_string()), ("abilities", abilities)]);
-                }
+                killer = Some(data.hero_name(h));
+                add(&mut cands, 12, "killer", &[("hero", data.hero_name(h)), ("abilities", and_list(&srcs.iter().take(2).cloned().collect::<Vec<_>>())), ("front", front.clone())]);
+            } else if let Some((src, dmg)) = &a.top {
+                let src = if src.eq_ignore_ascii_case("gun damage") { "An enemy gun".to_string() } else { src.clone() };
+                add(&mut cands, 14, "panel_top", &[("source", src), ("dmg", num(*dmg))]);
             }
-            if a.min_heroes() >= 2 {
-                let mut names: Vec<String> = a.heroes.iter().map(|x| data.hero_name(&x.0)).collect();
-                let extra = a.min_heroes() - a.heroes.len();
-                if extra == 1 && !names.is_empty() { names.push("another hero's gun".into()); }
-                else if extra >= 1 { names.push(format!("{extra} {}", if names.is_empty() { "separate guns" } else { "more guns" })); }
-                add(&mut reasons, &mut lessons, 1, 9, "involved", &[("count", a.min_heroes().to_string()), ("names", and_list(&names))]);
-            }
-            if let Some(kb) = death.kb.as_deref().filter(|k| !k.eq_ignore_ascii_case("gun damage")) {
-                let what = match self.classify(kb, st) { Src::Hero(h) => format!("{}'s {kb}", data.hero_name(&h)), _ => kb.to_string() };
-                add(&mut reasons, &mut lessons, 4, 9, "killing_blow", &[("what", what)]);
-            }
-            if a.troopers > 0 && (a.troopers * 10 >= a.listed || a.troopers >= 300) {
-                add(&mut reasons, &mut lessons, 2, 2, "troopers", &[("dmg", num(a.troopers))]);
-            }
-            if let Some((src, dmg)) = a.structures.iter().max_by_key(|x| x.1) {
-                add(&mut reasons, &mut lessons, 2, 2, "structure", &[("source", src.clone()), ("dmg", num(*dmg))]);
-            }
-            if let Some((src, dmg)) = a.neutral.iter().max_by_key(|x| x.1).filter(|x| x.1 * 10 >= a.listed) {
-                add(&mut reasons, &mut lessons, 5, 9, "neutral", &[("source", src.clone()), ("dmg", num(*dmg))]);
-            }
+            if a.troopers > 0 && (a.troopers * 10 >= a.listed || a.troopers >= 300) { add(&mut cands, 10, "troopers", &[("dmg", num(a.troopers))]); }
+            if let Some((src, _)) = a.structures.iter().max_by_key(|x| x.1) { add(&mut cands, 10, "structure", &[("source", src.clone())]); }
         }
+        let names: Vec<String> = attr.as_ref().map(|a| a.heroes.iter().take(2).map(|x| data.hero_name(&x.0)).collect()).unwrap_or_default();
+        let many = attr.as_ref().is_some_and(|a| a.min_heroes() >= 2);
+        let who = if names.len() >= 2 { and_list(&names) } else if many { format!("{} enemies", attr.as_ref().map(|a| a.min_heroes()).unwrap_or(2)) } else { String::new() };
+        if many { add(&mut cands, 11, "involved", &[("names", who.clone()), ("front", front.clone())]); }
+        // Without panel rows, a cause naming a threat ability is that threat (rec5 death 3).
+        if attr.is_none() { if let Some(th) = death.cause.as_deref().and_then(|c| self.threat(c)) { threats_seen.push(th); } }
         // Debuff badges seen on you before the death are threats too (Stalker's Mark 4-6 s
         // before the hit, rec5 death 4).
         for x in &before { for e in &x.effects { if let Some(th) = self.threat(e) { if !threats_seen.iter().any(|y| y.source == th.source) { threats_seen.push(th); } } } }
-        let replaced: Vec<&str> = threats_seen.iter().flat_map(|t| t.replaces.iter().map(String::as_str)).collect();
         for th in &threats_seen {
             if th.close { summary.close.push(th.source.clone()); }
-            if th.reason.is_empty() { continue; }
+            if th.because.is_empty() { continue; }
             let hero = data.hero_name(&th.hero);
-            let text = th.reason.replace("{hero}", &hero);
-            reasons.push((1, format!("threat:{}", th.source), text));
-            let lesson = if ranged && !th.lesson_ranged.is_empty() { &th.lesson_ranged } else { &th.lesson };
-            if !lesson.is_empty() { lessons.push((th.rank, format!("threat:{}", th.source), lesson.replace("{hero}", &hero).replace("{you}", &you))); }
+            let next = if ranged && !th.next_ranged.is_empty() { &th.next_ranged } else { &th.next };
+            cands.push((3, format!("threat:{}", th.source), th.because.replace("{hero}", &hero), next.replace("{hero}", &hero).replace("{you}", &you)));
         }
 
         // --- Crowd control in the window (status effects) and the zipline knock-off (panel row).
-        let mut cc: Vec<(u8, &str, String)> = vec![]; // (lesson rank, card, spoken fragment)
         let stuns = before.iter().enumerate().filter(|(i, x)| x.effects.iter().any(|e| e == "stunned")
             && (*i == 0 || !before[i - 1].effects.iter().any(|e| e == "stunned"))).count();
         let has = |e: &str| before.iter().any(|x| x.effects.iter().any(|y| y == e));
-        if has("knocked_off_zipline") || attr.as_ref().is_some_and(|a| a.zipline) { cc.push((2, "cc_zipline", String::new())); }
-        if stuns > 0 { cc.push((3, "cc_stunned", match stuns { 1 => String::new(), 2 => " twice".into(), n => format!(" {n} times") })); }
-        if has("silenced") { cc.push((3, "cc_silenced", String::new())); }
-        if has("disarmed") { cc.push((3, "cc_disarmed", String::new())); }
-        if has("out_of_stamina") { cc.push((3, "cc_out_of_stamina", String::new())); }
-        if !cc.is_empty() {
-            // Spoken in the order the player lives it: stun / silence first, then the knock-off.
-            let order = ["cc_stunned", "cc_silenced", "cc_disarmed", "cc_zipline", "cc_out_of_stamina"];
-            let mut frags: Vec<(usize, String)> = cc.iter().map(|(_, id, times)| (order.iter().position(|o| o == id).unwrap_or(9), self.card(id).speech.replace("{times}", times))).collect();
-            frags.sort();
-            let list: Vec<String> = frags.into_iter().map(|f| f.1).collect();
-            add(&mut reasons, &mut lessons, 1, 9, "cc", &[("effects", and_list(&list))]);
-            for (lr, id, _) in &cc { lessons.push((*lr, id.to_string(), self.card(id).lesson.clone())); }
-            summary.cc = cc.iter().map(|c| c.1.trim_start_matches("cc_").to_string()).collect();
+        let zipline = has("knocked_off_zipline") || attr.as_ref().is_some_and(|a| a.zipline);
+        if zipline { add(&mut cands, 1, "zipline", &[("who", killer.clone().unwrap_or_else(|| "A hit".into())), ("front", front.clone())]); }
+        if stuns > 0 {
+            let times = match stuns { 1 => String::new(), 2 => " twice".into(), n => format!(" {n} times") };
+            let finish = killer.clone().map(|k| format!("{k} finished you")).unwrap_or_else(|| "you couldn't get out".into());
+            add(&mut cands, 5, "stunned", &[("times", times), ("finish", finish)]);
         }
+        let mut cc: Vec<&str> = vec![];
+        if zipline { cc.push("cc_zipline"); }
+        if stuns > 0 { cc.push("cc_stunned"); }
+        for (e, id) in [("silenced", "cc_silenced"), ("disarmed", "cc_disarmed"), ("out_of_stamina", "cc_out_of_stamina")] { if has(e) { cc.push(id); } }
+        summary.cc = cc.iter().map(|c| c.trim_start_matches("cc_").to_string()).collect();
 
-        // --- Repeat killer by hero (and the counter item), else by cause family.
+        // --- Repeat killer by hero (the counter item is the buy line), else by cause family.
         let souls_at = before.iter().rev().filter_map(|x| x.souls).next().or(if no_frames { death.souls_dead } else { None });
-        let mut repeat_hero = false;
+        let mut buy: Option<String> = None;
         if let Some(main) = &summary.main {
             let n = 1 + st.deaths.iter().filter(|d| d.clock != death.clock).filter(|d| d.summary.as_ref().and_then(|s| s.main.as_ref()) == Some(main)).count();
             if n >= 2 {
-                repeat_hero = true;
                 let hero = data.hero_name(main);
-                add(&mut reasons, &mut lessons, 2, 8, "repeat_killer", &[("count", n.to_string()), ("hero", hero.clone())]);
-                // Need: the hero's named threat (Aura -> spirit, Mark -> debuff), else spirit for
-                // ability damage.
                 let th = threats_seen.iter().find(|t| &t.hero == main && !t.counter.is_empty());
                 let need = th.map(|t| t.counter.as_str()).unwrap_or("spirit");
-                if let Some(l) = self.counter(need, &hero, th.map(|t| t.source.as_str()).unwrap_or("these"), souls_at, st) { lessons.push((0, "counter_item".into(), l)); }
+                add(&mut cands, 9, "repeat_killer", &[("count", n.to_string()), ("hero", hero.clone())]);
+                if let Some((item, cost)) = self.counter_item(need, st) {
+                    if souls_now.or(souls_at).is_none_or(|s| s >= cost) { buy = Some(self.fill("buy_item", &[("item", item)]).0); }
+                }
             }
         }
-        if !repeat_hero && death.panel.is_empty() {
+        if death.panel.is_empty() && summary.main.is_none() {
             if let Some(fam) = death.cause.as_deref().map(cause_family) {
                 let n = st.deaths.iter().filter(|d| d.cause.as_deref().map(cause_family).as_deref() == Some(fam.as_str())).count();
-                if n >= 2 { add(&mut reasons, &mut lessons, 3, 3, "repeat_cause", &[("count", n.to_string()), ("cause", fam)]); }
+                if n >= 2 { add(&mut cands, 13, "repeat_cause", &[("count", n.to_string()), ("cause", fam)]); }
             }
         }
 
         // --- What the frames before the death showed.
         if !no_frames {
+            // Won the fight, then hit a structure nearly dead: three or more enemies dead, you under
+            // 30%, and structure damage on the panel or a structure banner up (rec13 29:25: five
+            // enemies dead, 15% health, their Walker).
+            let won = before.iter().filter_map(|x| x.enemies_dead).max().is_some_and(|n| n >= 3);
+            let low = alive_known.iter().filter_map(|x| x.hp).fold(1.0f32, f32::min);
+            let structure = attr.as_ref().and_then(|a| a.structures.iter().max_by_key(|x| x.1).map(|x| x.0.clone()))
+                .or_else(|| death.structures_seen.first().cloned()).or_else(|| before.iter().rev().find_map(|x| x.banner.clone()));
+            if let (true, true, Some(s)) = (won, low < 0.3, structure) {
+                add(&mut cands, 0, "won_fight_structure", &[("structure", s), ("pct", format!("{:.0}", (low * 100.0).max(1.0)))]);
+            }
             // Burst: from the healthiest reading in the window (the earliest one at that level) to
             // the end; rec5 said "69% to dead in 2 s" for a 100% -> 0 fall over ~10 s.
             let peak = alive_known.iter().map(|x| x.hp.unwrap()).fold(0.0f32, f32::max);
-            // From 30%: rec5 went back in at 49% and fell to dead in 6 s, which is still a burst.
             if let Some(h) = alive_known.iter().find(|x| x.hp.is_some_and(|h| h >= 0.3 && h >= peak - 0.03)) {
-                // If even the last alive reading was healthy, the fall was between readings: count
-                // to the death screen instead (an upper bound, never an invented shorter time).
                 let secs = (if h.clock == end { death.clock } else { end }).saturating_sub(h.clock).max(2);
-                // 15 s: the death screen is seen a few seconds after the killing blow.
                 if secs <= 15 {
-                    let (text, _) = self.fill("burst", &[("from", format!("{:.0}", h.hp.unwrap() * 100.0)), ("secs", secs.to_string())]);
-                    reasons.push((3, "burst".into(), text));
-                    if !replaced.contains(&"burst") {
-                        let l = if ranged { self.fill("burst_ranged", &[("you", you.clone())]).1 } else { self.card("burst").lesson.clone() };
-                        lessons.push((4, "burst".into(), l));
-                    }
+                    let by = killer.clone().or_else(|| (!who.is_empty()).then(|| who.clone())).unwrap_or_else(|| "They".into());
+                    let id = if ranged { "burst_ranged" } else { "burst" };
+                    add(&mut cands, 11, id, &[("by", by), ("from", format!("{:.0}", h.hp.unwrap() * 100.0)), ("secs", secs.to_string()), ("you", you.clone()), ("front", front.clone())]);
                 }
             }
-            // Teammates dying in the window before you.
-            let dead_first = before.iter().filter_map(|x| x.allies_dead).next();
-            let dead_last = before.iter().rev().filter_map(|x| x.allies_dead).next();
-            if let (Some(a), Some(b)) = (dead_first, dead_last) { if b > a { add(&mut reasons, &mut lessons, 2, 2, "fight_lost", &[("count", plural(b - a, "teammate", "teammates"))]); } }
+            // Teammates dying in the window before you, by name; a frontliner first is its own cause.
+            let first_dead = before.iter().find(|x| x.allies_dead.is_some()).map(|x| x.allies_dead_heroes.clone()).unwrap_or_default();
+            let fell: Vec<String> = before.iter().rev().find(|x| x.allies_dead.is_some()).map(|x| x.allies_dead_heroes.iter().filter(|h| !first_dead.contains(h)).cloned().collect()).unwrap_or_default();
+            let (dead_first, dead_last) = (before.iter().filter_map(|x| x.allies_dead).next(), before.iter().rev().filter_map(|x| x.allies_dead).next());
+            if let Some(f) = fell.iter().find(|h| self.catalog.roles.frontline.contains(h)) {
+                add(&mut cands, 2, "frontline_down", &[("front", data.hero_name(f))]);
+            } else if let (Some(a), Some(b)) = (dead_first, dead_last) {
+                if b > a {
+                    let named: Vec<String> = fell.iter().take(2).map(|h| data.hero_name(h)).collect();
+                    let count = if named.len() == b - a { and_list(&named) } else { plural(b - a, "teammate", "teammates") };
+                    add(&mut cands, 7, "fight_lost", &[("count", count)]);
+                }
+            }
             // Alone = teammates were visible on the minimap and all far (unseen is not "far").
             let recent: Vec<&&Sample> = before.iter().rev().filter(|x| x.nearest_ally.is_some()).take(4).collect();
             let alone = !recent.is_empty() && recent.iter().all(|x| x.nearest_ally.is_some_and(|d| d > t.alone_distance));
-            let after_respawn = st.respawned_at.is_some_and(|r| end.saturating_sub(r) <= t.respawn_window_secs);
-            if alone && after_respawn { add(&mut reasons, &mut lessons, 2, 2, "respawn_alone", &[("secs", end.saturating_sub(st.respawned_at.unwrap()).to_string())]); }
-            else if alone { add(&mut reasons, &mut lessons, 4, 4, "alone", &[]); }
-            else if st.respawned_at.is_some_and(|r| end >= r && end - r <= 90) {
-                add(&mut reasons, &mut lessons, 4, 5, "soon_after_respawn", &[("secs", (end - st.respawned_at.unwrap()).to_string())]);
-            }
+            // "After respawning" only from a confirmed respawn (the engine's LifeTracker).
+            let after_respawn = st.respawned_at.is_some_and(|r| end >= r && end - r <= t.respawn_window_secs);
+            if alone && many { add(&mut cands, 4, "solo_vs", &[("names", who.clone())]); }
+            if alone && after_respawn { add(&mut cands, 6, "respawn_alone", &[("secs", end.saturating_sub(st.respawned_at.unwrap()).to_string())]); }
+            else if alone { add(&mut cands, 13, "alone", &[]); }
             // Went back in weak: every health reading of the last 30 s under 60% (rec5: 44-49% for
             // 30 s after shopping, then dead).
             let minute: Vec<f32> = st.samples.iter().filter(|x| x.clock + 30 >= end && x.clock <= end).filter_map(|x| x.hp).collect();
             if minute.len() >= 3 && minute.iter().all(|h| *h < 0.6) {
                 let top = minute.iter().copied().fold(0.0f32, f32::max);
-                add(&mut reasons, &mut lessons, 2, 1, "weak_entry", &[("pct", format!("{}", ((top * 100.0 / 5.0).ceil() * 5.0) as u32))]);
+                let against = killer.clone().map(|k| format!(" against {k}")).unwrap_or_default();
+                add(&mut cands, 8, "weak_entry", &[("pct", format!("{}", ((top * 100.0 / 5.0).ceil() * 5.0) as u32)), ("against", against)]);
             }
             // In the enemy half with enemies unseen.
             if let Some(x) = before.iter().rev().find(|x| x.you.is_some_and(|p| p.y < 0.48) && x.unseen.is_some_and(|u| u >= t.unseen_enemies)) {
-                add(&mut reasons, &mut lessons, 3, 3, "forward_missing", &[("count", plural(x.unseen.unwrap(), "enemy", "enemies"))]);
+                add(&mut cands, 9, "forward_missing", &[("count", plural(x.unseen.unwrap(), "enemy", "enemies"))]);
             }
         }
-        let souls_reason = souls_at.filter(|v| *v >= t.souls_at_death.max(crate::economy::death_spend(death.clock))).map(|souls| self.fill("souls", &[("souls", num(souls))]));
-        // Non-hero killers (Midboss, Walker, structures, troopers) have their own advice when the
-        // panel rows were not read.
+        // Non-hero killers (Midboss, Walker, structures, troopers) when the panel rows were not read.
         if attr.is_none() {
-            if let Some((tag, advice)) = death.cause.as_deref().map(crate::death_cause_advice).filter(|(tag, _)| *tag != "heroes") {
-                if no_frames { lessons.push((0, format!("cause_{tag}"), advice.to_string())); } else { reasons.push((0, format!("cause_{tag}"), advice.to_string())); }
-            }
+            if let Some((because, next)) = death.cause.as_deref().and_then(crate::death_cause_parts) { cands.push((10, "cause".into(), because.into(), next.into())); }
+            else if let Some(c) = death.cause.as_deref() { add(&mut cands, 14, "panel_top", &[("source", c.to_string()), ("dmg", "most".into())]); }
         }
-        if reasons.is_empty() && souls_reason.is_none() { add(&mut reasons, &mut lessons, 9, 9, "no_reason", &[]); }
-        if no_frames && lessons.is_empty() { lessons.push((9, "no_frames".into(), self.card("no_frames").lesson.clone())); }
-        // Only a souls lesson when no counter item already names what to buy.
-        if let Some((_, lesson)) = &souls_reason { if !lessons.iter().any(|l| l.1 == "counter_item") { lessons.push((5, "souls".into(), lesson.clone())); } }
-        // Lessons: the two with the strongest evidence, without repeats.
-        lessons.sort_by_key(|l| l.0);
-        let mut picked: Vec<&(u8, String, String)> = vec![];
-        for l in &lessons { if !picked.iter().any(|p| p.2 == l.2) && picked.len() < 2 { picked.push(l); } }
-        // Reasons: the strongest four, plus the one behind each picked lesson (a lesson is never
-        // given without the observation it answers).
-        let backs = |id: &str| -> String { if id.starts_with("cc_") { "cc".into() } else if id == "counter_item" { "repeat_killer".into() } else { id.to_string() } };
-        let needed: Vec<String> = picked.iter().map(|l| backs(&l.1)).collect();
-        reasons.sort_by_key(|r| r.0);
-        let limit = if no_frames { 5 } else { 4 };
-        let mut top: Vec<(u8, String, String)> = vec![];
-        for r in reasons { if top.len() < limit || needed.contains(&r.1) { top.push(r); } }
-        if let Some((text, _)) = souls_reason { top.push((5, "souls".into(), text)); }
-        let why = top.iter().map(|r| r.2.as_str()).collect::<Vec<_>>().join(" ");
-        let picked: Vec<&str> = picked.iter().map(|l| l.2.as_str()).collect();
-        let cause = if death.panel.is_empty() { death.cause.as_deref().map(|c| format!("Damage panel: {c}. ")).unwrap_or_default() } else { String::new() };
-        let next = if picked.is_empty() { String::new() } else { format!("Next time: {}", picked.join(" ")) };
-        let lead = if no_frames { "" } else { "Why you died: " };
-        (format!("{lead}{why} {cause}{next}").trim_end().to_string(), top.iter().map(|r| r.1.clone()).collect(), summary)
+        let souls = souls_now.or(souls_at).filter(|v| *v >= t.souls_at_death.max(crate::economy::death_spend(death.clock)));
+        if buy.is_none() { if let Some(v) = souls { buy = Some(self.fill("spend", &[("souls", num(v))]).0); } }
+        cands.sort_by_key(|c| c.0);
+        let text = match cands.first() {
+            Some((_, _, because, next)) => {
+                let lead = if no_frames { self.card("no_frames").speech.clone() } else { String::new() };
+                format!("{lead}{}", self.fill("review", &[("because", because.clone()), ("next", next.clone())]).0)
+            }
+            None => self.card("no_reason").speech.clone(),
+        };
+        let text = match &buy { Some(b) if words(&text) + words(b) <= REVIEW_WORDS => format!("{text} {b}"), _ => text };
+        (text, cands.first().map(|c| vec![c.1.clone()]).unwrap_or_default(), summary)
+    }
+
+    /// The counter item for `need` not owned yet: (name, cost).
+    fn counter_item(&self, need: &str, st: &State) -> Option<(String, u32)> {
+        let c = self.catalog.counters.iter().find(|c| c.need == need)?;
+        let data = game_data();
+        c.items.iter().filter_map(|n| data.item(n))
+            .filter(|i| format!("{} {}", i.desc, i.effect).to_lowercase().contains(&c.keyword.to_lowercase()))
+            .find(|i| !st.own_items.contains(&i.class_name)).map(|i| (i.name.clone(), i.cost))
     }
 
     /// The last `pattern_window_secs` of play summarised in a few observations.
@@ -635,7 +629,9 @@ impl ReviewCoach {
             out.push(self.fill("pattern_good", &[("min", min.to_string()), ("good", and_list(&good))]));
             good.clear();
         }
-        let mut picked: Vec<_> = out.into_iter().take(3).collect();
+        // Two observations and one good thing at most: a summary is a call, not a report.
+        let mut picked: Vec<_> = out.into_iter().take(2).collect();
+        good.truncate(1);
         // A balanced summary: the criticism, then what went well.
         if !good.is_empty() { picked.push(self.fill("pattern_balance", &[("good", and_list(&good))])); }
         let text = picked.iter().map(|(a, b)| format!("{a} {b}").trim_end().to_string()).collect::<Vec<_>>().join(" ");
@@ -699,6 +695,7 @@ impl Rule for ReviewCoach {
                 if let Some(c) = s.death_cause.clone() { d.cause = Some(c); d.cause_at.get_or_insert(clock); }
                 if !s.death_damage.is_empty() && clock <= d.clock + 25 {
                     d.panel = s.death_damage.clone();
+                    for r in &s.death_damage { let l = r.source.to_lowercase(); if ["guardian", "walker", "shrine", "patron"].iter().any(|k| l.contains(k)) && !d.structures_seen.contains(&r.source) { d.structures_seen.push(r.source.clone()); } }
                     if s.death_killing_blow.is_some() { d.kb = s.death_killing_blow.clone(); }
                     if s.death_total_damage.is_some() { d.total = s.death_total_damage; }
                 }
@@ -714,7 +711,7 @@ impl Rule for ReviewCoach {
             });
             if ready {
                 let death = st.deaths.last().unwrap().clone();
-                let (text, _, summary) = self.death_review(&st, &death);
+                let (text, _, summary) = self.death_review(&st, &death, s.souls);
                 st.reviewed = true;
                 if let Some(d) = st.deaths.last_mut() { d.summary = Some(summary); }
                 cues.push(Cue { key: format!("death:review:{}", death.clock), text, priority: Priority::High, cooldown_secs: 600 });
@@ -733,8 +730,23 @@ impl Rule for ReviewCoach {
             // Live: two teammates fell in the last 10 s while an enemy is on you.
             let earlier = st.samples.iter().filter(|x| x.clock + 10 >= clock).filter_map(|x| x.allies_dead).next();
             let enemy_close = me.is_some_and(|me| s.minimap.as_ref().is_some_and(|m| m.heroes.iter().any(|h| !h.ally && h.confirmed() && h.unseen_ms <= 3000 && dist(h.pos, me) <= 0.2)));
-            if let (Some(a), Some(b)) = (earlier, sample.allies_dead) { if b >= a + 2 && enemy_close {
-                let (text, _) = self.fill("live_fight_lost", &[("count", plural(b - a, "teammate", "teammates"))]);
+            // A frontliner falling with an enemy on you is the same exit call (rec13 40:35: "Bebop
+            // and Rem are down, back out now").
+            let was: Vec<String> = st.samples.iter().filter(|x| x.clock + 10 >= clock).find(|x| x.allies_dead.is_some()).map(|x| x.allies_dead_heroes.clone()).unwrap_or_default();
+            let fell: Vec<String> = sample.allies_dead_heroes.iter().filter(|h| !was.contains(h)).cloned().collect();
+            // One frontliner is enough only in a team fight around you (a teammate and two enemies
+            // within 0.2): top-bar slots have no position, a death across the map is not yours.
+            let near = |ally: bool| me.map_or(0, |me| s.minimap.as_ref().map_or(0, |m| m.heroes.iter().filter(|h| h.ally == ally && h.confirmed() && h.unseen_ms <= 3000 && dist(h.pos, me) <= 0.2).count()));
+            let front_fell = fell.iter().any(|h| self.catalog.roles.frontline.contains(h)) && near(true) >= 1 && near(false) >= 2;
+            if let (Some(a), Some(b)) = (earlier, sample.allies_dead) { if (b >= a + 2 || b > a && front_fell) && enemy_close {
+                let data = game_data();
+                let names: Vec<String> = fell.iter().take(2).map(|h| data.hero_name(h)).collect();
+                let down = match (names.len(), b - a) {
+                    (1, 1) => format!("{}'s down", names[0]),
+                    (n, k) if n >= 2 && n == k => format!("{} are down", and_list(&names)),
+                    (_, k) => format!("{} are down", plural(k, "teammate", "teammates")),
+                };
+                let (text, _) = self.fill("live_fight_lost", &[("down", down)]);
                 cues.push(Cue { key: "review:fight-lost".into(), text, priority: Priority::High, cooldown_secs: 30 });
             }}
             // Live: leaving base alone right after a respawn with enemies unseen.

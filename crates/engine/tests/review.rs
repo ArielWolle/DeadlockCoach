@@ -58,6 +58,12 @@ fn replay_recordings() {
     }
 }
 
+/// A death review is one short coach sentence: cause, next life, buy (docs/coach-review-13.md).
+fn short(t: &str) {
+    assert!(t.split_whitespace().count() <= coach_engine::review::REVIEW_WORDS, "{} words: {t}", t.split_whitespace().count());
+    assert!(t.starts_with("You died because") || t.starts_with("No frames"), "{t}");
+    assert!(!t.contains('{'), "{t}");
+}
 fn rows(r: &[(&str, u32)]) -> Vec<DamageRow> { r.iter().map(|(s, d)| DamageRow { source: s.to_string(), hits: None, damage: *d }).collect() }
 fn enemy_team() -> Vec<String> { ["hero_drifter", "hero_artist", "hero_nurse", "hero_frank", "hero_doorman", "hero_chrono"].map(String::from).to_vec() }
 fn panel(clock: u32, r: &[(&str, u32)], kb: &str, total: Option<u32>) -> GameSnapshot {
@@ -78,13 +84,9 @@ fn the_panel_names_the_heroes_the_crowd_control_and_a_hero_specific_lesson() {
     let rows = [("Aura of Suffering", 789), ("Still Life", 613), ("Lurking Terrors", 540), ("Knocked off Zipline", 332), ("Sinner's Sacrifice", 320), ("Mystic Shot", 175)];
     r.evaluate(&panel(1500, &rows, "Mystic Shot", Some(4451)));
     let t = &r.evaluate(&panel(1505, &rows, "Mystic Shot", Some(4451)))[0].text;
-    assert!(t.contains("Victor did at least 789 damage with Aura of Suffering, 28% of what the panel lists"), "{t}");
-    assert!(t.contains("At least 3 enemy heroes hit you: Victor, Violet and Nurse Harrow"), "{t}");
-    assert!(t.contains("You were stunned twice and knocked off the zipline"), "{t}");
-    assert!(t.contains("inside Victor's Aura of Suffering"), "{t}");
-    assert!(t.contains("As Grey Talon, back off to max range when the Aura of Suffering badge appears"), "{t}");
-    assert!(t.contains("Get off the zipline before you reach a fight"), "{t}");
-    assert!(!t.contains("no clear cause"), "{t}");
+    // One cause, the most important: the knock-off that put him in the aura.
+    assert!(t.starts_with("You died because Victor knocked you off the zipline into the fight. Next life: hop off before the fight"), "{t}");
+    short(t);
 }
 
 #[test]
@@ -95,8 +97,8 @@ fn a_marked_solo_kill_by_a_repeat_killer_gets_the_mark_lesson_and_a_counter_item
     r.evaluate(&alive(2300, 1500, p, Some(Lane::Yellow), vec![], team(0, 0), 800));
     r.evaluate(&panel(2310, &[("Gun Damage", 604), ("Gun Damage", 417), ("Bloodscent", 241), ("Rend", 231)], "Gun Damage", None));
     let t = &r.evaluate(&panel(2318, &[("Gun Damage", 604), ("Gun Damage", 417), ("Bloodscent", 241), ("Rend", 231)], "Gun Damage", None))[0].text;
-    assert!(t.contains("At least 2 enemy heroes hit you: Drifter and another hero's gun"), "{t}");
-    assert!(t.contains("you were isolated"), "{t}");
+    assert!(t.contains("You died because Drifter caught you isolated. Next life: stay within 20 meters of a teammate."), "{t}");
+    short(t);
     // Respawn, marked, silenced, knocked off the zipline, solo kill holding 3,467 souls.
     for (c, hp, fx) in [(2402u32, 3199u32, vec![]), (2449, 2745, vec!["silenced", "stalkers mark"]), (2459, 1831, vec!["stunned", "knocked_off_zipline"])] {
         let mut s = alive(c, hp, p, Some(Lane::Yellow), vec![], team(0, 0), 3467);
@@ -106,11 +108,10 @@ fn a_marked_solo_kill_by_a_repeat_killer_gets_the_mark_lesson_and_a_counter_item
     let rows = [("Stalker's Mark", 895), ("Melee", 638), ("Rend", 559), ("Knocked off Zipline", 473), ("Spirit Burn", 214)];
     r.evaluate(&panel(2463, &rows, "Spirit Burn", Some(3332)));
     let t = &r.evaluate(&panel(2468, &rows, "Spirit Burn", Some(3332)))[0].text;
-    assert!(t.contains("Drifter is the only hero named on the damage panel, with Stalker's Mark and Rend: likely a solo kill"), "{t}");
-    assert!(t.contains("That is 2 deaths to Drifter"), "{t}");
-    assert!(t.contains("When Stalker's Mark is on you, stand next to a teammate"), "{t}");
-    assert!(t.contains("Buy Dispel Magic (3,200), you had 3,467 souls"), "{t}");
-    assert!(!t.contains("first big hit"), "wrong advice against a Mark commit: {t}");
+    // Knocked off the zipline is the cause; the repeat killer's counter item is the buy line.
+    assert!(t.starts_with("You died because Drifter knocked you off the zipline into the fight."), "{t}");
+    assert!(t.ends_with("Buy Dispel Magic now."), "{t}");
+    short(t);
 }
 
 #[test]
@@ -122,9 +123,7 @@ fn a_panel_without_named_heroes_is_reported_not_called_unclear() {
     r.evaluate(&d);
     let mut d = dead(913, Some("Trooper")); d.death_damage = super_rows(&rows);
     let t = &r.evaluate(&d)[0].text;
-    assert!(t.contains("The damage panel shows Trooper as the biggest source (700)"), "{t}");
-    assert!(t.contains("Troopers did 700 damage: you were fighting inside their wave"), "{t}");
-    assert!(!t.contains("no clear cause"), "{t}");
+    assert_eq!(t, "You died because you fought inside their wave. Next life: fight from behind our wave.");
 }
 fn super_rows(r: &[(&str, u32)]) -> Vec<DamageRow> { rows(r) }
 
@@ -152,7 +151,6 @@ fn the_pattern_names_a_repeat_killer_crowd_control_and_close_range_deaths() {
     assert!(p.text.contains("Drifter killed you 2 times in the last"), "{}", p.text);
     assert!(p.text.contains("Buy Dispel Magic (3,200)"), "{}", p.text);
     assert!(p.text.contains("crowd-controlled before both deaths (stunned)"), "{}", p.text);
-    assert!(p.text.contains("Both deaths were at close range (Stalker's Mark, Rend and Melee)"), "{}", p.text);
 }
 
 /// Top bar: `allies_dead` of slots 0-5 dead, `unseen` alive enemies without a health bar.
@@ -180,11 +178,9 @@ fn a_death_is_explained_once_from_the_seconds_before_it() {
     assert!(r.evaluate(&dead(1012, Some("Sticky"))).is_empty(), "waits for the damage panel to fill in");
     let c = r.evaluate(&dead(1017, Some("Hyper Beam")));
     assert_eq!(c.len(), 1); let t = &c[0].text;
-    assert!(t.starts_with("Why you died:"), "{t}");
-    assert!(t.contains("from 96% to dead in 10 seconds"), "{t}"); // healthiest reading 1000 -> last alive 1010
-    assert!(t.contains("their half with 4 enemies"), "{t}");
-    assert!(t.contains("Damage panel: Hyper Beam"), "{t}");
-    assert!(t.contains("Next time:"), "{t}");
+    // In their half with four missing beats the burst and being alone; the souls are the buy line.
+    assert_eq!(t, "You died because you were in their half with 4 enemies missing. Next life: when enemies are missing, stay behind your wave. Spend 3,019 souls now.");
+    short(t);
     // Re-offered under the same per-death key while dead (another cue may take a frame's slot).
     assert_eq!(r.evaluate(&dead(1019, Some("Hyper Beam")))[0].key, c[0].key);
 }
@@ -213,7 +209,7 @@ fn teammates_falling_and_walking_out_alone_after_respawn_are_named() {
     r.evaluate(&alive(505, 1500, p, Some(Lane::Blue), vec![track(1, true, 0.31, 0.6)], team(2, 1), 500));
     r.evaluate(&dead(508, Some("Melee")));
     let t = &r.evaluate(&dead(513, Some("Melee")))[0].text;
-    assert!(t.contains("2 teammates died just before you"), "{t}");
+    assert!(t.contains("You died because 2 teammates fell and you stayed in."), "{t}");
     // Respawn, walk out alone, die again to melee: respawn-alone and the repeated cause.
     r.evaluate(&alive(540, 2500, Pt { x: 0.3, y: 0.9 }, None, vec![], team(0, 4), 500));
     let warn = r.evaluate(&alive(550, 2500, Pt { x: 0.2, y: 0.65 }, Some(Lane::Green), vec![track(1, true, 0.8, 0.5)], team(0, 4), 500));
@@ -221,8 +217,7 @@ fn teammates_falling_and_walking_out_alone_after_respawn_are_named() {
     r.evaluate(&alive(556, 2300, Pt { x: 0.2, y: 0.6 }, Some(Lane::Green), vec![track(1, true, 0.8, 0.5)], team(0, 4), 500));
     r.evaluate(&dead(560, Some("Melee Killing Blow")));
     let t = &r.evaluate(&dead(565, Some("Melee Killing Blow")))[0].text;
-    assert!(t.contains("alone 16 seconds after respawning"), "{t}"); // respawn 540 -> last alive 556
-    assert!(t.contains("2 deaths to melee hits"), "{t}");
+    assert!(t.contains("You died because you walked out alone 16 seconds after respawning."), "{t}"); // respawn 540 -> last alive 556
 }
 
 #[test]
@@ -248,7 +243,7 @@ fn fight_lost_is_called_live_when_two_teammates_fall_beside_you() {
     let foe = vec![track(9, false, 0.55, 0.5)];
     assert!(r.evaluate(&alive(700, 2000, p, Some(Lane::Blue), foe.clone(), team(0, 0), 500)).is_empty());
     let c = r.evaluate(&alive(706, 1800, p, Some(Lane::Blue), foe, team(2, 0), 500));
-    assert!(c.iter().any(|c| c.key == "review:fight-lost" && c.text.contains("2 teammates just died")), "{c:?}");
+    assert!(c.iter().any(|c| c.key == "review:fight-lost" && c.text == "Back out: 2 teammates are down."), "{c:?}");
 }
 
 #[test]
@@ -257,7 +252,7 @@ fn a_recording_gap_is_named_and_starts_a_new_death() {
     let mut d = dead(1500, Some("Still Life")); d.respawn_secs = Some(40);
     r.evaluate(&d);
     let mut d = dead(1506, Some("Aura of Suffering")); d.respawn_secs = Some(34);
-    let first = r.evaluate(&d); assert!(first[0].text.contains("No screenshots were recorded"), "{first:?}");
+    let first = r.evaluate(&d); assert!(first[0].text.starts_with("No frames before this death. You died because"), "{first:?}");
     assert!(first[0].text.contains("Aura of Suffering"), "the latest panel reading wins: {first:?}");
     // A misread respawn timer jumping up is not a new death...
     let mut d = dead(1512, Some("Aura of Suffering")); d.respawn_secs = Some(45);
@@ -328,8 +323,8 @@ fn going_back_in_at_half_health_is_called_out() {
     }
     r.evaluate(&dead(2324, Some("Gun Damage")));
     let t = &r.evaluate(&dead(2329, Some("Gun Damage")))[0].text;
-    assert!(t.contains("under 50% health for the 30 seconds before"), "{t}");
-    assert!(t.contains("shopping does not heal"), "{t}");
+    assert!(t.contains("You died because you stayed in under 50% health."), "{t}");
+    assert!(t.contains("shopping doesn't heal"), "{t}");
 }
 
 // Time dead = first death screen -> respawn (docs/player-profile.md "Time dead", shared with the
@@ -392,5 +387,68 @@ fn a_critical_summary_also_says_what_went_well() {
         s
     });
     let h = p.iter().find(|t| t.contains("You held over")).unwrap_or_else(|| panic!("{p:?}"));
-    assert!(h.contains("What went well: no deaths and you were with your team for 1 fight."), "{h}");
+    assert!(h.contains("What went well: no deaths."), "{h}");
+}
+// ---- One cause per death (docs/coach-review-13.md item 2) -------------------------------------
+
+fn named_team(dead: &[&str], enemies_dead: usize) -> Vec<HeroStatus> {
+    let allies = ["hero_bebop", "hero_familiar", "hero_mirage", "hero_fencer", "hero_punkgoat", "hero_orion"];
+    (0..12).map(|i| {
+        let ally = i < 6;
+        let hero = if ally { Some(allies[i].to_string()) } else { None };
+        let d = if ally { dead.contains(&allies[i]) } else { i - 6 < enemies_dead };
+        HeroStatus { ally, slot: i % 6, hero, dead: Some(d), bar_visible: Some(true), ..Default::default() }
+    }).collect()
+}
+#[test]
+fn a_won_fight_then_a_structure_at_low_health_is_the_cause() {
+    // rec13 29:05-29:25: five enemies dead, 15% health, hitting their Walker.
+    let r = ReviewCoach::default();
+    let p = Pt { x: 0.3, y: 0.3 };
+    for (t, hp) in [(1740u32, 2000u32), (1745, 900), (1749, 320), (1753, 330)] {
+        let mut s = alive(t, hp, p, Some(Lane::Green), vec![track(1, true, 0.31, 0.3)], named_team(&[], 5), 5579); s.hero = Some("hero_orion".into()); r.evaluate(&s);
+    }
+    let rows = [("Afterburn", 869), ("Walker", 1045), ("Grasping Hands", 439)];
+    r.evaluate(&panel(1756, &rows, "Walker", None));
+    let t = &r.evaluate(&panel(1762, &rows, "Walker", None))[0].text;
+    assert!(t.starts_with("You died because you hit their Walker at 13% after the fight was won. Next life: back off and heal first"), "{t}");
+    short(t);
+}
+#[test]
+fn the_frontliner_falling_first_is_the_cause_and_the_live_exit_names_him() {
+    let r = ReviewCoach::default();
+    let p = Pt { x: 0.25, y: 0.35 };
+    let near = vec![track(1, true, 0.27, 0.35), track(2, false, 0.3, 0.33), track(3, false, 0.22, 0.31)];
+    let mut s = alive(2440, 2600, p, Some(Lane::Green), near.clone(), named_team(&[], 0), 900); s.hero = Some("hero_orion".into());
+    assert!(r.evaluate(&s).is_empty());
+    let mut s = alive(2445, 2000, p, Some(Lane::Green), near.clone(), named_team(&["hero_bebop"], 0), 900); s.hero = Some("hero_orion".into());
+    let live = r.evaluate(&s);
+    assert!(live.iter().any(|c| c.key == "review:fight-lost" && c.text == "Back out: Bebop's down."), "{live:?}");
+    let mut s = alive(2449, 900, p, Some(Lane::Green), near, named_team(&["hero_bebop", "hero_familiar"], 0), 900); s.hero = Some("hero_orion".into()); r.evaluate(&s);
+    r.evaluate(&dead(2452, Some("Melee")));
+    let t = &r.evaluate(&dead(2458, Some("Melee")))[0].text;
+    assert_eq!(t, "You died because Bebop went down first and you stayed in. Next life: when Bebop falls, back out at once.");
+}
+#[test]
+fn alone_against_two_and_stunned_are_named() {
+    let r = ReviewCoach::default();
+    let p = Pt { x: 0.3, y: 0.6 };
+    for (t, hp) in [(900u32, 2400u32), (904, 1500), (908, 400)] { r.evaluate(&alive(t, hp, p, Some(Lane::Blue), vec![track(1, true, 0.8, 0.6)], team(0, 0), 500)); }
+    let rows = [("Grasping Hands", 700), ("Essence Bomb", 600)];
+    let mut d = panel(911, &rows, "Essence Bomb", None); d.enemy_heroes = vec!["hero_necro".into(), "hero_ghost".into(), "hero_atlas".into()];
+    r.evaluate(&d);
+    let mut d = panel(917, &rows, "Essence Bomb", None); d.enemy_heroes = vec!["hero_necro".into(), "hero_ghost".into(), "hero_atlas".into()];
+    let t = &r.evaluate(&d)[0].text;
+    assert!(t.starts_with("You died because you were alone against Graves and Lady Geist. Next life: stay within reach of a teammate."), "{t}");
+    short(t);
+    // Stunned with a teammate beside you.
+    let r = ReviewCoach::default();
+    for (t, hp, fx) in [(900u32, 2400u32, vec![]), (904, 1500, vec!["stunned"]), (908, 400, vec![])] {
+        let mut s = alive(t, hp, p, Some(Lane::Blue), vec![track(1, true, 0.31, 0.6)], team(0, 0), 500); s.status_effects = fx.into_iter().map(String::from).collect(); r.evaluate(&s);
+    }
+    let rows = [("Grasping Hands", 900)];
+    let mut d = panel(911, &rows, "Grasping Hands", None); d.enemy_heroes = vec!["hero_necro".into(), "hero_ghost".into(), "hero_atlas".into()];
+    r.evaluate(&d); d.game_clock_secs = Some(917);
+    let t = &r.evaluate(&d)[0].text;
+    assert!(t.starts_with("You died because you got stunned and Graves finished you. Next life: after the first stun, dash out at once."), "{t}");
 }

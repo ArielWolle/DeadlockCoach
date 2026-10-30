@@ -33,27 +33,27 @@
   "generic_sources_note": "Death-panel rows that name no single hero; never attributed.",
   "generic_sources": ["Melee", "Gun Damage", "Knocked off Zipline", "Heavy Melee", "Light Melee"],
   "cards": [
-    { "id": "aura", "speech": "You're in {hero}'s Aura of Suffering: it hurts more the longer you stay. Back out of its range now.", "priority": "high", "cooldown_secs": 40,
+    { "id": "aura", "speech": "Back out of {hero}'s Aura of Suffering now. It ramps up the longer you stay.", "priority": "high", "cooldown_secs": 40,
       "rationale": "The debuff badge proves you are inside the 8m aura; its damage ramps up while you stay.",
       "sources": [
         { "path": "strategy/hero-threats.md", "section": "## 1. Victor: Aura of Suffering", "basis": "WIKI", "excerpt": "The damage continues to increase the longer the ability is channeled, up to a maximum amount." },
         { "path": "strategy/hero-threats.md", "section": "## 1. Victor: Aura of Suffering", "basis": "WIKI", "excerpt": "Get too close and risk getting caught in his Aura of Suffering" } ] },
-    { "id": "stalkers_mark", "speech": "{hero}'s Stalker's Mark is on you: he can appear behind you. Stand next to a teammate and keep your escape.", "priority": "high", "cooldown_secs": 30,
+    { "id": "stalkers_mark", "speech": "Stand next to a teammate: {hero}'s Stalker's Mark is on you. Keep your escape.", "priority": "high", "cooldown_secs": 30,
       "rationale": "A marked, isolated hero is Drifter's ideal target: the mark lets him teleport behind you and Bloodscent amplifies damage on isolated heroes.",
       "sources": [
         { "path": "strategy/hero-threats.md", "section": "## 2. Drifter: Stalker's Mark, Rend, Bloodscent", "basis": "WIKI", "excerpt": "While the enemy is bleeding you can re-activate Stalker's Mark to instantly appear behind their back." },
         { "path": "strategy/hero-threats.md", "section": "## 2. Drifter: Stalker's Mark, Rend, Bloodscent", "basis": "WIKI", "excerpt": "You deal amplified damage against isolated heroes" } ] },
-    { "id": "cc_stunned", "speech": "Stunned and losing health. The moment it ends, use your escape and break line of sight.", "priority": "high", "cooldown_secs": 30,
+    { "id": "cc_stunned", "speech": "Escape the moment the stun ends. You're dropping fast.", "priority": "high", "cooldown_secs": 30,
       "rationale": "A stun while health falls means you are being focused; the escape held in reserve is what saves you.",
       "sources": [
         { "path": "strategy/teamfighting.md", "section": "## 6. Ultimate usage", "basis": "COMMUNITY", "excerpt": "hold defense for when focused" },
         { "path": "strategy/teamfighting.md", "section": "## 5. Target priority", "basis": "WIKI", "excerpt": "Debuff Reducer/Dispel Magic/Divine Barrier vs DoT or CC" } ] },
-    { "id": "cc_silenced", "speech": "Silenced and losing health: no abilities for a moment. Back off behind cover until it wears off.", "priority": "high", "cooldown_secs": 30,
+    { "id": "cc_silenced", "speech": "Back behind cover until the silence ends. You're dropping fast.", "priority": "high", "cooldown_secs": 30,
       "rationale": "Without abilities you cannot trade back; leaving the fight until the silence ends avoids a one-sided exchange.",
       "sources": [
         { "path": "strategy/teamfighting.md", "section": "## 6. Ultimate usage", "basis": "COMMUNITY", "excerpt": "hold defense for when focused" },
         { "path": "strategy/teamfighting.md", "section": "## 7. Spirit vs gun fights", "basis": "COMMUNITY", "excerpt": "Weapon heroes avoid walking into control for one extra shot" } ] },
-    { "id": "cc_zipline", "speech": "Knocked off the zipline under fire. Don't fight here: get behind cover and back to your team.", "priority": "high", "cooldown_secs": 30,
+    { "id": "cc_zipline", "speech": "Knocked off the zipline: get to cover and back to us.", "priority": "high", "cooldown_secs": 30,
       "rationale": "Being knocked off a zipline drops you where the enemy chose to fight, usually alone.",
       "sources": [
         { "path": "strategy/common-mistakes.md", "section": "## 16. Fighting split / piecemeal", "basis": "COMMUNITY", "excerpt": "Fall back and regroup. Don't fight split." } ] },
@@ -67,11 +67,11 @@
       "sources": [
         { "path": "strategy/moba-fundamentals.md", "section": "### Itemization", "basis": "GENERAL", "excerpt": "Do not hoard souls through fights; buy during respawn or at the base." },
         { "path": "strategy/economy-and-buy-order.md", "section": "## 4. When to buy", "basis": "COMMUNITY", "excerpt": "Spend steadily and stay alive; hoarding for one expensive item while dying is a trap (metabot)." } ] },
-    { "id": "heal_first", "speech": "You're heading out at {pct}% health. Heal before your next fight: standing in base restores health fast.", "priority": "normal", "cooldown_secs": 90,
+    { "id": "heal_first", "speech": "You're heading out at {pct}% health. Heal in base first; it's fast.", "priority": "normal", "cooldown_secs": 90,
       "rationale": "Shopping does not heal; base regeneration does, quickly.",
       "sources": [
         { "path": "strategy/hero-threats.md", "section": "## 4. Recovering health", "basis": "WIKI", "excerpt": "Standing in base will quickly regenerate the player's health (adding +60 health per second and +6% of max health per second), allowing them to recover from fights." } ] },
-    { "id": "unsecured", "speech": "You carry {souls} unsecured souls {why}. Don't die with them: back off until they secure.", "priority": "normal", "cooldown_secs": 60,
+    { "id": "unsecured", "speech": "You carry {souls} unsecured souls {why}. Back off until they secure.", "priority": "normal", "cooldown_secs": 60,
       "rationale": "Haunted souls are lost on death; they convert over time, so surviving the next seconds keeps them.",
       "sources": [
         { "path": "strategy/common-mistakes.md", "section": "## 5. Dying with haunted (unsecured) souls", "basis": "WIKI", "excerpt": "haunted souls are lost on death and drop in a Soul Bag only above 50 + 5/min." },
@@ -82,41 +82,41 @@
         { "path": "strategy/common-mistakes.md", "section": "## 8. Not countering the enemy build", "basis": "COMMUNITY", "excerpt": "dying repeatedly to same damage type" },
         { "path": "strategy/economy-and-buy-order.md", "section": "## 4. When to buy", "basis": "COMMUNITY", "excerpt": "defense if one pattern kills you" },
         { "path": "strategy/teamfighting.md", "section": "## 7. Spirit vs gun fights", "basis": "WIKI", "excerpt": "DoT heroes -> debuff removers" } ] },
-    { "id": "close_deaths", "speech": "{count} of your deaths came up close. You're a long-range hero: fight from max range behind your front line.", "priority": "normal", "cooldown_secs": 900,
+    { "id": "close_deaths", "speech": "{count} of your deaths came up close. You're a long-range hero: fight from max range behind our front line.", "priority": "normal", "cooldown_secs": 900,
       "rationale": "A long-range hero dying mostly to melee and close-range damage is fighting at the enemy's range.",
       "sources": [
         { "path": "strategy/hero-threats.md", "section": "## 3. Grey Talon: a long-range hero", "basis": "WIKI", "excerpt": "He uses traps and brief flight to maintain his distance" },
         { "path": "strategy/teamfighting.md", "section": "## 3. Positioning", "basis": "COMMUNITY", "excerpt": "damage dealers behind with escape lanes; do not stand in front of your tank" } ] },
-    { "id": "fight_missed", "speech": "Your team is fighting {allies} against {enemies} at {area} without you. Rotate there now if your wave is safe.", "priority": "normal", "cooldown_secs": 60,
+    { "id": "fight_missed", "speech": "We're fighting {allies} on {enemies} at {area} without you. Rotate now if your wave is safe.", "priority": "normal", "cooldown_secs": 60,
       "rationale": "A team fight on the minimap far from you is fought a hero short.",
       "sources": [
         { "path": "strategy/lategame-and-closing.md", "section": "## 6. Throw prevention", "basis": "COMMUNITY", "excerpt": "A fight entered with team split or a teammate still walking from base is usually lost (metabot)." },
         { "path": "strategy/common-mistakes.md", "section": "## 16. Fighting split / piecemeal", "basis": "COMMUNITY", "excerpt": "Fall back and regroup. Don't fight split." } ] },
-    { "id": "hold_base", "speech": "{count} teammates are dead{next}. {action}; don't walk out alone.", "priority": "high", "cooldown_secs": 60,
+    { "id": "hold_base", "speech": "{action}: {count} teammates are dead{next}. Don't walk out alone.", "priority": "high", "cooldown_secs": 60,
       "rationale": "With three teammates on respawn timers the map is lost for that time; walking out alone is a free kill and a longer timer.",
       "sources": [
         { "path": "strategy/lategame-and-closing.md", "section": "## 6. Throw prevention", "basis": "COMMUNITY", "excerpt": "A fight entered with team split or a teammate still walking from base is usually lost (metabot)." },
         { "path": "strategy/common-mistakes.md", "section": "## 24. Late-game solo splitting while the team is dead", "basis": "COMMUNITY", "excerpt": "Your team is dead. Don't push in alone." } ] },
-    { "id": "wait_respawn", "speech": "{count} teammates respawn within {secs} seconds. Wait for them and walk out together.", "priority": "high", "cooldown_secs": 60,
+    { "id": "wait_respawn", "speech": "Wait for them: {count} teammates respawn within {secs} seconds. Walk out together.", "priority": "high", "cooldown_secs": 60,
       "rationale": "Teammates a few seconds from respawning are worth waiting for: the next fight is fought together instead of alone.",
       "sources": [
         { "path": "strategy/lategame-and-closing.md", "section": "## 6. Throw prevention", "basis": "COMMUNITY", "excerpt": "A fight entered with team split or a teammate still walking from base is usually lost (metabot)." } ] },
-    { "id": "team_losing", "speech": "Your team is losing a fight at {area}: {count} teammates died in {secs} seconds. Don't go in alone: regroup or back off.", "priority": "high", "cooldown_secs": 60,
+    { "id": "team_losing", "speech": "Don't go in alone: we're losing at {area}. {count} teammates died in {secs} seconds.", "priority": "high", "cooldown_secs": 60,
       "rationale": "Two teammates falling within seconds of each other far from you is a lost fight; arriving alone adds a third death.",
       "sources": [
         { "path": "strategy/common-mistakes.md", "section": "## 19. Engaging without an advantage / continuing after opener whiffs", "basis": "COMMUNITY", "excerpt": "Fight is lost. Retreat together." },
         { "path": "strategy/common-mistakes.md", "section": "## 16. Fighting split / piecemeal", "basis": "COMMUNITY", "excerpt": "Fall back and regroup. Don't fight split." } ] },
-    { "id": "base_banner", "speech": "Your {structure} is under attack. Go defend it now.", "priority": "high", "cooldown_secs": 45,
+    { "id": "base_banner", "speech": "Go defend our {structure}: it's under attack.", "priority": "high", "cooldown_secs": 45,
       "rationale": "Your structure's health banner is shown: losing base structures late ends the game.",
       "sources": [
         { "path": "strategy/lategame-and-closing.md", "section": "## 6. Throw prevention", "basis": "WIKI", "excerpt": "Dying late is expensive: long respawns, and an enemy Patron kill ends the game." },
         { "path": "strategy/moba-fundamentals.md", "section": "### When behind", "basis": "GENERAL", "excerpt": "Farm safe camps and defend structures" } ] },
-    { "id": "base_attack", "speech": "Your base is under attack: {count} enemies are inside it. Go defend now.", "priority": "high", "cooldown_secs": 45,
+    { "id": "base_attack", "speech": "Go defend our base: {count} enemies are inside it.", "priority": "high", "cooldown_secs": 45,
       "rationale": "Enemy heroes on the minimap inside your base while you farm elsewhere are sieging structures your team cannot lose.",
       "sources": [
         { "path": "strategy/lategame-and-closing.md", "section": "## 6. Throw prevention", "basis": "WIKI", "excerpt": "Dying late is expensive: long respawns, and an enemy Patron kill ends the game." },
         { "path": "strategy/moba-fundamentals.md", "section": "### When behind", "basis": "GENERAL", "excerpt": "Farm safe camps and defend structures" } ] },
-    { "id": "urn_hold", "speech": "Hold the urn: {count} teammates are dead and an enemy is close. Back off and wait for them: a melee hit or stun drops it.", "priority": "high", "cooldown_secs": 45,
+    { "id": "urn_hold", "speech": "Hold the urn: {count} teammates are dead and an enemy is close. Back off and wait for them.", "priority": "high", "cooldown_secs": 45,
       "rationale": "The courier cannot parry or zipline and drops the urn to a melee hit or stun; without teammates to escort, an enemy beside you takes it.",
       "sources": [
         { "path": "strategy/midgame-macro.md", "section": "## 7. Soul Urn decisions", "basis": "WIKI", "excerpt": "Courier cannot use ziplines, teleporters, parry. Melee hits and stuns force a drop." },
