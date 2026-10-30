@@ -17,6 +17,8 @@ export interface PregameUiDeps {
   /** This match's focus goals (the Player profile chose them at the match start). */
   goals: () => MatchGoal[];
   knowledge: () => Promise<Knowledge[]>; name: (id: string) => string;
+  /** The skill tracker (mastery.ts): a skill's state, and the level text for the prompt (both optional; null when the profile is off). */
+  skillState?: (skill: string) => string | null; level?: () => string | null;
   /** Stop the coach's own speech before the pep talk is read. */
   stopSpeech: () => void;
   /** Speak a coach call that waited for the pep talk to finish (bypassing the gate). */
@@ -87,7 +89,8 @@ export function mountPregame(deps: PregameUiDeps): PregameUi {
     try {
       const docs = await Promise.race([deps.knowledge().catch(() => [] as Knowledge[]), new Promise<Knowledge[]>(r => setTimeout(() => r([]), 3000))]);
       const matchup = ev.roster.hero ? heroMatchup(docs, ev.roster.hero, ev.roster.enemies, deps.name) : null;
-      const digest: PregameDigest = buildPregameDigest({ key: ev.start.key, clock: ev.clock, roster: ev.roster, previous: deps.previous(), goals: deps.goals(), threats, name: deps.name, matchup });
+      const level = (() => { try { return deps.level?.() ?? null; } catch { return null; } })();
+      const digest: PregameDigest = buildPregameDigest({ key: ev.start.key, clock: ev.clock, roster: ev.roster, previous: deps.previous(), goals: deps.goals(), threats, name: deps.name, matchup, skillState: deps.skillState ?? null, level });
       const template = templateBriefing(digest);
       const problem = aiUsable(s);
       let entry: StoredBriefing, speakIt = true;

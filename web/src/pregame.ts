@@ -3,9 +3,9 @@
 // the pre-game digest (last game, this match's focus goals, the enemy heroes that threaten the
 // player most), the rule-based template briefing every player gets, and the optional AI prompt
 // with its strict-JSON reply parser. The UI (panel, reading aloud, Stop / Replay) is pregame-ui.ts.
-import { CLOSE_RANGE_HEROES, GatewayError, HERO_NAMES, HERO_ROLES, aiExchanges, callGateway, extractText, jsonCandidates, type AiConfig, type CallOptions } from './ai-coach.ts';
+import { CLOSE_RANGE_HEROES, GatewayError, HERO_NAMES, HERO_ROLES, aiExchanges, callGateway, clipAtBoundary, extractText, jsonCandidates, type AiConfig, type CallOptions } from './ai-coach.ts';
 import { repairJson, speakable } from './ai-review.ts';
-import { PlayerProfileModel, deadOf, excludedReason, spanOf, spendTarget, type KeyValueStore, type MatchGoal, type MatchRecord, type PlayerSummary, type Trait } from './player-profile.ts';
+import { GOAL_SKILLS, PlayerProfileModel, deadOf, excludedReason, spanOf, spendTarget, type KeyValueStore, type MatchGoal, type MatchRecord, type PlayerSummary, type Trait } from './player-profile.ts';
 import type { Snapshot } from './types';
 
 const finite = (n: unknown): n is number => typeof n === 'number' && Number.isFinite(n);
@@ -150,7 +150,9 @@ export interface LastGame { heroName: string; result: 'win' | 'loss' | null; min
   /** The profile's top weakness (plain words), when the last game was rough. */
   issue: string | null; rough: boolean }
 export interface PregameDigest { key: string; clock: number; hero: string | null; heroName: string | null; heroSure: boolean; role: 'long_range' | 'default';
-  allies: string[]; enemies: string[]; last: LastGame | null; goals: GoalBrief[]; threats: ThreatBrief[]; matchup: string | null; text: string; chars: number }
+  allies: string[]; enemies: string[]; last: LastGame | null; goals: GoalBrief[]; threats: ThreatBrief[]; matchup: string | null; text: string; chars: number;
+  /** The player's level from the skill tracker (null = not known). */
+  level?: 'basic' | 'intermediate' | 'advanced' | null }
 export interface DigestInput { key: string; clock: number; roster: Roster;
   /** Completed matches, newest first (the Player profile). */
   previous: MatchRecord[];
@@ -158,7 +160,23 @@ export interface DigestInput { key: string; clock: number; roster: Roster;
   goals: MatchGoal[];
   threats?: ThreatData; name?: (id: string) => string;
   /** Correlational matchup line (ai-coach heroMatchup), optional. */
-  matchup?: string | null }
+  matchup?: string | null;
+  /** The skill tracker (mastery.ts SkillMastery.state): goals, issues and weaknesses about mastered skills are left out. */
+  skillState?: ((skill: string) => string | null) | null;
+  /** The player's level and mastered skills (mastery.ts promptText): the pep talk is pitched at it. */
+  level?: string | null }
+
+/** Profile traits and goals → the skills they are about (data/coaching/skills.json ids; GOAL_SKILLS of player-profile.ts plus the other weaknesses). */
+export const TRAIT_SKILLS: Record<string, string[]> = {
+  ...GOAL_SKILLS, forward_unseen: ['respect_missing_enemies'], unused_windows: ['use_enemy_dead_windows'], weak_entry: ['heal_before_leaving'], burst: ['positioning_vs_divers'],
+  repeat_killer: ['threat_tracking', 'counter_items'], missed_fights: ['join_fights'], fight_lost: ['fight_exit_triggers'], low_hp: ['back_off_low_hp'],
+  jungle_heavy: ['catch_waves'], deep_waves: ['catch_waves'],
+};
+/** A trait or goal whose skills the player has all mastered (or that are assumed at their level). */
+export function masteredTrait(id: string, state: ((skill: string) => string | null) | null | undefined): boolean {
+  const skills = TRAIT_SKILLS[id]; if (!state || !skills?.length) return false;
+  return skills.every(s => { try { const v = state(s); return v === 'mastered' || v === 'assumed'; } catch { return false; } });
+}
 
 /** Each goal in plain words with a concrete trigger ("when X, do Y"). */
 export const GOAL_TRIGGERS: Record<string, (clock: number) => string> = {
@@ -192,7 +210,7 @@ const ISSUE: Record<string, string> = { dying: 'too much time dead', unspent_sou
   alone_deaths: 'dying alone', unused_windows: 'not pushing when enemies were dead', forward_unseen: 'walking forward with enemies missing', burst: 'getting burst down',
   respawn_deaths: 'dying right after respawns', weak_entry: 'going back in hurt', missed_fights: 'missing team fights', fight_lost: 'losing fights', low_hp: 'staying in on low health' };
 
-function lastGame(previous: MatchRecord[], summary: PlayerSummary | null, name: (id: string) => string): LastGame | null {
+function lastGame(previous: MatchRecord[], summary: PlayerSummary | null, name: (id: string) => string, state?: DigestInput['skillState']): LastGame | null {
   const m = previous.find(x => !excludedReason(x)) ?? previous.find(x => spanOf(x) >= 300);
   if (!m) return null;
   const span = spanOf(m), deadPct = span >= 300 && m.deadSecs != null ? Math.round(deadOf(m) * 100 / span) : null;
@@ -202,7 +220,7 @@ function lastGame(previous: MatchRecord[], summary: PlayerSummary | null, name: 
   const high = counted ? (summary?.strengths ?? []).filter(t => t.scope === 'last').map(highlightText).find(Boolean) ?? null : null;
   const per10 = span >= 300 ? m.deaths.length * 600 / span : 0;
   const rough = !improved && ((deadPct != null && deadPct >= 15) || per10 >= 2.5 || m.deaths.length >= 7);
-  const weak = summary?.weaknesses?.[0];
+  const weak = summary?.weaknesses?.find(t => !masteredTrait(t.id, state));
   return { heroName: name(m.hero || '') || 'your hero', result: m.result, minutes: Math.round(span / 60), deaths: m.deaths.length, deadPct, improved,
     praise: improved ? imp ?? high : high ?? imp, issue: rough && weak ? ISSUE[weak.id] ?? weak.label.toLowerCase() : null, rough };
 }
@@ -246,9 +264,14 @@ export function buildPregameDigest(input: DigestInput): PregameDigest {
   const summary = previous.length ? model.summary(previous) : null;
   const hero = roster.heroSure ? roster.hero : null;
   const role: PregameDigest['role'] = hero && data.longRange.has(hero) ? 'long_range' : 'default';
-  const last = lastGame(previous, summary, name);
-  const goals = input.goals.slice(0, 2).map(g => goalBrief(g, input.clock));
-  const threats = threatsFor(roster.enemies, hero, previous, data, name);
+  const state = input.skillState ?? null;
+  const last = lastGame(previous, summary, name, state);
+  // Goals are chosen without mastered skills (player-profile.ts setGoalVeto); a goal set before the
+  // skill was mastered is still left out here, so the pep talk never coaches what the player does.
+  const goals = input.goals.filter(g => !masteredTrait(g.id, state)).slice(0, 2).map(g => goalBrief(g, input.clock));
+  const counterItems = !masteredTrait('repeat_killer', state);
+  const threats = threatsFor(roster.enemies, hero, previous, data, name).map(t => counterItems ? t : { ...t, item: null, itemWhy: null });
+  const level = input.level ? levelOf(input.level) : null;
   const lines: string[] = [`PRE-GAME DIGEST (the match just started; game clock ${Math.floor(input.clock / 60)}:${String(input.clock % 60).padStart(2, '0')}; read from the screen, "not read" = unknown)`];
   lines.push(`Your hero: ${hero ? `${name(hero)}${HERO_ROLES[hero] ? ` (${HERO_ROLES[hero]})` : ''}` : 'not read yet (do not name it)'}`);
   lines.push(`Allies: ${roster.allies.length ? roster.allies.filter(h => h !== hero).map(name).join(', ') : 'not read'}`);
@@ -261,9 +284,10 @@ export function buildPregameDigest(input: DigestInput): PregameDigest {
     if (last.issue) lines.push(`Main issue: ${last.issue}`);
   } else lines.push('none on the profile yet (first coached match: no comparison)');
   if (summary && summary.matches >= 2) {
-    const weak = summary.weaknesses.slice(0, 2).map(t => t.label), strong = summary.strengths.slice(0, 2).map(t => t.label);
+    const weak = summary.weaknesses.filter(t => !masteredTrait(t.id, state)).slice(0, 2).map(t => t.label), strong = summary.strengths.slice(0, 2).map(t => t.label);
     lines.push(`Profile (${summary.matches} matches): weak ${weak.length ? weak.join('; ') : 'none clear'}${strong.length ? `; strong ${strong.join('; ')}` : ''}`);
   }
+  if (input.level) lines.push('', 'PLAYER LEVEL (skill tracker: never coach a mastered skill; pitch the talk at this level)', clipAtBoundary(input.level, 600));
   lines.push('', 'FOCUS GOALS THIS MATCH (chosen from the last matches; the trigger is how to say it)');
   if (goals.length) for (const g of goals) lines.push(`- ${g.text} | trigger: ${g.spoken}`);
   else lines.push('none: no clear pattern yet (give one simple habit for the hero, or none)');
@@ -272,7 +296,11 @@ export function buildPregameDigest(input: DigestInput): PregameDigest {
   else lines.push(roster.enemies.length ? 'none of the enemy heroes is in the coach threat table' : 'enemy roster not read yet: no matchup lines');
   if (input.matchup) lines.push('', input.matchup.slice(0, 300));
   const text = lines.join('\n');
-  return { key: input.key, clock: input.clock, hero, heroName: hero ? name(hero) : null, heroSure: !!hero, role, allies: roster.allies, enemies: roster.enemies, last, goals, threats, matchup: input.matchup ?? null, text, chars: text.length };
+  return { key: input.key, clock: input.clock, hero, heroName: hero ? name(hero) : null, heroSure: !!hero, role, allies: roster.allies, enemies: roster.enemies, last, goals, threats, matchup: input.matchup ?? null, text, chars: text.length, level };
+}
+/** The level word of a mastery promptText ("Level: Advanced (...)"), lower case. */
+export function levelOf(text: string): 'basic' | 'intermediate' | 'advanced' | null {
+  const m = /Level:\s*(Basic|Intermediate|Advanced)\b/i.exec(text); return m ? m[1].toLowerCase() as 'basic' | 'intermediate' | 'advanced' : null;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -308,9 +336,14 @@ export function templateBriefing(d: PregameDigest, maxWords: number = PREGAME.ma
   let spoken = build(options[options.length - 1]);
   for (const o of options) { const t = build(o); if (words(t) <= maxWords) { spoken = t; break; } }
   spoken = speakable(spoken, maxWords);
-  const focus = d.goals.length ? d.goals.map(g => end(cap(g.spoken))).join(' ') : 'Stay alive, farm your lane, and group up when enemies die.';
+  // Pitched at the player's level (mastery.ts): basics only for a basic player.
+  const lv = d.level ?? 'basic';
+  const focus = d.goals.length ? d.goals.map(g => end(cap(g.spoken))).join(' ')
+    : lv === 'basic' ? 'Stay alive, farm your lane, and group up when enemies die.' : lv === 'intermediate' ? 'Play for the map: when enemies die, we push a structure together.' : 'Plan the next objective a minute ahead and protect every lead.';
   const matchup_tips = d.threats.map(t => `${t.name}: ${t.counter}${t.item ? ` (counter item: ${t.item})` : ''}`);
-  const plan = d.role === 'long_range' ? 'Laning: farm from max range behind your troopers; after 8 minutes, group for objectives and shoot from behind the front line.'
+  const plan = lv === 'advanced' ? 'Laning: win your trades and track their dangerous heroes; after 8 minutes, plan objectives a minute ahead and never fight alone with a lead.'
+    : lv === 'intermediate' ? 'Laning: catch your waves and farm camps between them; after 8 minutes, push every enemy-dead window together.'
+    : d.role === 'long_range' ? 'Laning: farm from max range behind your troopers; after 8 minutes, group for objectives and shoot from behind the front line.'
     : 'Laning: secure your wave and trade only when it is safe; after 8 minutes, group up and turn kills into towers.';
   return { spoken, focus, matchup_tips, plan };
 }
@@ -322,6 +355,7 @@ export const PREGAME_SYSTEM_PROMPT = `You are an elite Deadlock coach (Valve's 6
 You get a PRE-GAME DIGEST read from the screen by an automatic coach. Rules:
 - Use only facts in the digest. Never invent stats, items, abilities or events. Heroes: only the ones listed for THIS match (allies, enemies, your hero); if your hero is "not read yet", do not name it.
 - Structure of "spoken", in this order: (1) one line about the last game: praise first when the Verdict says improved (name the specific positive), honest when it was rough (one fact, no lecture); (2) the 1-2 FOCUS GOALS in plain words, each with its concrete trigger ("when two enemies are dead, we push, don't farm"); (3) the 1-2 enemy heroes from THREATS TO YOU with ONE counter-play each (a counter item only if the digest lists one, at most one item); (4) a short motivating close.
+- PLAYER LEVEL (when given): never coach a skill it lists as mastered (no shopping, healing or last-hit reminders for a player past the basics); pitch the talk at that level (advanced: timings, objectives, the lead and the enemy threats, not basics).
 - Plain, warm, direct, like a coach before the game: "you" for the player, "we" for the team. No jargon walls, no lists, no symbols, no abbreviations, no numbers you were not given.
 - "spoken": at most 110 words (20-40 seconds of speech), short sentences.
 Reply with ONE JSON object only (no markdown, no code fence):

@@ -12,7 +12,7 @@
 //   ReviewStore     localStorage list of reviews (newest first, cap 20, one per match)
 // Nothing here touches the DOM; tests/ai-review.unit.ts imports it directly.
 import { LIMITS, PlayerProfile, killerFamily, PlayerProfileModel, REVIEW, chooseGoals, deadOf, deathSpend, goalTip, scoreGoals, spanOf, spendTarget, resultOf, type GoalResult, type KeyValueStore, type MatchGoal, type MatchRecord } from './player-profile.ts';
-import { GatewayError, HERO_ROLES, aiExchanges, heroMatchup, callGateway, clockText, extractText, jsonCandidates, masteryText, retrieve, sections, type AiConfig, type CallOptions } from './ai-coach.ts';
+import { GatewayError, HERO_ROLES, REJUVENATOR_LAND_SECS, REJUVENATOR_SECS, aiExchanges, heroMatchup, callGateway, clockText, extractText, jsonCandidates, masteryText, retrieve, sections, type AiConfig, type CallOptions } from './ai-coach.ts';
 import type { Cue, Knowledge, Snapshot } from './types';
 
 export const DIGEST_MAX_CHARS = 9000;
@@ -40,7 +40,14 @@ export interface TimelinePoint {
   enemiesDead: number | null; midboss: boolean | null; urn: string | null; banner: { name: string; own: boolean | null; hp: number | null } | null; effects: string[] | null;
   /** The zone label under the minimap says the enemy base (also when your marker is read). */
   enemyBase?: boolean;
+  /** Top bar: teammates dead (absent on timelines stored before it). */
+  alliesDead?: number | null;
+  /** Your minimap marker's height (0 = their base, 1 = ours) when read, and the nearest live
+   *  teammate marker (map units) when one was on the map too. */
+  y?: number; allyDist?: number;
 }
+/** A teammate marker this close to yours (map units) is taken as your own icon (rec8 20:35). */
+export const SELF_ECHO = 0.04;
 export interface DeathPanel { t: number; rows: Array<{ source: string; damage: number }>; killingBlow: string | null; total: number | null; effectsBefore: string[] }
 export interface FightEpisode { t: number; status: 'joined' | 'missed' | 'dead' }
 export interface ReviewCueText { clock: number | null; key: string; text: string }
@@ -53,8 +60,14 @@ export interface TimelineData {
    *  Victory / Defeat banner read by the vision (match_result). Absent on timelines stored before them. */
   structures?: Array<{ t: number | null; lane: string | null; kind: string; own: boolean; alive: boolean }>;
   midboss?: Array<{ t: number | null; by: 'ally' | 'enemy' }>; result?: 'win' | 'loss' | null;
+  /** Hold / back-off calls of the rule coach (hold in base, hold the Urn, outnumbered, team losing):
+   *  a death soon after one is an ignored call. Absent on timelines stored before it. */
+  holds?: ReviewCueText[];
+  /** Rejuvenator revives in place read by the vision (`revived`), by clock. */
+  revives?: Array<number | null>;
 }
 const REVIEW_CUE = /^(death:review|review:pattern)(:|$)/;
+const HOLD_CUE = /^(active:(hold_base|urn_hold|team_losing|wait_respawn)|pos:outnumbered)(:|$)/;
 const MAX_POINTS = 8000;
 
 export class MatchTimeline {
@@ -62,8 +75,9 @@ export class MatchTimeline {
   private fightLast: number | null = null;
   private lastClock: number | null = null;
   private structState: Record<string, boolean> = {};
-  static empty(): TimelineData { return { points: [], panels: [], fights: [], cues: [], kda: null, enemies: {}, allies: {}, structures: [], midboss: [], result: null }; }
-  reset() { this.d = MatchTimeline.empty(); this.fightLast = null; this.lastClock = null; this.structState = {}; }
+  private revivedWas = false;
+  static empty(): TimelineData { return { points: [], panels: [], fights: [], cues: [], kda: null, enemies: {}, allies: {}, structures: [], midboss: [], result: null, holds: [], revives: [] }; }
+  reset() { this.d = MatchTimeline.empty(); this.fightLast = null; this.lastClock = null; this.structState = {}; this.revivedWas = false; }
   get size() { return this.d.points.length; }
   /** One analyzed frame (in order). `cues` = the rule coach's cues of this frame (death reviews and pattern texts are kept). */
   add(s: Snapshot, wall: number | null, cues: Cue[] = []) {
@@ -92,6 +106,21 @@ export class MatchTimeline {
       banner: b && typeof b.name === 'string' ? { name: b.name.slice(0, 30), own: typeof b.own === 'boolean' ? b.own : null, hp: finite(b.health_ratio) ? b.health_ratio : null } : null,
       effects: Array.isArray(s.status_effects) && s.status_effects.length ? s.status_effects.filter(e => typeof e === 'string').slice(0, 6) : null,
       ...(map?.zone_area === 'EnemyBase' && !dead ? { enemyBase: true } : {}) };
+    if (team) {
+      // As player-profile.ts counts it: a portrait dead with no respawn countdown ever read is a misread.
+      const isDead = (h: (typeof team)[number]) => h.dead === true && (h.respawn_secs != null || typeof h.respawn_observations !== 'number' || h.respawn_observations > 0);
+      p.alliesDead = team.filter(h => h.ally && isDead(h) && !(dead && s.hero && h.hero === s.hero)).length;
+    }
+    if (you && !dead) {
+      // A teammate track on top of your own marker (< 0.04) is usually your own icon read as an ally.
+      const live = (map?.heroes || []).filter(h => h.ally && h.hits >= 2 && h.unseen_ms <= 3000 && finite(h.pos?.x) && finite(h.pos?.y) && dist(h.pos, you) >= SELF_ECHO);
+      p.y = Math.round(you.y * 100) / 100;
+      if (live.length) p.allyDist = Math.round(Math.min(...live.map(h => dist(h.pos, you))) * 100) / 100;
+    }
+    // A Rejuvenator revive in place (vision `revived`, optional: the grey "Respawn in: 1" screen).
+    const revived = (s as Snapshot & { revived?: boolean | null }).revived === true;
+    if (revived && !this.revivedWas) (this.d.revives ||= []).push(t);
+    this.revivedWas = revived;
     this.d.points.push(p);
     if (this.d.points.length > MAX_POINTS) this.d.points.splice(0, this.d.points.length - MAX_POINTS);
     for (const [ids, votes] of [[s.enemy_heroes, this.d.enemies], [s.ally_heroes, this.d.allies]] as const)
@@ -112,6 +141,8 @@ export class MatchTimeline {
     if (t != null) this.fight(s, t, dead, you);
     for (const c of cues) if (REVIEW_CUE.test(c.key) && !this.d.cues.some(x => x.key === c.key) && this.d.cues.length < 80)
       this.d.cues.push({ clock: t, key: c.key, text: c.text.replace(/\s+/g, ' ').trim().slice(0, 600) });
+    for (const c of cues) if (HOLD_CUE.test(c.key) && (this.d.holds ||= []).length < 60 && !this.d.holds.some(x => x.key === c.key && x.clock != null && t != null && t - x.clock < 20))
+      this.d.holds.push({ clock: t, key: c.key, text: c.text.replace(/\s+/g, ' ').trim().slice(0, 160) });
   }
   /** The damage panel of a death (the latest, fullest reading wins). */
   private panel(s: Snapshot, t: number, continuing: boolean) {
@@ -315,6 +346,38 @@ function hpFall(points: TimelinePoint[], clock: number): { from: number; secs: n
 function hpLowBefore(points: TimelinePoint[], clock: number): string | null {
   const xs = hpBefore(points, clock, LIMITS.weak_entry_secs);
   return xs.length >= 3 && xs.every(p => p.hp < LIMITS.weak_entry_ratio) ? `under ${LIMITS.weak_entry_ratio * 100}% health for the ${LIMITS.weak_entry_secs} s before` : null;
+}
+/** Facts of the life that ended in death `d`, from the timeline (see buildDigest DEATHS). `tracked` =
+ *  the timeline has the top-bar / position fields (older stored timelines do not). */
+export interface DeathEvidence { tracked: boolean; alliesDead: number | null; enemiesDead: number | null; positionRead: boolean; enemyHalf: boolean | null; deepest: number | null;
+  alone: boolean | null; allyDist: number | null; walkOut: { t: number; alliesDead: number | null; enemiesDead: number | null } | null; respawnAt: number | null; hold: ReviewCueText | null;
+  /** How the hold call was ignored ("then you left base anyway ..."), or null. */
+  ignored: string | null }
+export function deathEvidence(points: TimelinePoint[], d: { clock: number; deadSecs?: number | null }, prev: { clock: number; deadSecs?: number | null } | null, holds: ReviewCueText[] = []): DeathEvidence {
+  const tracked = points.some(p => p.alliesDead !== undefined || p.y !== undefined);
+  // This life: from the first alive read after the previous death to this death.
+  const from = prev ? points.find(p => p.t != null && p.t > prev.clock + 2 && p.area !== 'dead' && p.area !== 'unknown')?.t ?? prev.clock + (prev.deadSecs ?? 0) : -Infinity;
+  const life = points.filter(p => p.t != null && p.t >= from && p.t <= d.clock && p.area !== 'dead') as Array<TimelinePoint & { t: number }>;
+  const near = life.filter(p => p.t >= d.clock - 12 && p.area !== 'unknown' && p.area !== 'shop');
+  const top = [...life].reverse().find(p => p.t >= d.clock - 30 && (p.alliesDead != null || p.enemiesDead != null));
+  const pos = near.filter(p => p.y != null);
+  const enemyHalf = pos.length ? pos.some(p => p.y! < LIMITS.enemy_half_y) || near.some(p => p.enemyBase) : null;
+  // As the profile counts it: only reads with a teammate marker on the map decide (none = unknown).
+  const lastPos = pos.filter(p => p.allyDist != null).slice(-4);
+  const alone = lastPos.length ? lastPos.every(p => p.allyDist! > REVIEW.alone_distance) : null;
+  let baseAt = -1; life.forEach((p, k) => { if (p.area === 'base') baseAt = k; });
+  const out = baseAt >= 0 ? life.slice(baseAt + 1).find(p => p.area === 'lane' || p.area === 'jungle' || p.area === 'enemy_base' || (p.y != null && p.y <= 0.86)) : undefined;
+  const hold = [...holds].reverse().find(h => h.clock != null && h.clock <= d.clock && h.clock >= Math.max(d.clock - 120, from === -Infinity ? -Infinity : from - 30)) ?? null;
+  // Ignored: you left base after a hold call with 2+ teammates still dead, or a "go back to base"
+  // call came while you were out and you never read back in base before dying.
+  let ignored: string | null = null;
+  if (hold?.clock != null && /^active:(hold_base|wait_respawn)/.test(hold.key)) {
+    if (out && out.t > hold.clock && (out.alliesDead ?? 0) >= 2) ignored = `then you left base anyway with ${out.alliesDead} teammates still dead (an ignored call)`;
+    else if (/:out$/.test(hold.key) && !life.some(p => p.t > hold.clock! && p.area === 'base')) ignored = 'and you did not go back (an ignored call)';
+  } else if (hold?.clock != null && /urn_hold|outnumbered|team_losing/.test(hold.key) && d.clock - hold.clock <= 45) ignored = `you died ${d.clock - hold.clock} s later (an ignored call)`;
+  return { tracked, ignored, alliesDead: top?.alliesDead ?? null, enemiesDead: top?.enemiesDead ?? null, positionRead: pos.length > 0, enemyHalf, deepest: pos.length ? Math.min(...pos.map(p => p.y!)) : null,
+    alone, allyDist: lastPos.length ? Math.min(...lastPos.map(p => p.allyDist!)) : null,
+    walkOut: out ? { t: out.t, alliesDead: out.alliesDead ?? null, enemiesDead: out.enemiesDead ?? null } : null, respawnAt: prev && from !== -Infinity ? from : null, hold };
 }
 /** Most-read heroes (stale reads from the previous match's first frames drop out). */
 function topHeroes(votes: Record<string, number>): string[] {
@@ -541,8 +604,23 @@ export function buildDigest(input: DigestInput, maxChars = DIGEST_MAX_CHARS): Di
     const fall = d.fromPct != null ? { from: d.fromPct, secs: d.fallSecs ?? 0 } : hpFall(pts, d.clock);
     if (fall) parts.push(`HP ${fall.from}% to dead in ${fall.secs} s${fall.secs <= LIMITS.burst_secs ? ' (burst)' : ''}`); else unread.push('HP fall');
     const lowBefore = hpLowBefore(pts, d.clock); if (lowBefore) parts.push(lowBefore);
-    yn('alone', d.alone); yn('forward with 3+ enemies unseen', d.forwardUnseen);
+    // Position and team state from this timeline (coach-review-8 D12: rec8 20:40 read "alone no,
+    // forward no" for a solo dive deep in their base, 42:05 for a walk-out with three teammates dead):
+    // the top bar at the death, your marker in the last 12 s alive (none read = unknown, never "no"),
+    // the last walk-out from our base and a hold call it ignored.
+    const ev = deathEvidence(pts, d, rec.deaths[i - 1] ?? null, tl.holds || []);
+    if (ev.alliesDead != null || ev.enemiesDead != null) parts.push(`top bar at the death: ${[ev.alliesDead != null ? `${ev.alliesDead} of 5 teammates dead` : null, ev.enemiesDead != null ? `${ev.enemiesDead} of 6 enemies dead` : null].filter(Boolean).join(', ')}`);
+    if (!ev.tracked) { yn('alone', d.alone); yn('forward with 3+ enemies unseen', d.forwardUnseen); }
+    else if (!ev.positionRead) unread.push('your position in the last 12 s (alone, enemy half and forward are unknown)');
+    else {
+      parts.push(`in the enemy half ${ev.enemyHalf ? `yes${ev.deepest != null && ev.deepest < 0.35 ? ' (deep, near their base)' : ''}` : 'no'}`);
+      if (ev.alone == null) unread.push('alone (no teammate marker read near the death)');
+      else parts.push(`alone ${ev.alone ? 'yes' : 'no'} (nearest teammate on the minimap ${ev.allyDist} map away)`);
+      yn('forward with 3+ enemies unseen', d.forwardUnseen);
+    }
     parts.push(d.afterRespawnSecs != null ? `${d.afterRespawnSecs} s after respawning` : 'first life or respawn unseen');
+    if (ev.walkOut && d.clock - ev.walkOut.t <= 180) parts.push(`left our base at ${clockText(ev.walkOut.t)}${ev.walkOut.alliesDead != null ? ` with ${ev.walkOut.alliesDead} teammate${ev.walkOut.alliesDead === 1 ? '' : 's'} dead` : ''}${ev.walkOut.enemiesDead != null ? ` (${ev.walkOut.enemiesDead} ${ev.walkOut.enemiesDead === 1 ? 'enemy' : 'enemies'} dead)` : ''}, ${d.clock - ev.walkOut.t} s before the death`);
+    if (ev.hold && (ev.ignored || d.clock - ev.hold.clock! <= 60)) parts.push(`rule call ${d.clock - ev.hold.clock!} s before: "${clip(ev.hold.text, 90)}"${ev.ignored ? `, ${ev.ignored}` : ''}`);
     if (d.weakEntry) parts.push('went back in under 60% health');
     if (d.teammatesDied) parts.push(`${d.teammatesDied} teammate${d.teammatesDied === 1 ? '' : 's'} died just before`);
     if (d.souls == null) unread.push('souls held'); else parts.push( `held ${grouped(d.souls)} souls (usual buy now ${grouped(spendTarget(d.clock))}${d.souls >= deathSpend(d.clock) ? ', half a tier or more unspent' : ''})`);
@@ -569,8 +647,9 @@ export function buildDigest(input: DigestInput, maxChars = DIGEST_MAX_CHARS): Di
   const mb = runs(pts, p => p.midboss, 3);
   const gone = mb.filter((r, i) => i > 0 && r.v === false && mb[i - 1].v === true && r.to - r.from >= 20).map(r => clockText(r.from));
   const takes = tl.midboss || [];
-  if (takes.length) ob.push(`Midboss (Rejuvenator) taken by: ${takes.map(x => `${x.by === 'ally' ? 'your team' : 'the enemy'} at about ${clockText(x.t)}`).join('; ')}.`);
+  if (takes.length) ob.push(`Midboss (Rejuvenator) taken by: ${takes.map(x => `${x.by === 'ally' ? 'your team' : 'the enemy'} at about ${clockText(x.t)}${x.t != null ? ` (${x.by === 'ally' ? 'we' : 'they'} held the Rejuvenator until about ${clockText(x.t + REJUVENATOR_SECS + REJUVENATOR_LAND_SECS)})` : ''}`).join('; ')}.`);
   else if (mb.length) ob.push(gone.length ? `Midboss icon disappeared (taken; by which team not read) at ${gone.join(', ')}.` : 'Midboss: no take observed.');
+  if (tl.revives?.length) ob.push(`Rejuvenator revives in place read on your screen: ${tl.revives.map(c => clockText(c)).join(', ')} (each spends one team credit).`);
   // Lane structures: destroyed with the clock they were first read gone, and what still stood.
   {
     const xs = tl.structures || [];

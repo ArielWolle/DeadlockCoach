@@ -58,6 +58,8 @@ export type AiSnapshot = Snapshot & {
   death_killing_blow?: unknown;
   level?: number | null; unsecured_souls?: number | null;
   kills?: number | null; deaths?: number | null; assists?: number | null;
+  /** The grey "Respawn in: 1" screen of a Rejuvenator revive in place (vision, optional). */
+  revived?: boolean | null;
   minimap?: (NonNullable<Snapshot['minimap']> & { zone?: string | null }) | null;
 };
 
@@ -84,6 +86,20 @@ export const RESPAWN_SECS = 45;
 export const DEATH_WAIT_MS = 4000;
 /** …and at the latest this long after the death (even without a readable panel). */
 export const DEATH_WAIT_MAX_MS = 8000;
+/** Without a damage panel (death_damage / death_cause) the death call waits for it up to this long:
+ *  the panel is hidden while the shop is open (rec8 20:40: 30 s in the shop, Tankbuster read at
+ *  21:10; the old call went out at 21:01 with "cause unknown")… */
+export const DEATH_PANEL_MAX_WAIT_MS = 40000;
+/** …but never into the last seconds of the respawn timer (the call must be heard before respawning). */
+export const DEATH_RESPAWN_MARGIN_SECS = 10;
+/** A good play this close before a death (or a push the player never came back from) is never praised (rec8 21:01 praised the 20:14 push that killed him at 20:40). */
+export const DEATH_PRAISE_SECS = 20;
+/** Your minimap marker above this line is the enemy half (player-profile.ts LIMITS.enemy_half_y). */
+export const ENEMY_HALF_Y = 0.48;
+/** Your minimap marker below this line is our base (ai-review.ts timeline areas). */
+export const OWN_BASE_Y = 0.86;
+/** Rejuvenator: the crystal lands 6 s after the Midboss dies; its credits last 180 s (docs/timings/rejuvenator.md). */
+export const REJUVENATOR_SECS = 180, REJUVENATOR_LAND_SECS = 6;
 /** A theme or weakness concept is coached at most once per this much game time, unless a NEW
  *  concrete trigger for it happened since (see THEME_TRIGGERS / CONCEPTS). */
 export const THEME_WINDOW_SECS = 300;
@@ -162,7 +178,7 @@ Reply with ONLY one JSON object, no code fence, no other text:
 
 export const TASKS: Record<AiTrigger, string> = {
   periodic: 'TASK: Decide our next 30 seconds from what WHY NOW says changed: one call on a theme not blocked in THEMES COACHED (unless WHY NOW is a new trigger for it). PASS if the rule coach already said it, the window closes before you are heard, or nothing new is worth the player\'s attention.',
-  death: 'TASK: The player just died. Explain WHY from the evidence of THIS death only (its Death line, Damage by hero, the rule death review of this death, killing blow, status effects or crowd control, health before, allies near, rule calls just before it such as "outnumbered"), then the ONE change for the next life. Name only heroes of this match: never one from the PLAYER PROFILE or an earlier death. If the panel cause says Trooper but hero abilities did the damage, heroes killed the player. The rule coach already spoke its death review (STATE): speak only to add a DIFFERENT concrete lesson (the named threat, the decision that caused it, the next-life plan), else PASS. Talk about souls only if STATE says "Souls advice: allowed"; acknowledge death-screen shopping in a few words. At most 2 short sentences and 30 words.',
+  death: 'TASK: The player just died. Explain WHY from the evidence of THIS death only (its Death line, Damage by hero, the rule death review of this death, killing blow, status effects or crowd control, health before, allies near, Before this death: teammates dead and a walk-out from base, rule calls just before it such as "outnumbered" or "hold in base"), then the ONE change for the next life. Name only heroes of this match: never one from the PLAYER PROFILE or an earlier death. If the panel cause says Trooper but hero abilities did the damage, heroes killed the player. The rule coach already spoke its death review (STATE): speak only to add a DIFFERENT concrete lesson (the named threat, the decision that caused it, the next-life plan), else PASS. Talk about souls only if STATE says "Souls advice: allowed"; acknowledge death-screen shopping in a few words. At most 2 short sentences and 30 words.',
   manual: 'TASK: The player pressed "Ask the coach now". Give the most useful specific call for this moment, preferably a COACHING ANGLE or a theme not in THEMES COACHED; only PASS if there is no usable evidence.',
 };
 
@@ -174,7 +190,11 @@ export interface Sample { t: number; clock: number | null; hp: number | null; ma
   /** Team souls difference (ally - enemy) when both were read. */
   nwDiff?: number | null;
   /** health_delta_ratio of the snapshot (recent health change, negative = falling). */
-  delta?: number | null }
+  delta?: number | null;
+  /** Your minimap marker in the enemy half (null = not read). */
+  fwd?: boolean | null;
+  /** In our base (marker in the base or the "OwnBase" zone label; null = not read), and teammates dead on the top bar. */
+  base?: boolean | null; alliesDead?: number | null }
 /** A hero death read on the top bar (a slot's portrait turning dead). */
 export interface TopDeath { t: number; clock: number | null; ally: boolean; hero: string | null }
 /** The last known state of one lane structure (destroyed is final). */
@@ -279,7 +299,13 @@ export class AiHistory {
    *  Midboss taker (with the clock it was first read), enemy items by hero (scoreboard rows) and
    *  enemy items seen (`enemy_items`). */
   topDeaths: TopDeath[] = []; structures: Record<string, StructureMemo> = {};
-  midboss: { by: 'ally' | 'enemy'; clock: number | null; t: number } | null = null;
+  midboss: { by: 'ally' | 'enemy'; clock: number | null; t: number;
+    /** The Midboss was read up again after this take (a later take is a new one). */
+    over?: boolean;
+    /** Rejuvenator revives read (`revived`), by clock. */
+    revives?: Array<number | null> } | null = null;
+  /** Midboss icon state (gameplay reads) and the clock it last went from up to gone (the kill). */
+  midbossUp: boolean | null = null; midbossDown: number | null = null; private revivedWas = false;
   enemyItems: Record<string, { items: string[]; clock: number | null }> = {}; itemsSeen: string[] = [];
   /** Measured gateway latency in seconds (the controller updates it; kept across matches). */
   latency = DEFAULT_LATENCY_SECS;
@@ -298,7 +324,7 @@ export class AiHistory {
   reset() {
     this.samples = []; this.deaths = []; this.spoken = []; this.advice = []; this.deathCount = 0; this.hero = null; this.active = []; this.episodes = {}; this.events = [];
     this.good = []; this.praised = []; this.roster = { enemies: {}, allies: {} }; this.lastClock = null; this.lastClockT = null; this.ended = false; this.heroPending = null; this.g = this.freshGood();
-    this.topDeaths = []; this.structures = {}; this.midboss = null; this.enemyItems = {}; this.itemsSeen = []; this.slotDead = {}; this.kda = null;
+    this.topDeaths = []; this.structures = {}; this.midboss = null; this.midbossUp = null; this.midbossDown = null; this.revivedWas = false; this.enemyItems = {}; this.itemsSeen = []; this.slotDead = {}; this.kda = null;
   }
   /** Why `s` starts a new match (null = same match). Pure apart from the post-game flag and the
    *  pending hero switch it keeps. */
@@ -380,7 +406,10 @@ export class AiHistory {
     vote([...(s.ally_heroes || []), ...(s.hero_status || []).filter(p => p.ally).map(p => p.hero)], this.roster.allies);
     this.samples.push({ t: now, clock, hp: num(s.hp), maxHp: num(s.max_hp), dead, souls: num(s.souls), unsecured: num(s.unsecured_souls), screen: str(s.screen, 20),
       status: statusOf(s), alliesNear: near.allies, enemiesNear: near.enemies,
-      nwDiff: num(s.ally_networth) != null && num(s.enemy_networth) != null ? s.ally_networth! - s.enemy_networth! : null, delta: num(s.health_delta_ratio) });
+      nwDiff: num(s.ally_networth) != null && num(s.enemy_networth) != null ? s.ally_networth! - s.enemy_networth! : null, delta: num(s.health_delta_ratio),
+      fwd: !dead && num(s.minimap?.you?.y) != null ? s.minimap!.you!.y < ENEMY_HALF_Y : null,
+      base: dead || s.screen !== 'Gameplay' ? null : num(s.minimap?.you?.y) != null ? s.minimap!.you!.y > OWN_BASE_Y : s.minimap?.zone_area === 'OwnBase' ? true : null,
+      alliesDead: (s.hero_status || []).length >= 6 ? s.hero_status!.filter(p => p.ally && p.dead === true && (!s.hero || p.hero !== s.hero)).length : null });
     if (this.samples.length > 400) this.samples.splice(0, this.samples.length - 400);
     if (dead && (!last || !last.dead)) {
       const alive = [...this.samples].reverse().find(x => !x.dead);
@@ -451,8 +480,21 @@ export class AiHistory {
       if (old && !old.alive) continue;
       this.structures[key] = { lane, kind: st.kind, own: st.own, alive: st.alive, clock, t: now };
     }
+    // The Midboss: its icon going away (the kill) and the team the vision reads as the taker. The
+    // Rejuvenator runs from the kill (+6 s landing) for 180 s; a Midboss back up ends that take, so
+    // the next one (also by the same team) is new.
+    const up = (s.screen === 'Gameplay' || s.screen === 'Dead') && typeof s.minimap?.midboss_up === 'boolean' ? s.minimap.midboss_up : null;
+    if (up === false && this.midbossUp === true && clock != null) this.midbossDown = clock;
+    if (up != null) this.midbossUp = up;
+    if (up === true && this.midboss && clock != null && this.midboss.clock != null && clock - this.midboss.clock > 60) this.midboss.over = true;
     const by = s.midboss_taken_by;
-    if ((by === 'ally' || by === 'enemy') && this.midboss?.by !== by) this.midboss = { by, clock, t: now };
+    if ((by === 'ally' || by === 'enemy') && (this.midboss?.by !== by || this.midboss.over)) {
+      const kill = this.midbossDown != null && clock != null && clock - this.midbossDown >= 0 && clock - this.midbossDown <= 90 ? this.midbossDown : clock;
+      this.midboss = { by, clock: kill, t: now, revives: [] };
+    }
+    // A Rejuvenator revive read by the vision (`revived`, optional): one credit used.
+    if (s.revived === true && !this.revivedWas && this.midboss && !this.midboss.over) (this.midboss.revives ||= []).push(clock);
+    this.revivedWas = s.revived === true;
     for (const row of Array.isArray(s.players) ? s.players : []) {
       if (row && row.ally === false && typeof row.hero === 'string' && Array.isArray(row.items) && row.items.length) this.enemyItems[row.hero] = { items: row.items.filter(x => typeof x === 'string').slice(0, 12), clock };
     }
@@ -635,18 +677,22 @@ export function soulsView(s: AiSnapshot, history: AiHistory, now: number): Souls
     // screen, the larger of the last reads before dying.
     const before = [d?.soulsDead ?? null, d?.soulsBefore ?? null].filter((v): v is number => v != null);
     const souls = num(s.souls) ?? (d?.spent != null ? d.soulsDead ?? null : null) ?? (before.length ? Math.max(...before) : null), need = deathSpend(clock ?? d?.clock ?? null);
-    const allowed = souls != null && souls >= need;
+    const reaches = souls != null && souls >= need;
+    // A mastered death-screen buy (mastery.ts) is not reminded, unless a whole usual buy sits unspent.
+    const mastered = reaches && skillQuiet('shop_on_death') && souls! < usual * 1.5;
+    const allowed = reaches && !mastered;
     const spent = d?.spent != null ? ` (already spent about ${fmt(Math.round(d.spent / 100) * 100)} on this death screen)` : '';
     return { souls, clock, dead, target: need, usual, allowed, ruleAt: null,
-      reason: souls == null ? 'souls not read' : allowed ? `${fmt(souls)} reaches the ${fmt(need)} death-spend threshold` : `${fmt(souls)} is below the ${fmt(need)} death-spend threshold${spent || ': not a souls death'}` };
+      reason: souls == null ? 'souls not read' : mastered ? 'death-screen shopping is a mastered skill: no reminder' : allowed ? `${fmt(souls)} reaches the ${fmt(need)} death-spend threshold` : `${fmt(souls)} is below the ${fmt(need)} death-spend threshold${spent || ': not a souls death'}` };
   }
   const souls = num(s.souls);
   const rule = history.recent(history.spoken, now, SOULS_RULE_WINDOW_SECS).filter(c => !c.ai && /^unspent/.test(c.key)).at(-1);
   const ruleAt = rule ? rule.clock : null;
   const affordable = souls != null && souls >= usual;
-  const allowed = affordable && !rule;
+  const mastered = affordable && skillQuiet('dont_die_holding_souls') && skillQuiet('shop_in_base') && souls! < usual * 1.5;
+  const allowed = affordable && !rule && !mastered;
   return { souls, clock, dead, target: usual, usual, allowed, ruleAt,
-    reason: souls == null ? 'souls not read' : !affordable ? `saving for the usual ${fmt(usual)} buy` : rule ? `the rule coach already said it${rule.clock != null ? ` at ${clockText(rule.clock)}` : ''}` : `the usual ${fmt(usual)} buy is affordable` };
+    reason: souls == null ? 'souls not read' : !affordable ? `saving for the usual ${fmt(usual)} buy` : rule ? `the rule coach already said it${rule.clock != null ? ` at ${clockText(rule.clock)}` : ''}` : mastered ? 'spending on time is a mastered skill: no reminder' : `the usual ${fmt(usual)} buy is affordable` };
 }
 function soulsLine(v: SoulsView, s: AiSnapshot, held: string): string {
   const gate = ` · Souls advice: ${v.allowed ? 'allowed' : `not allowed (${v.reason})`}`;
@@ -746,11 +792,16 @@ export interface AngleInput { snapshot: AiSnapshot; history: AiHistory; now: num
 /** Up to 4 "situation → what a coach would say" lines; ones matching a profile weakness first.
  *  An angle whose concept was coached in the last 5 min (same trigger episode) is left out, so the
  *  model is not invited to restate it. */
+/** Reminder angles → the skills they coach (facts such as an enemy-dead window or a lost fight stay). */
+const ANGLE_SKILLS: Partial<Record<string, string[]>> = { respawn: ['walk_out_with_team'], hurt: ['heal_before_leaving', 'back_off_low_hp'], close: ['positioning_vs_divers'], alone: ['respect_missing_enemies'] };
 export function coachingAngles({ snapshot: s, history, now, profile, name = defaultName }: AngleInput): string[] {
   if (isDead(s)) return [];
   const out: Array<{ match: boolean; text: string }> = [];
   const add = (key: keyof typeof PROFILE_MATCH, concept: string | null, text: string) => {
     if (concept && conceptCoached(concept, history, now)) return;
+    // A reminder of a skill the player has mastered is not an angle (mastery.ts; the PLAYER LEVEL block says why).
+    const skills = ANGLE_SKILLS[key];
+    if (skills?.length && skills.every(skillQuiet)) return;
     const label = profileLabel(profile, PROFILE_MATCH[key]);
     out.push({ match: !!label, text: `${text}${label ? ` [profile: ${label}]` : ''}` });
   };
@@ -1009,10 +1060,29 @@ export const isPraise = (sentence: string) => PRAISE_RE.test(sentence.trim());
 export interface ReinforceGate { allowed: boolean; reason: string; play: GoodPlay | null; fresh: GoodPlay[] }
 /** May the next AI tip praise a good play? Only for a fresh, not yet praised good play, at most one
  *  praise among REINFORCE_EVERY tips and REINFORCE_GAP_SECS apart. */
+/** The death a good play led to, if any: the first death after it, when it came within
+ *  DEATH_PRAISE_SECS, or after a push the player never came back from (no read of your marker back
+ *  in our half between the push and the death), or at the end of a deathless stretch still being
+ *  praised. Such a play is never praised (rec8 21:01: "pushed Yellow lane deep at 20:14" was the
+ *  push that killed him at 20:40). */
+export function deathAfter(history: AiHistory, g: GoodPlay): DeathRecord | null {
+  const clocked = g.clock != null;
+  const d = history.deaths.find(x => clocked && x.clock != null ? x.clock >= g.clock! : x.t >= g.t);
+  if (!d) return null;
+  const gap = clocked && d.clock != null ? d.clock - g.clock! : (d.t - g.t) / 1000;
+  if (gap <= DEATH_PRAISE_SECS) return d;
+  if (g.kind === 'deathless') return gap <= REINFORCE_FRESH_SECS ? d : null;
+  if (g.kind !== 'window-push') return null;
+  const between = history.samples.filter(x => !x.dead && x.fwd != null && (clocked && d.clock != null && x.clock != null ? x.clock >= g.clock! && x.clock <= d.clock : x.t >= g.t && x.t <= d.t));
+  return between.length && between.every(x => x.fwd) ? d : null;
+}
 export function reinforceGate(history: AiHistory, now: number): ReinforceGate {
-  const fresh = history.good.filter(g => { const a = ago(history, now, g); return PRAISABLE(g.kind) && a >= 0 && a <= REINFORCE_FRESH_SECS && !history.praised.includes(g.key); });
+  const fresh = history.good.filter(g => { const a = ago(history, now, g); return PRAISABLE(g.kind) && a >= 0 && a <= REINFORCE_FRESH_SECS && !history.praised.includes(g.key) && !deathAfter(history, g); });
   const play = [...fresh].sort((a, b) => GOOD_ORDER.indexOf(a.kind) - GOOD_ORDER.indexOf(b.kind) || (b.clock ?? 0) - (a.clock ?? 0))[0] ?? null;
-  if (!play) return { allowed: false, reason: `no fresh good play in the last ${REINFORCE_FRESH_SECS} s`, play: null, fresh };
+  if (!play) {
+    const fatal = history.good.filter(g => { const a = ago(history, now, g); return PRAISABLE(g.kind) && a >= 0 && a <= REINFORCE_FRESH_SECS && !history.praised.includes(g.key); }).map(g => ({ g, d: deathAfter(history, g) })).find(x => x.d);
+    return { allowed: false, reason: fatal ? `the ${clockText(fatal.g.clock)} play led to the ${clockText(fatal.d!.clock)} death` : `no fresh good play in the last ${REINFORCE_FRESH_SECS} s`, play: null, fresh };
+  }
   const recent = history.advice.slice(-(REINFORCE_EVERY - 1));
   if (recent.some(r => r.topic === 'reinforce')) return { allowed: false, reason: `one of your last ${REINFORCE_EVERY - 1} tips was already praise (at most 1 in ${REINFORCE_EVERY})`, play, fresh };
   const last = [...history.advice].reverse().find(r => r.topic === 'reinforce');
@@ -1193,6 +1263,53 @@ export function structuresLine(history: AiHistory, clock: number | null): string
   };
   return `Structures (read; a structure not listed is unknown, never a target): ${[side(false), side(true)].filter(Boolean).join(' · ')}`;
 }
+/** Who holds the Rejuvenator now: the Midboss taker (midboss_taken_by) with its 180 s from the kill
+ *  (+6 s landing), or null without a take / after it ran out or the Midboss is back. */
+export function rejuvenatorState(history: AiHistory, clock: number | null): { by: 'ally' | 'enemy'; until: number | null; left: number | null; revives: number; since: number | null } | null {
+  const m = history.midboss; if (!m || m.over) return null;
+  const until = m.clock != null ? m.clock + REJUVENATOR_LAND_SECS + REJUVENATOR_SECS : null;
+  if (until != null && clock != null && clock > until) return null;
+  return { by: m.by, until, left: until != null && clock != null ? Math.max(0, until - clock) : null, revives: (m.revives || []).length, since: m.clock };
+}
+/** Top-bar and minimap facts of the life that ended in death `d` (coach-review-8 D1/D12: rec8 42:05
+ *  walked out of base at 41:44 with three teammates dead): teammates dead at the death, the last
+ *  walk-out from our base with the teammates dead then, and the half you died in. Null without reads. */
+export function beforeDeathLine(history: AiHistory, d: DeathRecord): string | null {
+  const i = history.deaths.indexOf(d), prev = i > 0 ? history.deaths[i - 1] : null;
+  const inLife = (x: Sample) => !x.dead && (d.clock != null && x.clock != null ? x.clock <= d.clock && x.clock >= d.clock - 180 && (prev?.respawnedClock == null || x.clock >= prev.respawnedClock) : x.t <= d.t && x.t >= d.t - 180000 && (prev?.respawnedT == null || x.t >= prev.respawnedT));
+  const life = history.samples.filter(inLife);
+  if (!life.length) return null;
+  const secsBefore = (x: Sample) => d.clock != null && x.clock != null ? d.clock - x.clock : Math.round((d.t - x.t) / 1000);
+  const parts: string[] = [];
+  const last = [...life].reverse().find(x => x.alliesDead != null);
+  if (last) parts.push(`teammates dead at the death (top bar): ${last.alliesDead} of 5`);
+  let baseAt = -1; life.forEach((x, k) => { if (x.base === true) baseAt = k; });
+  const out = baseAt >= 0 ? life.slice(baseAt + 1).find(x => x.base === false) : undefined;
+  if (out) parts.push(`you left our base at ${clockText(out.clock)}${out.alliesDead != null ? ` with ${out.alliesDead} teammate${out.alliesDead === 1 ? '' : 's'} dead` : ''}, ${secsBefore(out)} s before the death`);
+  const near = life.filter(x => x.fwd != null && secsBefore(x) <= 15);
+  parts.push(near.length ? (near.some(x => x.fwd) ? 'you were in the enemy half' : 'you were in our half') : 'your position was not read (unknown)');
+  return `Before this death: ${parts.join(' · ')}`;
+}
+/** The Rejuvenator / Midboss line of the state summary (coach-review-8 D2/D11). */
+export function rejuvenatorLine(history: AiHistory, clock: number | null): string | null {
+  const m = history.midboss; if (!m) return null;
+  const when = m.clock != null ? ` at about ${clockText(m.clock)}` : '';
+  const r = rejuvenatorState(history, clock);
+  if (r) {
+    const until = r.until != null ? ` until about ${clockText(r.until)}${r.left != null ? ` (${clockText(r.left)} left)` : ''}` : '';
+    const used = r.revives ? ` · ${r.revives} of up to 3 credits used (revive${r.revives === 1 ? '' : 's'} read)` : '';
+    if (r.left != null && r.left <= 20) return r.by === 'ally'
+      ? `Rejuvenator: ours runs out in about ${r.left} s (at ${clockText(r.until)}; Midboss taken by our team${when}): do not start a fight that needs it${used}`
+      : `Rejuvenator: theirs runs out in about ${r.left} s (at ${clockText(r.until)}; Midboss taken by the enemy${when}): wait it out before fighting in their base${used}`;
+    return r.by === 'ally'
+      ? `Rejuvenator: WE hold it${until} (Midboss taken by our team${when}; up to 3 revives in place): use it now with all five on a standing structure; never spend a credit alone${used}`
+      : `Rejuvenator: THEY hold it${until} (Midboss taken by the enemy${when}): their deaths may revive in place, so no fights in their base until it runs out; defend together${used}`;
+  }
+  if (m.over) return null; // the Midboss is up again: the "Objectives" line says so
+  const end = m.clock != null ? m.clock + REJUVENATOR_LAND_SECS + REJUVENATOR_SECS : null;
+  if (end != null && clock != null && clock - end > 120) return null;
+  return `Rejuvenator: ${m.by === 'ally' ? 'ours' : 'theirs'} ran out${end != null ? ` at about ${clockText(end)}` : ''} (Midboss taken by ${m.by === 'ally' ? 'our team' : 'the enemy'}${when}): ${m.by === 'ally' ? 'its credits are gone: play the next fight without it' : 'their deaths stick again'}`;
+}
 export function buildSummary({ snapshot: s, history, now, trigger, name = defaultName, profile, reason, items, goal }: SummaryInput, maxChars = SUMMARY_MAX_CHARS): string {
   // [weight, text]: lower weights are dropped first when the summary exceeds its budget.
   const lines: Array<[number, string]> = [];
@@ -1326,15 +1443,13 @@ export function buildSummary({ snapshot: s, history, now, trigger, name = defaul
     const peak = Math.max(...history.samples.filter(x => x.nwDiff != null).map(x => x.nwDiff!), d);
     const falling = past?.nwDiff != null && past.nwDiff - d >= 5000;
     const thrown = peak >= 15000 && (falling || peak - d >= 15000);
-    const throwText = thrown ? ` · THROW RISK: we were +${fmt(peak)} and it is shrinking: protect the lead, no base dives without the Rejuvenator` : d >= 15000 && history.midboss?.by === 'enemy' ? ' · THROW RISK: big lead but the enemy took the Midboss: no fights in their base until the Rejuvenator is used' : '';
-    add(8, `Team souls: yours ${fmt(s.ally_networth!)} vs enemy ${fmt(s.enemy_networth!)} (${d >= 0 ? '+' : ''}${fmt(d)})${trend}${throwText}`);
+    const rj = rejuvenatorState(history, clock);
+    const throwText = thrown ? ` · THROW RISK: we were +${fmt(peak)} and it is shrinking: protect the lead, ${rj?.by === 'ally' ? 'fight only together while our Rejuvenator lasts' : 'no base dives without the Rejuvenator'}` : d >= 15000 && rj?.by === 'enemy' ? ' · THROW RISK: big lead but they hold the Rejuvenator: no fights in their base until it runs out' : '';
+    // A throw in progress outranks the other context lines (rec8 42:12: it was dropped from the death prompt).
+    add(throwText ? 9 : 8, `Team souls: yours ${fmt(s.ally_networth!)} vs enemy ${fmt(s.enemy_networth!)} (${d >= 0 ? '+' : ''}${fmt(d)})${trend}${throwText}`);
   }
   add(8, structuresLine(history, clock));
-  if (history.midboss) {
-    const m = history.midboss, when = m.clock != null ? ` at about ${clockText(m.clock)}` : '';
-    add(8, m.by === 'enemy' ? `Midboss: taken by the enemy${when}: they may hold the Rejuvenator (a team revive), so no fights in their base until it is used`
-      : `Midboss: taken by our team${when}: our Rejuvenator makes the next fight or push safer: use it, do not sit on it`);
-  }
+  add(rejuvenatorState(history, clock) ? 9 : 7, rejuvenatorLine(history, clock));
   // Minimap hero tracks relative to you.
   if (map?.heroes?.length) {
     const enemies = map.heroes.filter(h => !h.ally && h.hits >= 2), visible = enemies.filter(h => h.unseen_ms === 0);
@@ -1374,6 +1489,7 @@ export function buildSummary({ snapshot: s, history, now, trigger, name = defaul
     add(current ? 10 : trigger === 'death' ? 6 : 8, `${current || trigger !== 'death' ? '' : 'Earlier '}Death at ${clockText(d.clock)}${current && shown.length > 1 ? ' (THIS death)' : ''}: cause ${d.cause || 'unknown'}${d.damage.length ? ` · damage taken: ${d.damage.map(x => `${x.source}${x.damage != null ? ` ${fmt(x.damage)}` : ''}`).join(', ')}` : ''}${d.killingBlow ? ` · killing blow ${d.killingBlow}` : ''}${d.status?.length ? ` · status effects before death: ${d.status.join(', ')}` : ''}${d.hpBefore != null ? ` · last alive HP ${d.hpBefore}%` : ''}${d.alliesNear != null ? ` · allies near you ${d.alliesNear}, enemies near ${d.enemiesNear ?? '?'}` : ''}${d.soulsBefore != null ? ` · unspent before death ${fmt(d.soulsBefore)}` : ''}${d.unsecuredBefore != null ? ` (unsecured ${fmt(d.unsecuredBefore)})` : ''}${soulsAt >= 0 ? ` · death-spend threshold ${fmt(need)}: ${soulsAt >= need ? 'reached' : 'not reached'}` : ''}${d.respawn != null ? ` · respawn ${d.respawn}s` : ''}`);
     // Who did the damage, by ability name, among THIS match's enemies (rec12 22:10: the panel said
     // "Trooper" while Drifter's Rend and Silver's Boot Kick were on it).
+    if (current) add(9, beforeDeathLine(history, d));
     if (current && d.damage.length) {
       const by = damageByHero(d.damage, history);
       const total = d.damage.reduce((n, x) => n + (x.damage ?? 0), 0), heroDmg = by.heroes.reduce((n, x) => n + x.damage, 0);
@@ -1401,7 +1517,10 @@ export function buildSummary({ snapshot: s, history, now, trigger, name = defaul
     const gate = reinforceGate(history, now);
     const recentGood = history.recent(history.good, now, 300).slice(-4);
     const streak = !dead && clock != null ? (() => { const d = history.deaths.at(-1); const from = d ? d.respawnedClock : history.samples.find(x => x.clock != null)?.clock; return from != null && clock - from >= 180 ? `alive without dying for ${Math.floor((clock - from) / 60)} min (since ${clockText(from)})` : null; })() : null;
-    if (recentGood.length || streak) add(8, `GOOD PLAYS (this match, observed; evidence for praise):\n${[...recentGood.map(g => `- [${clockText(g.clock)}] ${g.text}${history.praised.includes(g.key) ? ' (already praised)' : g.kind === 'lead' ? ' (team context, not a play to praise)' : ''}`), ...(streak && !recentGood.some(g => g.kind === 'deathless') ? [`- now: ${streak}`] : [])].join('\n')}\nPraise: ${gate.allowed ? `allowed (${gate.reason})` : `not allowed (${gate.reason})`}`);
+    const led = (g: GoodPlay) => { const d = deathAfter(history, g); return d ? ` (led to the ${clockText(d.clock)} death: never praise it)` : null; };
+    // On the death screen a play that led to this death is evidence of the decision that caused it.
+    const fatal = (trigger === 'death' || dead) && recentGood.some(g => deathAfter(history, g) === history.deaths.at(-1));
+    if (recentGood.length || streak) add(fatal ? 9 : 8, `GOOD PLAYS (this match, observed; evidence for praise):\n${[...recentGood.map(g => `- [${clockText(g.clock)}] ${g.text}${led(g) ?? (history.praised.includes(g.key) ? ' (already praised)' : g.kind === 'lead' ? ' (team context, not a play to praise)' : '')}`), ...(streak && !recentGood.some(g => g.kind === 'deathless') ? [`- now: ${streak}`] : [])].join('\n')}\nPraise: ${gate.allowed ? `allowed (${gate.reason})` : `not allowed (${gate.reason})`}`);
   }
   // What the AI already said and the theme memory (checkAdvice() enforces it).
   const mine = history.recent(history.advice, now, 600).slice(-3);
@@ -1533,12 +1652,12 @@ export function buildPrompt(input: PromptInput, maxChars = MAX_INPUT_CHARS): Pro
   // are in SYSTEM_PROMPT rule 9. A caller may still pass a brief.
   const brief = input.brief ?? '';
   let summary = input.summary.slice(0, SUMMARY_MAX_CHARS);
-  let profile = scrubProfile((input.profile || '').trim()).slice(0, PROFILE_MAX_CHARS);
+  let profile = clipAtBoundary(scrubProfile(profileForPrompt((input.profile || '').trim(), skillQuiet, 2000)), PROFILE_MAX_CHARS);
   let excerpts = (input.excerpts || []).slice(0, EXCERPTS_MAX).map(e => ({ ...e, text: e.text.length > EXCERPT_MAX_CHARS ? e.text.slice(0, EXCERPT_MAX_CHARS - 1) + '…' : e.text }));
   const knowledge = () => [brief, ...(input.matchup ? [input.matchup.slice(0, 300)] : [])].filter(Boolean);
   const render = () => [TASKS[input.trigger], '', 'STATE', summary,
     ...(profile ? ['', 'PLAYER PROFILE (earlier matches, no heroes of this match: coach a weakness only when the live situation matches)', profile] : []),
-    ...(input.level ? ['', 'PLAYER LEVEL (do not coach mastered skills unless STATE shows the player failing one now; pitch the advice at this level)', input.level.slice(0, MASTERY_MAX_CHARS)] : []),
+    ...(input.level ? ['', 'PLAYER LEVEL (do not coach mastered skills unless STATE shows the player failing one now; pitch the advice at this level)', clipAtBoundary(input.level, MASTERY_MAX_CHARS)] : []),
     ...(input.retry ? ['', `YOUR PREVIOUS ANSWER WAS NOT USED (${input.retry.reason}): "${input.retry.text.slice(0, 200)}". Give advice on a different focus, or PASS.`] : []),
     ...(knowledge().length ? ['', 'KNOWLEDGE', ...knowledge()] : []),
     ...(excerpts.length ? ['', 'REFERENCE EXCERPTS', ...excerpts.map(e => `[${e.title} › ${e.heading}] ${e.text}`)] : []),
@@ -1546,7 +1665,7 @@ export function buildPrompt(input: PromptInput, maxChars = MAX_INPUT_CHARS): Pro
   let user = render();
   const size = () => SYSTEM_PROMPT.length + user.length;
   while (size() > maxChars && excerpts.length) { excerpts = excerpts.slice(0, -1); user = render(); }
-  if (size() > maxChars && profile) { profile = profile.slice(0, Math.max(0, profile.length - (size() - maxChars))); user = render(); }
+  if (size() > maxChars && profile) { const n = profile.length - (size() - maxChars); profile = n >= 60 ? clipAtBoundary(profile, n) : ''; user = render(); }
   if (size() > maxChars) { summary = summary.slice(0, Math.max(200, summary.length - (size() - maxChars))); user = render(); }
   const chars = size();
   return { system: SYSTEM_PROMPT, user, chars, tokens: estimateTokens(chars) };
@@ -1873,7 +1992,54 @@ let profileProvider: (() => string | null) | undefined;
 /** Register a callback returning a short text summary of the player's profile (or null). */
 export function setProfileProvider(fn: (() => string | null) | undefined) { profileProvider = fn; }
 export function profileText(): string | null {
-  try { const v = profileProvider?.(); return typeof v === 'string' && v.trim() ? v.trim().slice(0, PROFILE_MAX_CHARS) : null; } catch { return null; }
+  try { const v = profileProvider?.(); return typeof v === 'string' && v.trim() ? profileForPrompt(v) || null : null; } catch { return null; }
+}
+/** Cut `text` to at most `max` characters at the last sentence or list-item end (". ", "; "), else
+ *  at a word boundary with "…": never mid-word (rec8: the profile ended "between the 10:12 deat"). */
+export function clipAtBoundary(text: string, max: number): string {
+  const t = text.replace(/\s+/g, ' ').trim(); if (t.length <= max) return t;
+  let cut = -1;
+  for (const m of t.slice(0, max).matchAll(/[.;!?](?=\s|$)/g)) cut = m.index!;
+  if (cut >= max * 0.4) return `${t.slice(0, cut).replace(/[\s,;:]+$/, '')}.`;
+  const sp = t.lastIndexOf(' ', max - 1);
+  return `${t.slice(0, sp > max * 0.4 ? sp : max - 1).replace(/[\s,;:(]+$/, '')}…`;
+}
+/** Items the profile (player-profile.ts promptText) already cut with "...": an unclosed parenthesis
+ *  ending in "..." goes ("(melee hits x3, a hero Aura of Suffer..."), a cut word becomes "…". */
+export function tidyProfile(text: string): string {
+  return text.replace(/\s*\([^()]*?(?:\.\.\.|…)(?=\s*[;.]|\s*$)/g, '').replace(/\s+[^\s;.]*\w(?:\.\.\.|…)(?=$|[\s;.])/g, '…').replace(/\s{2,}/g, ' ').trim();
+}
+/** Profile weakness labels (player-profile.ts) → the skills they are about (data/coaching/skills.json). */
+const PROFILE_SKILLS: Array<[RegExp, string[]]> = [
+  [/close range|burst/i, ['positioning_vs_divers']], [/respawn/i, ['walk_out_with_team']], [/dies alone/i, ['walk_out_with_team', 'respect_missing_enemies']],
+  [/unspent souls/i, ['shop_on_death', 'shop_in_base', 'dont_die_holding_souls']], [/enemies missing/i, ['respect_missing_enemies']],
+  [/windows unused/i, ['use_enemy_dead_windows']], [/back in hurt/i, ['heal_before_leaving']], [/lost fights/i, ['fight_exit_triggers']],
+  [/team fights/i, ['join_fights']], [/low health/i, ['back_off_low_hp']], [/jungle|waves deep/i, ['catch_waves']], [/same killer/i, ['threat_tracking', 'counter_items']],
+];
+export const profileLabelSkills = (label: string): string[] => PROFILE_SKILLS.find(([re]) => re.test(label))?.[1] ?? [];
+/** The profile text for a prompt: cut items tidied, weaknesses whose skills are all mastered (and the
+ *  practice focus that came from the first of them) left out, within PROFILE_MAX_CHARS at an item end. */
+export function profileForPrompt(text: string, quiet: (skill: string) => boolean = skillQuiet, max = PROFILE_MAX_CHARS): string {
+  let t = tidyProfile(text);
+  const m = /Weak: (.*?)(?=\. (?:Strong|Improved|Focus):|\. Praise |\.$)/.exec(t);
+  if (m && !/^none/.test(m[1])) {
+    const items = m[1].split(/; (?=[A-Z][^:;]{2,60}: )/);
+    const keep = items.filter(x => { const sk = profileLabelSkills(x.split(':')[0]); return !(sk.length && sk.every(quiet)); });
+    if (keep.length < items.length) {
+      const firstGone = !keep.includes(items[0]);
+      t = t.slice(0, m.index) + `Weak: ${keep.length ? keep.join('; ') : 'none outside mastered skills'}` + t.slice(m.index + m[0].length);
+      if (firstGone) t = t.replace(/\s*Focus: [^.]*(?:\.(?=\s|$)|$)/, '');
+    }
+  }
+  return clipAtBoundary(t, max);
+}
+// Skill states (mastery.ts SkillMastery.state via setSkillStateProvider): prompts leave mastered skills out.
+let skillStateProvider: ((skill: string) => string | null) | undefined;
+/** Register a callback returning a skill's state ('mastered' | 'assumed' | 'working' | 'unseen', or null). Must not throw. */
+export function setSkillStateProvider(fn: ((skill: string) => string | null) | undefined) { skillStateProvider = fn; }
+/** A skill the player has mastered (or that is assumed at their level): the AI does not coach it. */
+export function skillQuiet(skill: string): boolean {
+  try { const s = skillStateProvider?.(skill); return s === 'mastered' || s === 'assumed'; } catch { return false; }
 }
 // Skill mastery hook (mastery.ts SkillMastery.promptText): the player's level and mastered skills.
 export const MASTERY_MAX_CHARS = 600;
@@ -1882,7 +2048,7 @@ let masteryProvider: (() => string | null) | undefined;
  *  live prompt and the end-of-game review prompt (ai-review.ts); must not throw. */
 export function setMasteryProvider(fn: (() => string | null) | undefined) { masteryProvider = fn; }
 export function masteryText(): string | null {
-  try { const v = masteryProvider?.(); return typeof v === 'string' && v.trim() ? v.trim().slice(0, MASTERY_MAX_CHARS) : null; } catch { return null; }
+  try { const v = masteryProvider?.(); return typeof v === 'string' && v.trim() ? clipAtBoundary(v, MASTERY_MAX_CHARS) : null; } catch { return null; }
 }
 let goalProvider: (() => string | null) | undefined;
 /** Register a callback returning the match focus goal(s) with progress so far (player-profile.ts
@@ -1992,13 +2158,19 @@ export class AiCoach {
       // Wait for the rule coach's death review of this death (it names the killer hero and crowd
       // control; the AI call is gated against it): 4 s after the death panel was read with a short
       // respawn, up to 15 s with a long one (a timer of 25 s+, or no timer read after 15:00), 8 s at
-      // most without a panel.
+      // most without a panel. Without the damage panel (hidden while the shop is open) it waits for
+      // the panel: a rule review alone gives it DEATH_WAIT_MS more, else up to DEATH_PANEL_MAX_WAIT_MS,
+      // never into the last DEATH_RESPAWN_MARGIN_SECS of the respawn timer.
       const panel = !!(death.cause || death.damage.length || death.killingBlow);
-      const reviewed = this.history.reviewsFor(death, /^death:review/).length > 0;
+      const reviews = this.history.reviewsFor(death, /^death:review/), reviewed = reviews.length > 0;
       const long = (death.respawn ?? 0) >= 25 || (death.respawn == null && (death.clock ?? 0) >= 900);
       const late = (death.respawn ?? 0) >= 40 || (death.respawn == null && (death.clock ?? 0) >= 1800);
       const wait = late ? DEATH_REVIEW_LONG_WAIT_MS : long ? DEATH_REVIEW_WAIT_MS : 0;
-      const ready = reviewed || (panel && now - death.t >= (wait || DEATH_WAIT_MS)) || now - death.t >= (wait || DEATH_WAIT_MAX_MS);
+      const clock = num(s.game_clock_secs) ?? this.history.lastClock;
+      const respawnSoon = death.respawnEnd != null && clock != null && death.respawnEnd - clock <= DEATH_RESPAWN_MARGIN_SECS;
+      const waited = now - death.t;
+      const ready = panel ? reviewed || waited >= (wait || DEATH_WAIT_MS)
+        : (reviewed && now - reviews[0].t >= DEATH_WAIT_MS) || respawnSoon || waited >= Math.max(wait, DEATH_PANEL_MAX_WAIT_MS);
       if (!ready) return;
       if (this.inFlight?.trigger === 'periodic') this.cancel();
       if (this.inFlight) return;

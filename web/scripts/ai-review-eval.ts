@@ -46,6 +46,43 @@ export function liveMatch(file: string, patch?: (s: Snapshot, i: number) => Snap
   return tr.finish() ?? last;
 }
 
+/** A replay's snapshots (vision replay jsonl) with the rule calls of `active_replay --all` (its
+ *  "  m:ss [key] (Nw) text" lines, wrapped lines joined) fed at their game clock. */
+export function replayMatch(file: string, cuesFile?: string | null): EndedMatch | null {
+  const frames = readFileSync(file, 'utf8').split(/\r?\n/).filter(l => l.trim()).map(l => JSON.parse(l) as { t?: number; snapshot?: Snapshot }).filter(f => f.snapshot);
+  const cues: Array<{ clock: number; key: string; text: string }> = [];
+  if (cuesFile && existsSync(cuesFile)) {
+    let open = false; // a wrapped call continues on the next physical lines
+    for (const raw of readFileSync(cuesFile, 'utf8').split(/\r?\n/)) {
+      const m = raw.match(/^[ *][ !]\s?(\d+):(\d\d) \[([^\]]+)\] \(\d+w\) (.*)$/);
+      if (m) { cues.push({ clock: +m[1] * 60 + +m[2], key: m[3], text: m[4].trim() }); open = true; }
+      else if (!raw.trim() || /^\s*(--|##|==|-->|\||\d+ \||cargo|At line|\+|CategoryInfo|FullyQualified|warning)/.test(raw)) open = false;
+      else if (open) cues.at(-1)!.text += ` ${raw.trim()}`;
+    }
+  }
+  const tr = new ReviewTracker('replay', () => 0);
+  let last: EndedMatch | null = null, next = 0;
+  for (const f of frames) {
+    const c = f.snapshot!.game_clock_secs;
+    const now: Cue[] = [];
+    while (next < cues.length && typeof c === 'number' && cues[next].clock <= c) { const x = cues[next++]; now.push({ key: x.key, text: x.text, priority: 'Normal', cooldown_secs: 0 }); }
+    const e = tr.add(f.snapshot!, typeof f.t === 'number' && f.t > 1e9 ? f.t : null, now); if (e) last = e;
+  }
+  return tr.finish() ?? last;
+}
+const replayArg = args.includes('--replay') ? args[args.indexOf('--replay') + 1] : null;
+if (replayArg) {
+  const cuesArg = args.includes('--cues') ? args[args.indexOf('--cues') + 1] : null;
+  const match = replayMatch(replayArg, cuesArg);
+  if (!match) { console.log('no match in the replay'); process.exit(0); }
+  const digest = buildDigest({ match, previous: [], name, docs });
+  const r = match.record;
+  console.log(`${path.basename(replayArg)}: ${digest.heroName}, result ${digest.result}, ${digest.minutes} min, ${r.deaths.length} deaths at ${r.deaths.map(d => `${Math.floor(d.clock / 60)}:${String(d.clock % 60).padStart(2, '0')}`).join(' ')}, digest ${digest.chars} chars, prompt ${buildReviewPrompt(digest, 1024, null).chars} chars`);
+  console.log(`  strengths ${digest.strengths.map(s => s.id).join(', ') || 'none'} · good game ${digest.goodGame}`);
+  console.log(args.includes('--deaths') ? digest.text.split('\n\n').filter(p => /^DEATHS/.test(p.trim())).join('\n') : digest.text);
+  process.exit(0);
+}
+
 const rec11 = path.join(framesRoot, 'rec11', 'recording.json'), rec12 = path.join(framesRoot, 'rec12', 'recording.json');
 if (!existsSync(rec11) || !existsSync(rec12)) { console.log(`Recordings not found under ${framesRoot}`); process.exit(0); }
 // Earlier matches in the profile: rec8 for rec11; rec8 + rec11 for rec12 (as a player would have them).
