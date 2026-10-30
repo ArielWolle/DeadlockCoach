@@ -111,9 +111,14 @@ pub fn post_game_gate(img: &DynamicImage) -> bool {
     (0.08..=0.6).contains(&white)
 }
 /// "Defeat" / "Victory" (allowing one OCR edit).
-pub fn says_post_game(s: &str) -> bool {
+pub fn says_post_game(s: &str) -> bool { post_game_result(s).is_some() }
+/// The match result named by the end-of-match banner: "win" for "Victory", "loss" for "Defeat"
+/// (one OCR edit allowed; the two words are 6+ edits apart, so one edit cannot swap them).
+pub fn post_game_result(s: &str) -> Option<&'static str> {
     let t: String = s.chars().filter(|c| c.is_ascii_alphabetic()).collect::<String>().to_ascii_uppercase();
-    ["DEFEAT", "VICTORY"].iter().any(|w| t == *w || (t.len() + 1 >= w.len() && t.len() <= w.len() + 1 && crate::death::levenshtein(&t, w) <= 1))
+    [("DEFEAT", "loss"), ("VICTORY", "win")].into_iter()
+        .find(|(w, _)| t == *w || (t.len() + 1 >= w.len() && t.len() <= w.len() + 1 && crate::death::levenshtein(&t, w) <= 1))
+        .map(|(_, r)| r)
 }
 /// The post-game summary ("<Patron> Defeated", the six player cards, MVP badges) has an
 /// "ESC BACK" anchor like the shop (rec13 597-599 were Shop with the last clock and hero) and a

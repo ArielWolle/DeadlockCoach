@@ -94,6 +94,14 @@ pub struct Scanner {
     last_hud_ms: Option<u64>,
     /// Per-match resets so far.
     resets: u32,
+    /// "win" / "loss" read from the end-of-match banner of this match.
+    match_result: Option<String>,
+    /// Lane structure states of this match (minimap diamonds).
+    structures: crate::structures::Tracker,
+    /// Midboss taker evidence (team-total steps around a kill).
+    midboss_taker: crate::objectives::MidbossTaker,
+    /// Last ability-bar read: when, and the slots.
+    abilities: Option<(u64, Vec<coach_core::AbilityState>)>,
 }
 
 /// What a HUD frame says about the match boundary (see [`match_boundary`]).
@@ -523,6 +531,10 @@ impl Scanner {
             match_over: false,
             last_hud_ms: None,
             resets: 0,
+            match_result: None,
+            structures: Default::default(),
+            midboss_taker: Default::default(),
+            abilities: None,
         }
     }
 
@@ -575,6 +587,10 @@ impl Scanner {
         self.between = false;
         self.match_over = false;
         self.last_hud_ms = None;
+        self.match_result = None;
+        self.structures = Default::default();
+        self.midboss_taker = Default::default();
+        self.abilities = None;
     }
 
     fn text(&self, img: &image::DynamicImage, r: crate::Region) -> Option<String> {
@@ -588,6 +604,8 @@ impl Scanner {
     pub fn own_evidence(&self) -> ([(f32, u32); 6], [u32; 6], Option<usize>) { (self.own_slot, self.own_backdrop, self.own_latched.map(|(s, _)| s)) }
     /// Per-match resets so far (diagnostics).
     pub fn match_resets(&self) -> u32 { self.resets }
+    /// Structure states with their site index in `structures::SITES` (diagnostics).
+    pub fn structure_sites(&self, now_ms: u64) -> Vec<(usize, coach_core::StructureState)> { self.structures.site_states(now_ms, self.map_tracker.layout()) }
 
     /// Greedy global assignment of heroes to the 12 slots by mean score.
     pub fn hero_scores(&self) -> Vec<Option<(String, f32)>> {
@@ -791,6 +809,11 @@ impl Scanner {
         let mut bar_status = self.team_status.clone();
         let dead_slots = crate::team::apply_bars(top, &mut bar_status);
         let respawn_lines = batch.add_all(crate::team::respawn_crops(top, &dead_slots));
+        // Ability bar: a pixel test of the four icons at most every 2 s on live-HUD frames; only
+        // slots showing cooldown digits add a line.
+        let ability_slots = (self.seen_hud && !self.was_dead && self.cadence.due("abilities", now_ms, 2000)).then(|| crate::abilities::slots(img)).flatten();
+        let ability_lines: [Option<usize>; 4] = std::array::from_fn(|i| ability_slots
+            .and_then(|s| s[i].1).map(|d| batch.add(crate::abilities::digits_crop(img, &d))));
         let batched = batch.len();
         let lines = batch.run(|crops| self.ocr.read_lines(crops));
         laps.lap(&format!("line batch ({batched} lines)"));
@@ -821,9 +844,11 @@ impl Scanner {
         // The banner is also drawn over the death screen and the Tab scoreboard (rec13 590: Dead
         // with "Respawn in 1"; 591: Scoreboard): a match that ends while you are dead or holding
         // Tab had no PostGame frame at all.
-        if matches!(scr, Screen::Gameplay | Screen::Unknown | Screen::Dead | Screen::Scoreboard) && screen::post_game_gate(img)
-            && self.ocr.read_lines(&[screen::post_game_crop(img)]).ok().and_then(|l| l.into_iter().next()).is_some_and(|s| screen::says_post_game(&s)) {
-            scr = Screen::PostGame;
+        if matches!(scr, Screen::Gameplay | Screen::Unknown | Screen::Dead | Screen::Scoreboard) && screen::post_game_gate(img) {
+            if let Some(r) = self.ocr.read_lines(&[screen::post_game_crop(img)]).ok().and_then(|l| l.into_iter().next()).and_then(|s| screen::post_game_result(&s)) {
+                scr = Screen::PostGame;
+                self.match_result = Some(r.into());
+            }
         }
         // The post-game summary has the shop's "ESC BACK" anchor; its "PLAY AGAIN" button tells
         // (rec13 597-599 were Shop frames with the last clock and hero).
@@ -854,7 +879,10 @@ impl Scanner {
         self.was_board = board_visible;
         if matches!(scr, Screen::PostGame | Screen::Countdown) { self.between = true; }
         if scr == Screen::PostGame { self.match_over = true; }
-        if !scr.has_hud() { self.laps = laps; return GameSnapshot { screen: Some(format!("{scr:?}")), ..Default::default() }; }
+        // Post-game screens report the banner's result of this match (the PLAY AGAIN summary after
+        // it has no Victory / Defeat word of its own).
+        if !scr.has_hud() { self.laps = laps; return GameSnapshot { screen: Some(format!("{scr:?}")),
+            match_result: if scr == Screen::PostGame { self.match_result.clone() } else { None }, ..Default::default() }; }
         // New match? Decided before anything of this frame is read into the match's memory: a
         // first scoreboard of the new match must not vote for the old match's slots.
         let evidence = BoundaryEvidence { between: self.between, gap_ms: self.last_hud_ms.map(|t| now_ms.saturating_sub(t)),
@@ -862,7 +890,7 @@ impl Scanner {
         self.last_hud_ms = Some(now_ms);
         // The boundary screen is forgotten once the clock continues the match (a false end banner).
         if raw_clock.is_some_and(|c| expected.is_none_or(|x| x.abs_diff(c) <= 10)) { self.between = false; }
-        if raw_clock.is_some() { self.match_over = false; }
+        if raw_clock.is_some() { self.match_over = false; self.match_result = None; }
         if match_boundary(&evidence) == Boundary::Before {
             self.new_match(false);
             self.clock_hint = hint;
@@ -963,6 +991,27 @@ impl Scanner {
         if raw_clock.unwrap_or(0) < 600 { map.urn = None; map.urn_pos = None; map.urn_marks.clear(); }
         if let Some(l) = zone_lines.clone().and_then(|r| lines.get(r)) { map.zone = crate::zone::zone_from_lines(l); }
         if !no_map { snap.minimap = Some(self.map_tracker.observe(map, now_ms)); }
+        // Lane structures: read on frames with the minimap, states held across frames without it.
+        if !no_map { let reads = crate::structures::read(map_crop); self.structures.observe(reads.as_ref(), now_ms); }
+        snap.structures = self.structures.states(now_ms, self.map_tracker.layout().or(snap.minimap.as_ref().and_then(|m| m.lanes_mirrored)));
+        // Ability bar (live HUD only; the death screen shows the spectated hero's).
+        if scr == Screen::Gameplay {
+            if let Some(s) = ability_slots {
+                let mut digits: [Vec<String>; 4] = std::array::from_fn(|i| ability_lines[i].map(|l| vec![text(l).to_string()]).unwrap_or_default());
+                // Slots whose read does not match the glyph count get one retry crop (one call).
+                let retry: Vec<(usize, crate::abilities::Digits)> = (0..4).filter_map(|i| s[i].1.filter(|d| digits[i].iter().all(|t| crate::abilities::cooldown_secs(t, d).is_none())).map(|d| (i, d))).collect();
+                if !retry.is_empty() {
+                    let crops: Vec<_> = retry.iter().map(|(_, d)| crate::abilities::digits_retry_crop(img, d)).collect();
+                    if let Ok(t) = self.ocr.read_lines(&crops) { for ((i, _), t) in retry.iter().zip(t) { digits[*i].push(t); } }
+                }
+                self.abilities = Some((now_ms, crate::abilities::states(&s, &digits)));
+            }
+            // Between reads (cadence) the last read is held briefly, cooldowns counting down.
+            if let Some((at, a)) = self.abilities.as_ref().filter(|(at, _)| now_ms >= *at && now_ms - at <= 2500) {
+                let gone = ((now_ms - at) / 1000) as u32;
+                snap.abilities = a.iter().map(|s| coach_core::AbilityState { cooldown_secs: s.cooldown_secs.map(|c| c.saturating_sub(gone)), ..s.clone() }).collect();
+            }
+        }
 
         if scr == Screen::Dead {
             snap.dead = true;
@@ -1249,13 +1298,17 @@ impl Scanner {
         if no_map {
         } else if ally {
             let a = hud::pick_total(&cands, self.last_totals.0);
-            if plausible(&mut self.last_totals.0, &mut self.pending_totals.0, a, since(self.totals_at.0)).is_some() { self.totals_at.0 = Some(now_ms); }
+            if let Some(v) = plausible(&mut self.last_totals.0, &mut self.pending_totals.0, a, since(self.totals_at.0)) { self.totals_at.0 = Some(now_ms); self.midboss_taker.total(true, v, now_ms); }
         } else {
             let e = hud::pick_total(&cands, self.last_totals.1);
-            if plausible(&mut self.last_totals.1, &mut self.pending_totals.1, e, since(self.totals_at.1)).is_some() { self.totals_at.1 = Some(now_ms); }
+            if let Some(v) = plausible(&mut self.last_totals.1, &mut self.pending_totals.1, e, since(self.totals_at.1)) { self.totals_at.1 = Some(now_ms); self.midboss_taker.total(false, v, now_ms); }
         }
         snap.ally_networth = self.last_totals.0;
         snap.enemy_networth = self.last_totals.1;
+        // Midboss taker: decided from the team-total steps around the kill the minimap tracker
+        // reported. Frames without the minimap keep the event; a Midboss seen again ends it.
+        let down = snap.minimap.as_ref().and_then(|m| if m.midboss_down_ms.is_some() { Some(m.midboss_down_ms) } else if m.midboss_up { Some(None) } else { None });
+        snap.midboss_taken_by = self.midboss_taker.observe(down, now_ms, clock_now).map(String::from);
         // One hero cannot hold more than ~45% of its team's total (a recorded match had 6.8%
         // impossible per-hero values, e.g. 12.4k of a 15k team).
         for s in snap.hero_status.iter_mut().chain(self.team_status.iter_mut()) {
