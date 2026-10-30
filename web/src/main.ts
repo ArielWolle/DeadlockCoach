@@ -13,7 +13,7 @@ import {freshCue} from './live-cues';
 import { mountAiCoach, type AiUi } from './ai-coach-ui';
 import { setProfileProvider, setGoalProvider, setMasteryProvider, aiExchanges, clearAiExchanges, restoreAiExchanges, onAiExchange } from './ai-coach';
 import { SkillMastery, metricsOf } from './mastery'; // skills and mastery (docs/player-profile.md)
-import { PlayerProfile } from './player-profile';
+import { PlayerProfile, setGoalVeto, GOAL_SKILLS } from './player-profile';
 import { PlayerPage } from './player-page';
 import { mountMatchReviews, type ReviewUi } from './ai-review-ui'; // end-of-game AI review
 import { mountPregame, type PregameUi } from './pregame-ui'; // start-of-game pep talk
@@ -96,6 +96,8 @@ setProfileProvider(playerPromptText);
 setGoalProvider(() => settings.playerProfile ? playerProfile.goalText() : null);
 // ---- Skills and mastery (mastery.ts): evidence from full scans; deliver() / deliverAi() stay quiet on mastered skills ----
 const mastery = new SkillMastery({ store: (() => { try { return localStorage; } catch { return null; } })(), metrics: () => metricsOf(playerProfile) }).load();
+// Focus goals skip what the player has mastered (e.g. shopping): the coach stays quiet about it.
+setGoalVeto(id => { const skills = GOAL_SKILLS[id]; return !!skills?.length && skills.every(s => mastery.state(s) === 'mastered'); });
 setMasteryProvider(() => settings.playerProfile ? mastery.promptText() : null);
 /** The cue as it should be spoken (possibly shortened), or null when its skill is mastered. */
 function masteryGate(cue: Cue, clock: number | null): Cue | null {

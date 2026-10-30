@@ -1105,6 +1105,15 @@ export const GOALS: GoalDef[] = [
 const goalDef = (id: string) => GOALS.find(g => g.id === id) ?? null;
 const countedRecent = (matches: MatchRecord[]) => matches.filter(m => !excludedReason(m)).slice(0, LIMITS.goal_matches);
 /** 1-2 measurable goals from the weaknesses of the last 3 counted matches (newest first). */
+/** Optional veto from the skill tracker (mastery.ts): a goal whose skills the player has mastered is
+ *  not chosen, so the pep talk and focus reminders don't coach what the player already does. */
+let goalVeto: ((goalId: string) => boolean) | null = null;
+export function setGoalVeto(fn: ((goalId: string) => boolean) | null) { goalVeto = fn; }
+/** Skills each goal is about (data/coaching/skills.json ids). */
+export const GOAL_SKILLS: Record<string, string[]> = {
+  unspent_souls: ['shop_on_death', 'shop_in_base', 'dont_die_holding_souls'], respawn_deaths: ['walk_out_with_team'],
+  alone_deaths: ['walk_out_with_team', 'respect_missing_enemies'], won_fight_low: ['low_hp_after_win'], close_range: ['positioning_vs_divers'],
+};
 export function chooseGoals(matches: MatchRecord[], max: number = LIMITS.goal_max): MatchGoal[] {
   const recent = countedRecent(matches);
   if (!recent.length) return [];
@@ -1117,7 +1126,7 @@ export function chooseGoals(matches: MatchRecord[], max: number = LIMITS.goal_ma
       if (n) { events += n; inMatches++; score += n * Math.pow(0.85, age); }
     });
     return { g, order, events, inMatches, score, newestClean };
-  }).filter(x => !x.newestClean && (x.events >= LIMITS.goal_events || x.inMatches >= 2)).sort((a, b) => b.score - a.score || a.order - b.order);
+  }).filter(x => !x.newestClean && !goalVeto?.(x.g.id) && (x.events >= LIMITS.goal_events || x.inMatches >= 2)).sort((a, b) => b.score - a.score || a.order - b.order);
   const out: MatchGoal[] = scored.slice(0, max).map(x => ({ id: x.g.id, text: x.g.text }));
   // Many deaths and no specific pattern: a death cap below the recent median.
   if (!out.length) {

@@ -69,7 +69,7 @@ test('without the AI coach: the rule-based pep talk once per match, spoken, show
   await expect(page.locator('#pregame-meta')).toContainText('Rule coach template');
   await expect(page.locator('#pregame-details')).toContainText('Matchup');
   const words = (await text.textContent())!.split(/\s+/).length; expect(words).toBeLessThanOrEqual(120);
-  await expect.poll(async () => (await spoken(page)).join(' ')).toContain("Let's");
+  await expect.poll(async () => (await spoken(page)).join(' ')).toMatch(/let's/i);
   const said = await spoken(page);
   expect(said[0]).toMatch(/^Honest look at last game/); expect(said.join(' ')).not.toContain('Profile focus'); // the start focus cue is left to the pep talk
   await expect(page.locator('#cue-list')).toContainText('Honest look at last game');
