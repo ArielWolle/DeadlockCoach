@@ -48,7 +48,9 @@ export interface TimelinePoint {
 }
 /** A teammate marker this close to yours (map units) is taken as your own icon (rec8 20:35). */
 export const SELF_ECHO = 0.04;
-export interface DeathPanel { t: number; rows: Array<{ source: string; damage: number }>; killingBlow: string | null; total: number | null; effectsBefore: string[] }
+export interface DeathPanel { t: number; rows: Array<{ source: string; damage: number }>; killingBlow: string | null; total: number | null; effectsBefore: string[];
+  /** The vision's `death_panel` state seen on this death screen ('open', 'closed', 'unreadable', 'reading'). */
+  state?: string | null }
 export interface FightEpisode { t: number; status: 'joined' | 'missed' | 'dead' }
 export interface ReviewCueText { clock: number | null; key: string; text: string }
 export interface TimelineData {
@@ -154,6 +156,10 @@ export class MatchTimeline {
       last = { t, rows: [], killingBlow: null, total: null, effectsBefore: [...new Set(before)].slice(0, 6) };
       this.d.panels.push(last); if (this.d.panels.length > 40) this.d.panels.shift();
     }
+    // Only a panel the vision confirmed ('open'; older snapshots without the field are trusted).
+    const state = typeof s.death_panel === 'string' ? s.death_panel : null;
+    if (state && (state !== 'reading' || !last.state)) last.state = state;
+    if (state != null && state !== 'open') return;
     if (rows.length >= last.rows.length && rows.length) last.rows = rows;
     if (typeof s.death_killing_blow === 'string' && s.death_killing_blow.trim()) last.killingBlow = s.death_killing_blow.trim().slice(0, 40);
     if (finite(s.death_total_damage) && s.death_total_damage > 0) last.total = Math.round(s.death_total_damage);
@@ -592,6 +598,8 @@ export function buildDigest(input: DigestInput, maxChars = DIGEST_MAX_CHARS): Di
     const yn = (label: string, v: boolean | null) => { if (v == null) unread.push(label); else parts.push(`${label} ${v ? 'yes' : 'no'}`); };
     parts.push(`cause ${d.cause ? `"${d.cause}"` : '?'}${d.family && d.family !== d.cause && !d.cause?.toLowerCase().startsWith(d.family.toLowerCase()) ? ` (${d.family}${d.killer ? `, ${name(d.killer)}` : ''})` : ''}`);
     if (panel?.rows.length) parts.push(`damage panel: ${panel.rows.map(r => `${r.source} ${grouped(r.damage)}`).join(', ')}${panel.total ? ` (total ${grouped(panel.total)})` : ''}`);
+    else if (panel?.state === 'closed') parts.push('damage panel: not visible (collapsed on the death screen), damage cause unknown');
+    else if (panel?.state === 'unreadable' || panel?.state === 'reading') parts.push('damage panel: not readable, damage cause unknown');
     if (panel?.killingBlow && panel.killingBlow !== d.cause) parts.push(`killing blow ${panel.killingBlow}`);
     // Melee / Rend / Aura on the panel mean close range even when the top line read is "Gun Damage".
     const sum = panel?.rows.reduce((a, r) => a + r.damage, 0) ?? 0;

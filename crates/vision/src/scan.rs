@@ -29,8 +29,8 @@ pub struct Scanner {
     /// Own respawn countdown and the death panel of the current death.
     respawn: crate::death::Countdown,
     panel: crate::death::Panel,
-    /// Top panel row source read by the detector when line reads missed it (compatibility death_cause).
-    panel_top_raw: Option<String>,
+    /// This match's enemy heroes (top bar, 5+ read): settle clipped damage-panel names.
+    enemy_roster: Vec<String>,
     /// Summed template scores per slot (0-5 ally, 6-11 enemy) and frames counted.
     sums: Vec<HashMap<String, Vec<f32>>>,
     frames: u32,
@@ -441,6 +441,7 @@ pub fn clock_restarted(now: Option<u32>, max: Option<u32>) -> bool {
 }
 
 /// "T2 Walker Killing Blow x30" -> "T2 Walker".
+#[cfg_attr(not(test), allow(dead_code))]
 fn clean_cause(s: &str) -> Option<String> {
     let first = s.lines().next()?;
     // Stop at the "Killing Blow" tag (OCR: "kiling Bow", "gilling Blow", "Meleegilling") or a hit
@@ -496,7 +497,7 @@ impl Scanner {
             unsecured: Default::default(),
             respawn: Default::default(),
             panel: Default::default(),
-            panel_top_raw: None,
+            enemy_roster: vec![],
             sums: vec![HashMap::new(); 12],
             frames: 0,
             last_totals: (None, None),
@@ -569,7 +570,7 @@ impl Scanner {
         self.unsecured = Default::default();
         self.respawn.reset();
         self.panel = Default::default();
-        self.panel_top_raw = None;
+        self.enemy_roster.clear();
         self.fixed_clock_distrusted = false;
         self.clock_hint = None;
         self.sums = vec![HashMap::new(); 12];
@@ -726,9 +727,9 @@ impl Scanner {
             self.revive.interrupt();
             let read = self.ocr.read_lines(&[death::digits_crop(img, b)]).ok().and_then(|l| l.first().and_then(|s| death::read_count(s, n)));
             let (secs, fresh) = self.respawn.observe(read, now_ms);
-            if fresh { self.panel = Default::default(); self.panel_top_raw = None; }
+            if fresh { self.panel = Default::default(); }
             snap.respawn_secs = secs; snap.respawn_age_ms = secs.and(self.respawn.age_ms(now_ms));
-            self.fill_death(&mut snap);
+            self.fill_death(&mut snap, now_ms);
         }
         self.was_dead = snap.dead;
         if let Some((v, age)) = self.souls.observe_with(souls_read, now_ms, true, !souls_px) { snap.souls = Some(v); snap.souls_age_ms = Some(age); }
@@ -736,12 +737,18 @@ impl Scanner {
         snap
     }
     /// Death-panel fields of the current death (held across shop/death frames of one death).
-    fn fill_death(&self, snap: &mut GameSnapshot) {
+    /// Only a confirmed panel is reported (`death_panel` "open"); a panel still being read, an
+    /// unreadable one or the collapsed tab report the state alone: no rows, killing blow, total
+    /// or cause (a guessed top line named the wrong killer: rec16 32:44 "Melee", rec13 6:07
+    /// "Spcimen Yo").
+    fn fill_death(&mut self, snap: &mut GameSnapshot, now_ms: u64) {
+        self.panel.seen(now_ms);
+        snap.death_panel = self.panel.state(now_ms).map(|s| s.as_str().to_string());
+        if !self.panel.confirmed { return; }
         snap.death_damage = self.panel.rows.iter().map(|r| coach_core::DamageRow { source: r.source.clone(), hits: r.hits, damage: r.damage }).collect();
         snap.death_killing_blow = self.panel.rows.iter().find(|r| r.killing_blow).map(|r| r.source.clone());
         snap.death_total_damage = self.panel.total;
-        let top = self.panel.rows.first().filter(|r| r.index == 0).map(|r| r.source.clone());
-        snap.death_cause = top.or_else(|| self.panel_top_raw.clone()).or_else(|| self.panel.rows.first().map(|r| r.source.clone()));
+        snap.death_cause = self.panel.rows.first().filter(|r| r.index == 0).map(|r| r.source.clone());
     }
     fn accept_level(&mut self, read: Option<u32>) -> Option<u32> { crate::hudtext::accept_level(&mut self.level, read) }
     fn scan_inner(&mut self,img:&image::DynamicImage,minimap:Option<&image::RgbImage>,now_ms:u64,located:(Option<u32>,Option<u32>),
@@ -1056,39 +1063,33 @@ impl Scanner {
                     self.ocr.read_lines(&[crate::death::digits_crop(img, b)]).ok().and_then(|l| l.first().and_then(|s| crate::death::read_count(s, n)))),
             };
             // No countdown read for 15 s (a recording gap, a long menu): this may be another death.
-            if self.respawn.age_ms(now_ms).is_some_and(|a| a > 15_000) { self.respawn.reset(); self.panel = Default::default(); self.panel_top_raw = None; }
+            if self.respawn.age_ms(now_ms).is_some_and(|a| a > 15_000) { self.respawn.reset(); self.panel = Default::default(); }
             // Rejuvenator revive: "Respawn in: 1" on the greyed world right after a live frame.
             let grey = crate::death::world_colour_share(img) < crate::death::REVIVE_MAX_COLOUR;
             snap.revived = self.revive.dead(!prev_dead, self.last_alive_ms.map(|t| now_ms.saturating_sub(t)), grey, read, now_ms);
             let (secs, fresh) = self.respawn.observe(read, now_ms);
             // A new countdown (the timer jumped up) is a new death: its panel starts over.
-            if fresh { self.panel = Default::default(); self.panel_top_raw = None; }
+            if fresh { self.panel = Default::default(); }
             snap.respawn_secs = secs;
             snap.respawn_age_ms = secs.and(self.respawn.age_ms(now_ms));
             // The damage panel keeps filling in after the death (rec5 frame 291: top row Still Life
-            // 613, frame 300: Aura of Suffering 789), so it is re-read every 2 s until its Total
-            // Damage repeats. Rows are line reads on the full-resolution panel.
-            if !self.panel.stable && self.cadence.due("death_panel", now_ms, 2000) {
+            // 613, frame 300: Aura of Suffering 789) and can be replaced (rec16 37:02), so it is
+            // re-read every second until two complete reads agree, then every 4 s. Rows are line
+            // reads on the full-resolution panel. No rows on screen and the portrait tab at the
+            // right edge: the player collapsed the panel.
+            if self.cadence.due("death_panel", now_ms, self.panel.cadence_ms()) {
                 let size = crate::death::panel_size(&view);
                 let panel = view.region(crate::death::PANEL_CANONICAL, size, size);
                 let (rows, crops) = crate::death::panel_crops(&panel);
                 if !rows.is_empty() {
                     let lines = self.ocr.read_lines(&crops).unwrap_or_default();
-                    let (parsed, total) = crate::death::parse_panel(&panel, &rows, &lines);
-                    self.panel.update(parsed, total, now_ms);
-                }
+                    self.panel.update(crate::death::parse_panel(&panel, &rows, &lines, &self.enemy_roster), now_ms);
+                } else if crate::death::panel_tab(img) { self.panel.saw_tab(now_ms); }
             }
-            // When the line reads did not identify the top row (small 1600x900 text, world sources
-            // without an icon), the detector reads it, at most every 5 s: death_cause stays the top
-            // source as before, normalised against the dictionary when it matches.
-            if self.panel.rows.first().is_none_or(|r| r.index != 0) && self.cadence.due("death_top", now_ms, 5000) {
-                let raw = self.ocr.read(&hud::crop(img, crate::Region { x: 1352.0 / 1600.0, y: 276.0 / 900.0, w: 200.0 / 1600.0, h: 22.0 / 900.0 })).ok();
-                if let Some(c) = raw.as_deref().and_then(|s| crate::death::normalise_source(s).or_else(|| clean_cause(s))) { self.panel_top_raw = Some(c); }
-            }
-            self.fill_death(&mut snap);
+            self.fill_death(&mut snap, now_ms);
         } else if scr == Screen::Gameplay {
             // Only a live HUD ends the death; menus and the scoreboard flicker in between.
-            self.respawn.reset(); self.panel = Default::default(); self.panel_top_raw = None;
+            self.respawn.reset(); self.panel = Default::default();
             // Back alive within seconds of a grey death screen whose countdown was never read
             // above 2: that screen was a Rejuvenator revive, not a death.
             snap.revived = self.revive.alive(now_ms);
@@ -1250,6 +1251,7 @@ impl Scanner {
         }
         snap.ally_heroes = assign[..6].iter().flatten().cloned().collect();
         snap.enemy_heroes = assign[6..].iter().flatten().cloned().collect();
+        if snap.enemy_heroes.len() >= 5 { self.enemy_roster = snap.enemy_heroes.clone(); }
         // The top bar is drawn on gameplay, death and Tab screens alike (rec5: all 86 death
         // frames showed it, with ally respawn timers), so it is read on every HUD screen.
         // Frames without a located minimap (midboss pit, ziplines, base fights) often have the top

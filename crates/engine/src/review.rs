@@ -108,7 +108,10 @@ struct Death { clock: u32, cause: Option<String>, cause_at: Option<u32>, panel: 
     /// Souls on the first death-screen frame (before any shopping while dead).
     souls_dead: Option<u32>, summary: Option<Summary>,
     /// Structure sources (Walker, Shrine, Guardian, Patron) seen on any panel read of this death.
-    structures_seen: Vec<String> }
+    structures_seen: Vec<String>,
+    /// Consecutive death-screen frames that showed the damage panel collapsed (vision
+    /// `death_panel` "closed") and the clock of the first; the last panel state seen.
+    closed_frames: u32, closed_since: Option<u32>, panel_state: Option<String> }
 
 #[derive(Default)]
 struct State {
@@ -128,7 +131,15 @@ struct State {
     fight_lost_said: usize,
     /// Escape ability: last clock seen ready, and whether a cooldown was read since.
     esc_ready_at: Option<u32>, esc_seen: bool,
+    /// The death (its first death-screen clock) during which the "open the damage panel" tip was
+    /// spoken: once per match.
+    panel_tip_at: Option<u32>,
 }
+/// Consecutive death-screen frames, over at least [`PANEL_CLOSED_SECS`], with the panel collapsed
+/// before the open-the-panel tip (the panel is still collapsed on the first frame of a death while
+/// it opens: rec8 49:42).
+pub const PANEL_CLOSED_FRAMES: u32 = 2;
+pub const PANEL_CLOSED_SECS: u32 = 3;
 
 /// The review coach. One instance per engine; it keeps its own history.
 pub struct ReviewCoach { catalog: Arc<Catalog>, state: RefCell<State> }
@@ -799,9 +810,21 @@ impl Rule for ReviewCoach {
             if s.respawn_secs.is_some() { st.last_respawn = s.respawn_secs; }
             // The panel fills in over a few seconds: the latest reading wins, for 25 s (rec5 death
             // 3 read a different panel a minute later, under the same killing blow).
+            // Only a readable panel counts: vision reports rows with `death_panel` "open" (older
+            // snapshots without the field are trusted). A panel equal to the previous death's
+            // (rows and total) is a stale read of that death, never this one's cause.
+            let n = st.deaths.len();
+            let stale = n >= 2 && !s.death_damage.is_empty() && st.deaths[n - 2].panel == s.death_damage && st.deaths[n - 2].total == s.death_total_damage;
+            let readable = s.death_panel.as_deref().is_none_or(|p| p == "open") && !stale;
             if let Some(d) = st.deaths.last_mut() {
-                if let Some(c) = s.death_cause.clone() { d.cause = Some(c); d.cause_at.get_or_insert(clock); }
-                if !s.death_damage.is_empty() && clock <= d.clock + 25 {
+                match s.death_panel.as_deref() {
+                    Some("closed") => { d.closed_frames += 1; d.closed_since.get_or_insert(clock); }
+                    Some(_) => { d.closed_frames = 0; d.closed_since = None; }
+                    None => {}
+                }
+                if s.death_panel.is_some() { d.panel_state = s.death_panel.clone(); }
+                if let Some(c) = s.death_cause.clone().filter(|_| readable) { d.cause = Some(c); d.cause_at.get_or_insert(clock); }
+                if readable && !s.death_damage.is_empty() && clock <= d.clock + 25 {
                     d.panel = s.death_damage.clone();
                     for r in &s.death_damage { let l = r.source.to_lowercase(); if ["guardian", "walker", "shrine", "patron"].iter().any(|k| l.contains(k)) && !d.structures_seen.contains(&r.source) { d.structures_seen.push(r.source.clone()); } }
                     if s.death_killing_blow.is_some() { d.kb = s.death_killing_blow.clone(); }
@@ -812,11 +835,27 @@ impl Rule for ReviewCoach {
             // once): another High cue may take this frame's slot, and a rule cannot know whether
             // it was spoken. Ready 5 s in once the panel or cause is read (rows: once the killing
             // blow is tagged, or 8 s in), or 20 s in without it (rec5 death 3: panel 18 s in).
+            // A collapsed panel waits the full 20 s the first time (the tip below may get it opened);
+            // once the tip was said this match, 8 s (nothing more will be read). A panel on screen
+            // but not confirmed yet ("reading": the second agreeing read is a frame away, or the
+            // shop covers it) gets up to 40 s. Never past the respawn: with the timer at 4 s or less
+            // the review goes out with what was read (rec13 6:07, a 10 s death).
+            let tip_earlier = st.panel_tip_at.is_some_and(|c| st.deaths.last().is_some_and(|d| c < d.clock));
+            let respawn_soon = s.respawn_secs.is_some_and(|r| r <= 4);
+            let closed = |d: &Death| d.closed_frames >= PANEL_CLOSED_FRAMES && d.closed_since.is_some_and(|c| clock >= c + PANEL_CLOSED_SECS);
             let ready = st.deaths.last().is_some_and(|d| {
                 // A cause without rows gets 4 s for the rows to be read (rec5 death 3: cause at 16 s, rows at 18 s).
-                let read = if d.panel.is_empty() { d.cause_at.is_some_and(|c| clock >= c + 4) } else { d.kb.is_some() || clock >= d.clock + 8 };
-                clock >= d.clock + 5 && (read || clock >= d.clock + 20)
+                let read = if d.panel.is_empty() { d.cause_at.is_some_and(|c| clock >= c + 4) || tip_earlier && closed(d) && clock >= d.clock + 8 }
+                    else { d.kb.is_some() || clock >= d.clock + 8 };
+                let waiting = d.panel.is_empty() && d.panel_state.as_deref() == Some("reading") && clock < d.clock + 40;
+                clock >= d.clock + 5 && (read || clock >= d.clock + 20 && !waiting || respawn_soon)
             });
+            // The damage panel is collapsed on this death screen: tell the player once per match to
+            // open it (the review cannot say what killed you without it).
+            if st.panel_tip_at.is_none() && st.deaths.last().is_some_and(|d| closed(d) && d.panel.is_empty()) {
+                let text = self.card("panel_closed").speech.clone();
+                cues.push(Cue::card("review.panel_closed", "review:panel_closed", text, Priority::High, 3600));
+            }
             if ready {
                 let death = st.deaths.last().unwrap().clone();
                 let (text, causes, summary) = self.death_review(&st, &death, s.souls);
@@ -839,6 +878,11 @@ impl Rule for ReviewCoach {
                 if let Some(c) = Self::offer_pattern(&mut st, key, text, Priority::Normal, skill) { cues.push(c); }
             }}
         } else if s.screen.as_deref() == Some("Gameplay") {
+            // Back alive after a Rejuvenator revive (vision `revived` on the first live frame): the
+            // grey screen was not a death (rec17 26:12 got a death review 23 s later).
+            if st.dead && s.revived && st.deaths.last().is_some_and(|d| clock <= d.clock + 10) && !st.reviewed {
+                st.deaths.pop(); st.dead = false; st.last_respawn = None; st.last_dead_clock = None;
+            }
             if st.dead { st.dead = false; st.respawned_at = Some(clock); st.last_respawn = None; st.last_dead_clock = None; }
             let me = sample.you;
             // Live: two teammates fell in the last 10 s while an enemy is on you.
@@ -911,6 +955,7 @@ impl Rule for ReviewCoach {
             "pos:outnumbered" => "outnumbered",
             k if k.starts_with("active:forward_exit") || k == "active:ult_out" || k == "active:escape_in" => "exit",
             "review:fight-lost" => { st.fight_lost_said += 1; return; }
+            "review:panel_closed" => { st.panel_tip_at = st.deaths.last().map(|d| d.clock); return; }
             _ => return,
         };
         st.calls.push((now, kind));

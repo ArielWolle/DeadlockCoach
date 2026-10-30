@@ -81,6 +81,45 @@ test('death history records the death panel and the souls held before dying', ()
   assert.match(s, /Death at 11:42: cause Graves · damage taken: Graves 620, Shiv 300 · killing blow Graves · last alive HP 15% · allies near you 0, enemies near 1 · unspent before death 2,400 \(unsecured 600\) · death-spend threshold 1,600: reached · respawn 16s/);
 });
 
+test('death panel: a collapsed or unreadable panel is disregarded and the prompt says the cause is unknown', () => {
+  // rec16 27:49: collapsed for the whole death (vision death_panel "closed").
+  const h = new AiHistory();
+  h.push(snap(1660, { souls: 5866, hp: 400 }), [], 0);
+  h.push(snap(1669, { dead: true, screen: 'Dead', respawn_secs: 60, death_panel: 'closed' }), [], 9000);
+  // Even a cause or rows leaking through while not "open" are ignored.
+  h.push(snap(1672, { dead: true, screen: 'Dead', respawn_secs: 57, death_panel: 'unreadable', death_cause: 'Melee', death_damage: [{ source: 'Melee', damage: 537 }] }), [], 12000);
+  h.push(snap(1675, { dead: true, screen: 'Dead', respawn_secs: 54, death_panel: 'closed' }), [], 15000);
+  const d = h.deaths.at(-1)!;
+  assert.equal(d.cause, null); assert.deepEqual(d.damage, []); assert.equal(d.killingBlow, null); assert.equal(d.panel, 'closed');
+  const s = buildSummary({ snapshot: snap(1675, { dead: true, screen: 'Dead' }), history: h, now: 15000, trigger: 'death' });
+  assert.match(s, /Death at 27:49: cause unknown · damage panel: NOT VISIBLE \(collapsed on the death screen\), so what killed the player is unknown: name no damage source, ability or killer/);
+  assert.ok(!/Melee/.test(s.split('\n').find(l => l.startsWith('Death at')) || ''), s);
+  assert.match(TASKS.death, /damage panel was not visible or not readable, the cause is unknown/);
+});
+
+test('death panel: an open panel is used; one repeating the previous death is stale; a Rejuvenator revive is no death', () => {
+  const h = new AiHistory();
+  const rows = [{ source: 'Lurking Terrors', damage: 3142 }, { source: 'Escalating Exposure', damage: 761 }];
+  h.push(snap(2200, { hp: 700 }), [], 0);
+  h.push(snap(2204, { dead: true, screen: 'Dead', respawn_secs: 1, revived: true, death_panel: 'closed' }), [], 4000);
+  assert.equal(h.deathCount, 0, 'the grey revive screen is not a death (rec16 36:44, rec17 26:12)');
+  h.push(snap(2207, { hp: 500 }), [], 7000);
+  h.push(snap(2217, { dead: true, screen: 'Dead', respawn_secs: 74, death_panel: 'open', death_cause: 'Lurking Terrors', death_damage: rows, death_total_damage: 5352 }), [], 17000);
+  assert.equal(h.deathCount, 1);
+  assert.equal(h.deaths.at(-1)!.cause, 'Lurking Terrors'); assert.equal(h.deaths.at(-1)!.damage[0].damage, 3142);
+  h.push(snap(2300, { hp: 900 }), [], 100000);
+  h.push(snap(2400, { dead: true, screen: 'Dead', respawn_secs: 70, death_panel: 'open', death_cause: 'Lurking Terrors', death_damage: rows }), [], 200000);
+  assert.equal(h.deathCount, 2);
+  assert.deepEqual(h.deaths.at(-1)!.damage, [], 'the same rows as the previous death: a stale read');
+  assert.equal(h.deaths.at(-1)!.cause, null);
+  // A revive flagged on the live frame right after the grey screen undoes that death.
+  h.push(snap(2500, { hp: 900 }), [], 300000);
+  h.push(snap(2504, { dead: true, screen: 'Dead' }), [], 304000);
+  assert.equal(h.deathCount, 3);
+  h.push(snap(2507, { hp: 600, revived: true }), [], 307000);
+  assert.equal(h.deathCount, 2);
+});
+
 test('objective timer helper lists only near events in order', () => {
   assert.deepEqual(upcomingObjectives(250, 60), ['medium camps spawn at 5:00 (in 0:50)', 'Powerups spawn at 5:00 (in 0:50)']);
   assert.deepEqual(upcomingObjectives(1300, 30), []);

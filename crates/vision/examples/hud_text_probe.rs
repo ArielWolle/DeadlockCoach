@@ -47,7 +47,7 @@ fn main() {
             let lines = reader.read_lines(&crops).unwrap_or_default();
             let kb: Vec<u32> = (0..rows.len()).map(|k| death::killing_blow_px(&img, k)).collect();
             println!("{i} rows={:?} kb={kb:?} {:?}", rows.iter().map(|r| r.1).collect::<Vec<(usize, usize)>>(), lines);
-            println!("   -> {:?}", death::parse_panel(&img, &rows, &lines));
+            println!("   -> {:?}", death::parse_panel(&img, &rows, &lines, &[]));
         } else if mode == "status" {
             let src = image::open(p).unwrap();
             let view = hudtext::View { canon: &img, source: Some((&src, coach_perception::Bounds { x: 0, y: 0, w: src.width(), h: src.height() })) };

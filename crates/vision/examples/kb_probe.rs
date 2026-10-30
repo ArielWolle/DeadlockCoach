@@ -15,7 +15,9 @@ fn main() {
             println!("  row {k}: px={} name={:?} wide={:?} hits={:?} dmg={:?}", coach_vision::death::killing_blow_px(&panel, k),
                 lines.get(4 * k), lines.get(4 * k + 1), lines.get(4 * k + 2), lines.get(4 * k + 3));
         }
-        let (parsed, total) = coach_vision::death::parse_panel(&panel, &rows, &lines);
-        println!("  parsed {:?} total {total:?}", parsed.iter().map(|r| (r.source.clone(), r.damage, r.killing_blow)).collect::<Vec<_>>());
+        let r = coach_vision::death::parse_panel(&panel, &rows, &lines, &[]);
+        println!("  total line {:?}", lines.get(4 * rows.len()));
+        println!("  parsed {:?} total {:?} tags {} complete {}", r.rows.iter().map(|r| (r.index, r.source.clone(), r.damage, r.killing_blow)).collect::<Vec<_>>(), r.total, r.tags, r.complete());
+        println!("  tab {}", coach_vision::death::panel_tab(&canon));
     }
 }

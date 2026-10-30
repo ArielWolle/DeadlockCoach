@@ -56,7 +56,9 @@ fn respawn_digits_are_not_dropped() {
 #[test]
 fn death_panel_rows_killing_blow_and_total() {
     // Finding 4: the complete panel (frame 300) has six rows, top "Aura of Suffering 789".
-    let s = twice("00523");
+    // The panel is reported once two reads 4 s apart agree (docs/coach-review-16-17-panel.md).
+    let s = { let f = frame("00523"); let mut a = scanner(); a.scan(&f, 0); a.scan(&f, 4000) };
+    assert_eq!(s.death_panel.as_deref(), Some("open"));
     assert!(s.dead);
     assert_eq!(s.death_cause.as_deref(), Some("Aura of Suffering"));
     assert_eq!(s.death_total_damage, Some(4451));

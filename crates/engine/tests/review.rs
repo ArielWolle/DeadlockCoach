@@ -133,10 +133,12 @@ fn the_pattern_names_a_repeat_killer_crowd_control_and_close_range_deaths() {
     let p = Pt { x: 0.3, y: 0.7 };
     let mut said = vec![];
     let drifter = [("Stalker's Mark", 900), ("Rend", 560), ("Melee", 600)];
+    // Two deaths never show the very same panel (an identical one is a stale read: ignored).
+    let drifter2 = [("Stalker's Mark", 940), ("Rend", 610), ("Melee", 580)];
     for t in (1000..=1300).step_by(2) {
         let death = (1100..1120).contains(&t) || (1260..1300).contains(&t);
         let s = if death {
-            let mut d = panel(t, &drifter, "Rend", Some(2100));
+            let mut d = if t < 1200 { panel(t, &drifter, "Rend", Some(2100)) } else { panel(t, &drifter2, "Rend", Some(2200)) };
             d.souls = Some(500);
             d
         } else {
@@ -520,4 +522,102 @@ fn fight_lost_is_only_called_when_we_lost_the_trade() {
     let c = run(&[(800, 0, 0), (806, 2, 0)]);
     assert_eq!(c.len(), 1); assert_eq!(c[0].text, "Back out: 2 teammates are down.");
     assert_eq!(run(&[(760, 0, 0), (770, 0, 2), (790, 0, 0), (800, 0, 0), (806, 2, 0)]).len(), 1);
+}
+// ---- docs/coach-review-16-17-panel.md: the damage panel received well or disregarded ---------
+
+/// One death through the engine (ReviewCoach only): alive 2300 -> 300 at `from`..`from+11`, then
+/// death-screen frames `from+13..from+40` built by `frame`, then alive. Returns the spoken cues.
+fn panel_death(e: &mut coach_engine::Engine, from: u32, frame: &dyn Fn(u32) -> GameSnapshot) -> Vec<coach_engine::Cue> {
+    let p = Pt { x: 0.5, y: 0.55 };
+    let mut out = vec![];
+    for (t, hp) in [(from, 2300), (from + 4, 2300), (from + 8, 1200), (from + 11, 300)] {
+        let mut s = alive(t, hp, p, Some(Lane::Blue), vec![], team(0, 0), 500); s.hero = Some("hero_orion".into()); s.enemy_heroes = r8_team(); out.extend(e.step(&s));
+    }
+    for t in from + 13..from + 40 { let mut d = frame(t); d.enemy_heroes = r8_team(); d.hero = Some("hero_orion".into()); d.respawn_secs = Some(from + 45 - t); out.extend(e.step(&d)); }
+    for t in from + 46..from + 60 { let mut s = alive(t, 2500, p, Some(Lane::Blue), vec![], team(0, 0), 500); s.hero = Some("hero_orion".into()); out.extend(e.step(&s)); }
+    out
+}
+fn review_engine() -> coach_engine::Engine { coach_engine::Engine::new(vec![Box::new(ReviewCoach::default())]) }
+fn panel_state(t: u32, state: &str) -> GameSnapshot { let mut d = dead(t, None); d.death_panel = Some(state.into()); d }
+
+#[test]
+fn an_open_panel_names_what_killed_you() {
+    // rec16 37:02 (fixture 00593): Lurking Terrors 3,142 on top, read and confirmed.
+    let mut e = review_engine();
+    let cues = panel_death(&mut e, 2200, &|t| { let mut d = panel_state(t, "open"); d.death_cause = Some("Lurking Terrors".into());
+        d.death_damage = rows(&[("Lurking Terrors", 3142), ("Escalating Exposure", 761), ("Torment Pulse", 285), ("Gun Damage", 229)]); d.death_total_damage = Some(5352); d });
+    let review = cues.iter().find(|c| c.key.starts_with("death:review")).expect("a review");
+    assert!(review.text.contains("Lurking Terrors") || review.text.contains("Haze") || review.text.contains("burst"), "{}", review.text);
+    assert!(!cues.iter().any(|c| c.key == "review:panel_closed"), "{cues:?}");
+}
+
+#[test]
+fn a_closed_panel_gets_one_open_it_tip_per_match_and_no_damage_cause() {
+    // rec16 27:49 (fixture 00591): the panel collapsed to the portrait tab for the whole death.
+    let mut e = review_engine();
+    let cues = panel_death(&mut e, 1650, &|t| panel_state(t, "closed"));
+    let tips: Vec<&coach_engine::Cue> = cues.iter().filter(|c| c.key == "review:panel_closed").collect();
+    assert_eq!(tips.len(), 1, "{cues:?}");
+    assert_eq!(tips[0].text, "Open the damage panel: click your hero portrait at the right edge of the death screen, so I can tell you what killed you.");
+    assert!(tips[0].skill.is_some());
+    let review = cues.iter().find(|c| c.key.starts_with("death:review")).expect("a review");
+    // The tip comes first, the review without any damage-panel claim.
+    assert!(cues.iter().position(|c| c.key == "review:panel_closed") < cues.iter().position(|c| c.key.starts_with("death:review")), "{cues:?}");
+    for w in ["did most of the damage", "focused you", "'s ", "Lurking", "Melee"] { assert!(!review.text.contains(w), "{w}: {}", review.text); }
+    // A second closed death in the same match: no second tip, and the review does not wait 20 s.
+    let cues = panel_death(&mut e, 1900, &|t| panel_state(t, "closed"));
+    assert!(!cues.iter().any(|c| c.key == "review:panel_closed"), "{cues:?}");
+    assert!(cues.iter().any(|c| c.key.starts_with("death:review")), "{cues:?}");
+}
+
+#[test]
+fn an_unreadable_or_partial_panel_is_disregarded() {
+    // A panel on screen that never read reliably: even a cause or rows leaking through are ignored.
+    let mut e = review_engine();
+    let cues = panel_death(&mut e, 1950, &|t| { let mut d = panel_state(t, "unreadable"); d.death_cause = Some("Melee".into());
+        d.death_damage = rows(&[("Royal Pestments", 451), ("Gun Damage", 444)]); d });
+    let review = cues.iter().find(|c| c.key.starts_with("death:review")).expect("a review");
+    for w in ["Melee", "Royal Pestments", "Rat King", "did most of the damage"] { assert!(!review.text.contains(w), "{w}: {}", review.text); }
+    assert!(!cues.iter().any(|c| c.key == "review:panel_closed"), "not closed: no tip");
+}
+
+#[test]
+fn a_panel_repeating_the_previous_deaths_is_stale() {
+    // Death 1 read Kelvin's Arctic Beam; death 2 reports the very same rows and total (never
+    // reset between the deaths): not death 2's cause.
+    let mut e = review_engine();
+    let arctic = |t: u32| { let mut d = panel_state(t, "open"); d.death_cause = Some("Arctic Beam".into());
+        d.death_damage = rows(&[("Arctic Beam", 1342), ("Frost Grenade", 396), ("Gun Damage", 153)]); d.death_total_damage = Some(2670); d };
+    let first = panel_death(&mut e, 2500, &arctic);
+    assert!(first.iter().any(|c| c.key.starts_with("death:review") && c.text.contains("Arctic Beam")), "{first:?}");
+    let second = panel_death(&mut e, 2700, &arctic);
+    let review = second.iter().find(|c| c.key.starts_with("death:review")).expect("a review");
+    assert!(!review.text.contains("Arctic Beam") && !review.text.contains("Kelvin"), "{}", review.text);
+}
+
+#[test]
+fn a_rejuvenator_revive_is_not_a_death() {
+    // rec17 26:12: one grey "Respawn in: 2" frame flagged revived, live frames without a health
+    // read, then health again: no death review (it was spoken 23 s later before).
+    let mut e = review_engine();
+    let p = Pt { x: 0.5, y: 0.55 };
+    let mut keys = vec![];
+    for (t, hp) in [(1560u32, Some(2100u32)), (1566, Some(2140))] {
+        let mut s = alive(t, 0, p, Some(Lane::Blue), vec![], team(0, 0), 8950); s.hp = hp; keys.extend(e.step(&s).into_iter().map(|c| c.key));
+    }
+    let mut d = dead(1572, None); d.revived = true; d.respawn_secs = Some(2); keys.extend(e.step(&d).into_iter().map(|c| c.key));
+    for (t, hp) in [(1579u32, None), (1587, None), (1595, Some(2233u32)), (1603, Some(2233)), (1611, Some(2233))] {
+        let mut s = alive(t, 0, p, Some(Lane::Blue), vec![], team(0, 0), 9681); s.hp = hp; keys.extend(e.step(&s).into_iter().map(|c| c.key));
+    }
+    assert!(!keys.iter().any(|k| k.starts_with("death:review")), "{keys:?}");
+    assert!(e.life().last_death.is_none());
+    // A revive flagged on the live frame right after the grey screen undoes that death too.
+    let mut e = review_engine();
+    let mut keys = vec![];
+    let s = alive(2200, 2000, p, Some(Lane::Blue), vec![], team(0, 0), 4824); keys.extend(e.step(&s).into_iter().map(|c| c.key));
+    let d = dead(2204, None); keys.extend(e.step(&d).into_iter().map(|c| c.key));
+    let mut s = alive(2207, 1647, p, Some(Lane::Blue), vec![], team(0, 0), 4824); s.revived = true; keys.extend(e.step(&s).into_iter().map(|c| c.key));
+    for t in [2210u32, 2214, 2230] { keys.extend(e.step(&alive(t, 1600, p, Some(Lane::Blue), vec![], team(0, 0), 4824)).into_iter().map(|c| c.key)); }
+    assert!(!keys.iter().any(|k| k.starts_with("death:review")), "{keys:?}");
+    assert!(e.life().last_death.is_none());
 }
