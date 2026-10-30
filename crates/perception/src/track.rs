@@ -64,6 +64,15 @@ pub struct Extrapolated {
     last_verify_ms: Option<u64>,
     /// Verified readings that disagree with the extrapolation, kept while they agree with each other.
     pending: Vec<(u32, u64)>,
+    /// Consecutive cheap readings off by whole minutes (the minute-digit misread pattern).
+    minute_streak: u32,
+}
+
+/// Whether `v` differs from `e` by whole minutes (±1 s) but less than ten minutes: the
+/// minute-digit misread of small blurred clock text ("6:13" for 5:13).
+pub fn whole_minutes_apart(v: u32, e: u32) -> bool {
+    let d = v.abs_diff(e);
+    d >= 59 && d < 598 && (d % 60 <= 1 || d % 60 >= 59)
 }
 
 /// Whether `a` and `b` differ by whole tens of minutes (600 s multiples, ±2 s): the
@@ -87,6 +96,15 @@ impl Extrapolated {
     pub const PENDING_GAP_MS: u64 = 20_000;
     /// Dropping a tens-of-minutes digit needs consistent reads over at least this long.
     pub const TENS_DROP_SPAN_MS: u64 = 30_000;
+    /// A backward jump by whole minutes (no restart) needs this many consistent verified reads
+    /// over at least `MINUTE_BACK_SPAN_MS` (rec13 jumped 7:48 -> 6:51 on two reads).
+    pub const MINUTE_BACK_READS: usize = 4;
+    pub const MINUTE_BACK_SPAN_MS: u64 = 6_000;
+    /// After this many consecutive cheap reads off by whole minutes, the pattern is no longer
+    /// dismissed as a misread: the anchor itself may carry the misread, so verify.
+    pub const MINUTE_STREAK_VERIFY: u32 = 6;
+    /// Restarted clocks (a new match) land below this; backward jumps there are not held back.
+    pub const RESTART_BELOW: u32 = 90;
 
     pub fn expected(&self, now_ms: u64) -> Option<u32> {
         self.anchor.filter(|(_, t)| now_ms >= *t).map(|(v, t)| v + ((now_ms - t) / 1000) as u32)
@@ -103,7 +121,7 @@ impl Extrapolated {
         let Some(expected) = self.expected(now_ms) else { return throttle_ok };
         if let Some(v) = cheap.filter(|v| v.abs_diff(expected) <= Self::TOLERANCE) {
             // Agreement within tolerance: adopt the visible reading (removes sub-second drift).
-            self.anchor = Some((v, now_ms)); self.mismatches = 0; self.last_confirm_ms = now_ms;
+            self.anchor = Some((v, now_ms)); self.mismatches = 0; self.last_confirm_ms = now_ms; self.minute_streak = 0;
             return self.last_verify_ms.is_none_or(|t| now_ms < t || now_ms - t >= Self::REVERIFY_MS);
         }
         // Disagreement: keep reporting the extrapolation (a cheap misread never moves it).
@@ -116,12 +134,20 @@ impl Extrapolated {
         // 140 s because these correct reads were dismissed as minute misreads).
         if cheap.is_some_and(|v| v > expected && tens_of_minutes_apart(v, expected)) { return throttle_ok; }
         let minute_misread = cheap.is_some_and(|v| { let d = v.abs_diff(expected); d >= 59 && (d % 60 <= 1 || d % 60 >= 59) });
-        if minute_misread { self.last_confirm_ms = now_ms; return false; }
+        if minute_misread {
+            // A long unbroken streak means the anchor may hold the misread (rec13 anchored 6:52
+            // for 5:52 and dismissed 50 s of correct 5:xx reads): verify again.
+            self.minute_streak += 1;
+            if self.minute_streak >= Self::MINUTE_STREAK_VERIFY { return throttle_ok; }
+            self.last_confirm_ms = now_ms; return false;
+        }
         throttle_ok
     }
     /// Record the result of an expensive verification.
     pub fn verify(&mut self, value: Option<u32>, now_ms: u64) {
         self.last_verify_ms = Some(now_ms);
+        // A minute-misread streak earns one verification, not one per frame.
+        self.minute_streak = 0;
         let Some(v) = value else { return };
         // The value follows wall time, so even the reliable reader is not trusted when it alone
         // contradicts the extrapolation (a recorded match read 7:00 for 17:00 and +60 s): a jump is
@@ -148,11 +174,15 @@ impl Extrapolated {
                 match (tens_of_minutes_apart(v, e), v > e) {
                     (true, true) => self.pending.len() >= 2,
                     (true, false) => self.pending.len() >= 5 && span >= Self::TENS_DROP_SPAN_MS,
+                    // A backward jump by whole minutes that is not a restart is the minute-digit
+                    // misread, not a rewind: it needs a longer consistent streak.
+                    (false, false) if v >= Self::RESTART_BELOW && whole_minutes_apart(v, e) =>
+                        self.pending.len() >= Self::MINUTE_BACK_READS && span >= Self::MINUTE_BACK_SPAN_MS,
                     (false, forward) => self.pending.len() >= if forward { 3 } else { 2 },
                 }
             }
         };
-        if accept { self.anchor = Some((v, now_ms)); self.last_confirm_ms = now_ms; self.mismatches = 0; self.pending.clear(); }
+        if accept { self.anchor = Some((v, now_ms)); self.last_confirm_ms = now_ms; self.mismatches = 0; self.minute_streak = 0; self.pending.clear(); }
     }
     pub fn reset(&mut self) { *self = Self::default(); }
 }
@@ -309,6 +339,38 @@ mod tests {
         c.verify(Some(936), 5000); assert_eq!(c.expected(5000), Some(936), "two consistent reads restore the digit");
         assert!(!c.observe(Some(337), 6000), "now the dropped-digit cheap read is the misread");
         assert_eq!(c.value(6000), Some(937));
+    }
+    #[test]
+    fn extrapolated_holds_back_a_whole_minute_backward_jump() {
+        // rec13: two consistent verified "-60 s" reads moved 7:48 back to 6:51 mid-match.
+        let mut c = Extrapolated::default();
+        c.verify(Some(468), 0);
+        c.verify(Some(410), 3000); c.verify(Some(412), 5000);
+        assert_eq!(c.expected(5000), Some(473), "two -60 s reads do not move an established clock");
+        c.verify(Some(414), 7000);
+        assert_eq!(c.expected(7000), Some(475), "three in 4 s do not either");
+        c.verify(Some(416), 9000);
+        assert_eq!(c.expected(9000), Some(416), "four consistent reads over 6 s do (the anchor was the misread)");
+        // A restart (new match) still moves it on two reads.
+        let mut r = Extrapolated::default(); r.verify(Some(1260), 0);
+        r.verify(Some(0), 2000); r.verify(Some(2), 4000); assert_eq!(r.expected(4000), Some(2));
+        // Other backward gaps (a rewind) keep the two-read rule.
+        let mut w = Extrapolated::default(); w.verify(Some(900), 0);
+        w.verify(Some(700), 2000); w.verify(Some(702), 4000); assert_eq!(w.expected(4000), Some(702));
+    }
+    #[test]
+    fn extrapolated_reverifies_a_long_minute_misread_streak() {
+        // An anchor that carries the misread (6:52 for 5:52) is questioned after a streak of
+        // consistent whole-minute cheap reads instead of being confirmed by them forever.
+        let mut c = Extrapolated::default();
+        c.verify(Some(412), 0);
+        for k in 1..Extrapolated::MINUTE_STREAK_VERIFY as u64 { assert!(!c.observe(Some(352 + 3 * k as u32), 3000 * k)); }
+        let t = 3000 * Extrapolated::MINUTE_STREAK_VERIFY as u64;
+        assert!(c.observe(Some(352 + (t / 1000) as u32), t), "the streak asks for a verification");
+        // An agreeing read resets the streak.
+        let mut a = Extrapolated::default(); a.verify(Some(412), 0);
+        for k in 1..20u64 { let v = if k % 3 == 0 { 412 + 3 * k as u32 } else { 352 + 3 * k as u32 }; assert!(!a.observe(Some(v), 3000 * k)); }
+        assert!(whole_minutes_apart(352, 412) && !whole_minutes_apart(331, 931) && !whole_minutes_apart(400, 412));
     }
     #[test]
     fn vote_prefers_majority_then_expected_value() {

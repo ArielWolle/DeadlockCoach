@@ -24,6 +24,69 @@ pub fn digit_glyphs(img: &DynamicImage, area: Bounds) -> Option<(Bounds, usize)>
     Some((Bounds { x: x0, y: y0, w: x1 - x0 + 1, h: y1 - y0 + 1 }, g.len()))
 }
 
+/// Central world area sampled for the revive cue (between the top bar, the damage panel and
+/// the ability bar).
+pub const WORLD_AREA: Bounds = Bounds { x: 380, y: 130, w: 800, h: 480 };
+/// Share of coloured pixels (saturation > 0.3, value > 0.25) in the central world area.
+/// A Rejuvenator revive greys the world out under the "Respawn in: 1" banner (rec8 39:17,
+/// ~0.02); real death screens are red-tinted or spectate a teammate in colour (>= 0.3).
+pub fn world_colour_share(img: &DynamicImage) -> f32 {
+    let a = WORLD_AREA;
+    if img.width() < a.x + a.w || img.height() < a.y + a.h { return 1.0; }
+    let rgb = img.crop_imm(a.x, a.y, a.w, a.h).to_rgb8();
+    let (mut n, mut c) = (0u32, 0u32);
+    for y in (0..a.h).step_by(4) { for x in (0..a.w).step_by(4) {
+        let p = rgb.get_pixel(x, y); let (_, s, v) = hsv(p[0], p[1], p[2]);
+        n += 1; if s > 0.3 && v > 0.25 { c += 1; }
+    } }
+    c as f32 / n.max(1) as f32
+}
+/// Upper bound of [`world_colour_share`] for the greyed revive screen.
+pub const REVIVE_MAX_COLOUR: f32 = 0.10;
+/// Highest countdown a revive screen shows ("Respawn in: 1"; real deaths start at 8+ s).
+pub const REVIVE_MAX_COUNT: u32 = 2;
+/// A revive returns to the live HUD this soon after its death screen was first seen (rec8
+/// 39:17 -> 39:22); the shortest real death measured took 10 s (rec13 6:07 -> 6:17).
+pub const REVIVE_RETURN_MS: u64 = 8_000;
+/// The death screen must follow a live frame this closely to judge its first moments.
+pub const REVIVE_AFTER_ALIVE_MS: u64 = 10_000;
+
+/// Rejuvenator revive detector. Every death screen starts grey for a moment, but a real one
+/// shows its full countdown (43, 59, 85 ... rec8) and lasts 10 s or more; a revive shows
+/// "Respawn in: 1" on the grey world, without the shop button, and the live HUD is back within
+/// seconds. A frame is flagged when the countdown confirms it, else when the live HUD returns
+/// after a brief grey death screen whose countdown was never above `REVIVE_MAX_COUNT`.
+#[derive(Default, Clone, Debug)]
+pub struct ReviveWatch { stretch: Option<ReviveStretch> }
+#[derive(Clone, Copy, Debug)]
+struct ReviveStretch { start: u64, grey: bool, max_read: Option<u32>, flagged: bool }
+impl ReviveWatch {
+    /// A death-screen frame. `first`: the previous frame was alive; `since_alive`: ms since the
+    /// last live frame; `grey`: [`world_colour_share`] below `REVIVE_MAX_COLOUR`; `read`: the
+    /// countdown read on this frame. Returns true when this frame shows a revive.
+    pub fn dead(&mut self, first: bool, since_alive: Option<u64>, grey: bool, read: Option<u32>, now: u64) -> bool {
+        let s = match (&mut self.stretch, first) {
+            (Some(s), false) => { s.grey &= grey; s.max_read = s.max_read.max(read); s }
+            (slot, _) => {
+                let recent = since_alive.is_some_and(|d| d <= REVIVE_AFTER_ALIVE_MS);
+                slot.insert(ReviveStretch { start: now, grey: grey && recent, max_read: read, flagged: false })
+            }
+        };
+        let revive = s.grey && s.max_read.is_some_and(|r| r <= REVIVE_MAX_COUNT) && now >= s.start && now - s.start <= REVIVE_RETURN_MS;
+        if revive { s.flagged = true; }
+        revive
+    }
+    /// A live-HUD frame: ends the death screen. True when it completed a revive that no
+    /// death-screen frame could confirm (countdown unread).
+    pub fn alive(&mut self, now: u64) -> bool {
+        let Some(s) = self.stretch.take() else { return false };
+        !s.flagged && s.grey && s.max_read.is_none_or(|r| r <= REVIVE_MAX_COUNT) && now >= s.start && now - s.start <= REVIVE_RETURN_MS
+    }
+    /// The shop opened during the death (its respawn banner): a real death.
+    pub fn interrupt(&mut self) { if let Some(s) = &mut self.stretch { s.grey = false; } }
+    pub fn reset(&mut self) { self.stretch = None; }
+}
+
 /// Tight padded crop around located digits for line recognition.
 pub fn digits_crop(img: &DynamicImage, b: Bounds) -> DynamicImage {
     crop_padded(img, b.x, b.y, b.x + b.w - 1, b.y + b.h - 1, (b.h / 3).max(3))
@@ -248,6 +311,9 @@ pub fn mentions_killing_blow(name: &str, hits: &str) -> bool {
     let h = hits.trim().to_lowercase();
     ["killing", "kiling", "gilling", "kiiling", "illing", "iling"].iter().any(|k| l.contains(k)) || l.split_whitespace().any(|w| matches!(w, "blow" | "bow"))
         || ["low", "slow", "blow", "bow"].iter().any(|k| h.starts_with(k))
+        // The whole tag in the hits box ("Ifling Blow": rec13 6:07, whose short death then got no
+        // review because the killing blow was never tagged).
+        || h.split_whitespace().any(|w| matches!(w.trim_matches(|c: char| !c.is_alphanumeric()), "blow" | "bow" | "blo"))
 }
 
 /// Lines per panel row in [`panel_crops`]: name, wide name, hits, damage digits.
@@ -360,6 +426,30 @@ impl Panel {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn killing_blow_tag_in_the_hits_box() {
+        assert!(mentions_killing_blow("Essence Bomb ", "Ifling Blow"), "rec13 6:07");
+        assert!(mentions_killing_blow("Melee killing B", "low+5% "));
+        for h in ["x18 +7%", "+23% ", "x", "S", "", "x+5%"] { assert!(!mentions_killing_blow("Rake", h), "{h}"); }
+    }
+    #[test]
+    fn revive_watch_separates_revives_from_real_deaths() {
+        // rec8 39:17: grey "Respawn in: 1" 6 s after the last live frame, live again at 39:22.
+        let mut w = ReviveWatch::default();
+        assert!(w.dead(true, Some(6000), true, Some(1), 0));
+        assert!(!w.alive(5000), "already flagged on the death screen");
+        // Countdown unread: the quick return to the live HUD confirms it.
+        assert!(!w.dead(true, Some(6000), true, None, 10_000));
+        assert!(w.alive(15_000));
+        // Real deaths: grey first frame with the full countdown (rec8 17:00: 43) ...
+        assert!(!w.dead(true, Some(2000), true, Some(43), 20_000)); assert!(!w.dead(false, None, false, Some(38), 25_000)); assert!(!w.alive(60_000));
+        // ... a coloured red-tinted screen (rec13 6:07: 8), or a return too late to be a revive.
+        assert!(!w.dead(true, Some(2000), false, Some(8), 70_000)); assert!(!w.alive(80_000));
+        assert!(!w.dead(true, Some(2000), true, None, 90_000)); assert!(!w.alive(100_000));
+        // A grey screen long after the last live frame (recording gap), or the shop opened.
+        assert!(!w.dead(true, Some(40_000), true, Some(1), 110_000)); assert!(!w.alive(112_000));
+        assert!(!w.dead(true, Some(2000), true, None, 120_000)); w.interrupt(); assert!(!w.alive(124_000));
+    }
     #[test]
     fn countdown_rejects_dropped_and_doubled_digits() {
         let mut c = Countdown::default();

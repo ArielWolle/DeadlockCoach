@@ -727,7 +727,14 @@ pub struct Tracker {
     zone_pending: Option<(u64, String)>,
     /// Carrying the urn: your marker is replaced by the vase. Last carried position.
     urn_you: Option<(u64, Pt)>,
+    /// Last reported (confirmed) own position, for short holds on live frames.
+    confirmed_you: Option<(u64, Pt)>,
 }
+
+/// A live frame without your marker (portraits stacked on it, effects) reports the last
+/// confirmed position for this long: the frames just before a death are the ones that judge
+/// "alone" and "forward", and a dive often covers the marker with enemy rings.
+pub const OWN_HOLD_MS: u64 = 4_000;
 
 /// Layout votes needed before the per-match layout overrides a frame's own colour evidence.
 pub const LAYOUT_MIN_VOTES: u32 = 5;
@@ -757,6 +764,13 @@ impl Tracker {
         if mirrored { self.layout_votes.0 += weight; } else { self.layout_votes.1 += weight; }
         self.layout_votes.2 = now_ms;
     }
+
+    /// The last confirmed own position when at most `max_ms` old.
+    pub fn held_you(&self, now_ms: u64, max_ms: u64) -> Option<Pt> {
+        self.confirmed_you.filter(|(t, _)| now_ms >= *t && now_ms - t <= max_ms).map(|(_, p)| p)
+    }
+    /// Forget the held own position (death: the next live frame is a respawn elsewhere).
+    pub fn forget_you(&mut self) { self.confirmed_you = None; }
 
     /// The lane layout latched for this match (majority of the votes so far), once at least
     /// `LAYOUT_MIN_VOTES` were cast. Feed it to `Analyzer::run_layout`.
@@ -900,6 +914,7 @@ impl Tracker {
             },
             _ => {}
         }
+        if let Some(p) = raw.you { self.confirmed_you = Some((now_ms, p)); }
         // Zone label: a read of a known name is accepted at once, anything else needs a second
         // identical read. Held while you stay near where it was read.
         let read_now = raw.zone.take();
