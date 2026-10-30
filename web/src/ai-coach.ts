@@ -746,7 +746,7 @@ export function liveTriggers(s: AiSnapshot, history: AiHistory, now: number): Ma
   if (hp != null && hp < 50) out.set('hp-low', `your health is ${hp}%`);
   const back = history.respawned(now); if (back) out.set('respawn', `you respawned ${back.ago}s ago`);
   const label = (p: { hero?: string | null; slot: number }, ally: boolean) => p.hero ? name(p.hero) : `${ally ? 'ally' : 'enemy'} ${p.slot + 1}`;
-  const enemyDead = status.filter(p => !p.ally && p.dead === true), allyDead = status.filter(p => p.ally && p.dead === true);
+  const enemyDead = status.filter(p => !p.ally && p.dead === true), allyDead = status.filter(p => p.ally && p.dead === true && !(s.hero && p.hero === s.hero));
   if (enemyDead.length >= 2) {
     const secs = enemyDead.map(p => p.respawn_secs).filter((v): v is number => typeof v === 'number');
     out.set('enemy-window', `${enemyDead.length} enemies dead (${enemyDead.map(p => label(p, false)).join(', ')})${secs.length ? `, first back in ${Math.min(...secs)}s` : ''}`);
@@ -1396,13 +1396,16 @@ export function buildSummary({ snapshot: s, history, now, trigger, name = defaul
   // Teams from the top bar.
   const status = s.hero_status || [];
   for (const ally of [true, false]) {
-    const team = status.filter(p => p.ally === ally);
+    // Teammates only: your own slot is not an ally (rec16 34:04 "Allies: 1 alive" was you alone
+    // and the reply said "wait with our living ally").
+    const team = status.filter(p => p.ally === ally && !(ally && s.hero && p.hero === s.hero));
     if (!team.length) continue;
     const label = (p: typeof team[number]) => p.hero ? name(p.hero) : `${ally ? 'ally' : 'enemy'} ${p.slot + 1}`;
-    const deadOnes = team.filter(p => p.dead === true), unseen = team.filter(p => p.dead !== true && p.bar_visible === false);
-    const low = team.filter(p => p.dead !== true && p.bar_visible !== false && num(p.health_ratio) != null && p.health_ratio! < .35);
-    const alive = team.length - deadOnes.length;
-    add(ally ? 8 : 9, `${ally ? 'Allies' : 'Enemies'}: ${alive} alive${deadOnes.length ? `, dead: ${deadOnes.map(p => `${label(p)}${p.respawn_secs != null ? ` (${p.respawn_secs}s)` : ''}`).join(', ')}` : ''}${!ally && unseen.length ? `, not seen recently: ${unseen.length}` : ''}${low.length ? `, low HP: ${low.map(p => `${label(p)} ${Math.round(p.health_ratio! * 100)}%`).join(', ')}` : ''}`);
+    const deadOnes = team.filter(p => p.dead === true), unseen = team.filter(p => p.dead === false && p.bar_visible === false);
+    const low = team.filter(p => p.dead === false && p.bar_visible !== false && num(p.health_ratio) != null && p.health_ratio! < .35);
+    // A slot without a dead/alive read is neither (never counted as alive).
+    const alive = team.filter(p => p.dead === false).length, unread = team.length - alive - deadOnes.length;
+    add(ally ? 8 : 9, `${ally ? 'Teammates (not counting you)' : 'Enemies'}: ${alive} alive${deadOnes.length ? `, dead: ${deadOnes.map(p => `${label(p)}${p.respawn_secs != null ? ` (${p.respawn_secs}s)` : ''}`).join(', ')}` : ''}${unread ? `, not read: ${unread}` : ''}${!ally && unseen.length ? `, not seen recently: ${unseen.length}` : ''}${low.length ? `, low HP: ${low.map(p => `${label(p)} ${Math.round(p.health_ratio! * 100)}%`).join(', ')}` : ''}`);
   }
   if (!status.length) {
     if (s.enemy_heroes?.length) add(6, `Enemy heroes: ${s.enemy_heroes.map(name).join(', ')}`);
@@ -2089,6 +2092,8 @@ export interface AiCoachDeps {
   onAdvice: (cue: Cue, advice: Advice, meta: AdviceMeta) => void; onStatus?: (s: AiStatus) => void;
   now?: () => number; fetchImpl?: typeof fetch; pageProtocol?: () => string;
 }
+/** Events whose detail is a top-bar count: restated from the latest snapshot when asked. */
+const LIVE_COUNT_EVENTS = new Set(['enemy-window', 'allies-down']);
 const EVENT_TEXT: Record<string, string> = { phase: 'new phase', respawn: 'respawn', 'enemy-window': 'enemy-dead window', 'objective-soon': 'objective within 60 s', 'souls-tier': 'souls reach the usual buy', 'nw-swing': 'big team souls swing', good: 'good play (see GOOD PLAYS)' };
 /** With a long respawn timer the death review waits up to this long for the rule death review. */
 export const DEATH_REVIEW_WAIT_MS = 15000;
@@ -2126,7 +2131,14 @@ export class AiCoach {
     // The rule coach just covered the event's theme (plan:, threat:, lead:, reset:, ... in 30 s).
     const covered = fresh.filter(e => EVENT_THEME[e.kind] && ruleCovered(EVENT_THEME[e.kind], this.history, now));
     if (covered.length) { for (const e of covered) this.consumed.add(e); this.status.ruleSkips = (this.status.ruleSkips || 0) + covered.length; fresh = fresh.filter(e => !covered.includes(e)); }
-    const parts = fresh.map(e => `${EVENT_TEXT[e.kind] || e.kind}: ${e.detail}`);
+    // Top-bar counts are restated from the latest snapshot: the event's own detail is the count when
+    // it began (rec16 34:56 said "2 enemies dead" with 3 dead on the top bar, and the reply said "two
+    // are dead"); a window that has closed since is no reason.
+    const current = liveTriggers(this.latest, this.history, now);
+    const parts = fresh.flatMap(e => {
+      if (!LIVE_COUNT_EVENTS.has(e.kind)) return [`${EVENT_TEXT[e.kind] || e.kind}: ${e.detail}`];
+      const d = current.get(e.kind); return d ? [`${EVENT_TEXT[e.kind] || e.kind}: ${d}`] : [];
+    });
     const d = this.history.samples.at(-1)?.nwDiff, s = this.latest;
     // Big = 4,000 or 5% of the average team souls, whichever is larger (lategame totals are 200k+).
     const scale = num(s.ally_networth) != null && num(s.enemy_networth) != null ? .05 * (s.ally_networth! + s.enemy_networth!) / 2 : 0;

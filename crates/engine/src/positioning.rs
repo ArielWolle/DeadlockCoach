@@ -42,8 +42,10 @@ pub struct TeamPicture {
     pub allies_hp: Vec<Option<f32>>,
 }
 impl TeamPicture {
+    /// None unless all twelve slots have a dead/alive read: a slot not read is no evidence for a
+    /// count, so every count-based call stays silent rather than counting it alive.
     pub fn from(s: &GameSnapshot) -> Option<Self> {
-        if s.hero_status.len() != 12 { return None; }
+        if !top_bar_read(s) { return None; }
         let mut t = TeamPicture::default();
         for h in &s.hero_status {
             let dead = h.dead == Some(true);
@@ -344,8 +346,10 @@ impl WindowMemo {
     /// The window was spoken.
     pub fn said(&mut self) { for d in &self.current { if !self.said.contains(d) { self.said.push(*d); } } }
 }
+/// All twelve top-bar slots read with a dead/alive state.
+pub fn top_bar_read(s: &GameSnapshot) -> bool { s.hero_status.len() == 12 && s.hero_status.iter().all(|h| h.dead.is_some()) }
 /// Dead slots of one team when the top bar was read.
-pub fn dead_set(s: &GameSnapshot, ally: bool) -> Option<Vec<usize>> { (s.hero_status.len() == 12).then(|| dead_slots(s, ally)) }
+pub fn dead_set(s: &GameSnapshot, ally: bool) -> Option<Vec<usize>> { top_bar_read(s).then(|| dead_slots(s, ally)) }
 /// Top-bar slots (0-5) of one team shown dead.
 pub fn dead_slots(s: &GameSnapshot, ally: bool) -> Vec<usize> {
     if s.hero_status.len() != 12 { return vec![]; }

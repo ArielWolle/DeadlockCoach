@@ -821,7 +821,7 @@ impl Scanner {
         // Health bars / dead portraits are pixel reads for all twelve slots; only dead slots add
         // a respawn-timer line. Committed below for gameplay frames only (the death screen tints them).
         let mut bar_status = self.team_status.clone();
-        let dead_slots = crate::team::apply_bars(top, &mut bar_status);
+        let dead_slots = crate::team::apply_bars_at(top, &mut bar_status, Some(now_ms));
         let respawn_lines = batch.add_all(crate::team::respawn_crops(top, &dead_slots));
         // Ability bar: a pixel test of the four icons at most every 2 s on live-HUD frames; only
         // slots showing cooldown digits add a line.

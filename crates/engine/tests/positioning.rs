@@ -227,3 +227,19 @@ fn positional_calls_need_two_consistent_reads_and_do_not_flip() {
     e.step(&at(534, ahead.clone()));
     assert_eq!(e.step(&at(536, ahead)).first().map(|c| c.key.as_str()), Some("pos:go_in"));
 }
+#[test]
+fn an_unread_top_bar_slot_silences_every_count() {
+    // rec16/rec17: a slot without a dead/alive read was counted alive; a count needs all twelve.
+    let mut gone = hero(1, false, 0.6, 0.5); gone.unseen_ms = 7000;
+    let visible = vec![gone, hero(2, false, 0.1, 0.1), hero(3, false, 0.15, 0.1)];
+    let mut s = snap(visible); team(&mut s, [Some(0.9), FULL, FULL, FULL, FULL, FULL], [FULL, FULL, Some(-1.0), Some(-1.0), Some(-1.0), Some(-1.0)]);
+    assert_eq!(advice(&s).as_deref(), Some("enemies_down"));
+    s.hero_status[1].dead = None;
+    assert!(coach_engine::positioning::TeamPicture::from(&s).is_none());
+    assert!(coach_engine::positioning::dead_set(&s, false).is_none());
+    assert_ne!(advice(&s).as_deref(), Some("enemies_down"), "one unread ally slot: no window call");
+    let mut s = snap(vec![]); team(&mut s, [Some(0.9), Some(-1.0), Some(-1.0), FULL, FULL, FULL], [FULL; 6]);
+    assert_eq!(advice(&s).as_deref(), Some("allies_down"));
+    s.hero_status[8].dead = None;
+    assert_eq!(advice(&s), None, "one unread enemy slot: no teammates-down count");
+}
