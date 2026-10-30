@@ -540,3 +540,32 @@ test('match focus goal: chosen from the last 3 matches, said once at the start, 
   assert.ok(!chooseGoals(p.matches).some(g=>g.id==='unspent_souls'),JSON.stringify(chooseGoals(p.matches)));
 });
 import './mastery.unit.ts';
+
+// --- Recordings split by game (recording-games.ts) ---
+import { groupGames, gameFileName, inWindow, downloadable, UNTAGGED_GAP_MS } from '../src/recording-games.ts';
+test('recordings split by game: tags, then match id, clock restart and long pauses for untagged frames', () => {
+  const img = new Blob(['x']);
+  let id = 0; const f = (created: number, snapshot: Record<string, unknown>, game?: string) => ({ id: ++id, created, timestamp: 0, cues: [], image: img, snapshot, game });
+  const t = 1_800_000_000_000;
+  const frames = [
+    f(t, { game_clock_secs: 300, hero: 'hero_orion', match_id: 1 }), f(t + 4000, { game_clock_secs: 304, hero: 'hero_orion', match_id: 1 }),
+    f(t + 8000, { game_clock_secs: 308, match_id: 2, hero: 'hero_artist' }), // new match id
+    f(t + 12000, { game_clock_secs: 20, hero: 'hero_artist' }), // clock restart
+    f(t + 16000 + UNTAGGED_GAP_MS, { game_clock_secs: 30 }), // long pause
+    f(t + 9e6, { game_clock_secs: 600, hero: 'hero_orion', match_result: 'win' }, 'gA'), f(t + 9e6 + 4000, { screen: 'PostGame' }, 'gA'),
+    f(t + 9e6 + 8000, { screen: 'PostGame' }, 'gB'),
+  ];
+  const games = groupGames([...frames].reverse()); // input order does not matter
+  assert.deepEqual(games.map(g => g.frames.length), [2, 1, 1, 1, 2, 1]);
+  assert.deepEqual(games.map(g => g.frames.flatMap(x => x.id)).flat(), [1, 2, 3, 4, 5, 6, 7, 8]); // every frame once
+  const a = games[4]; assert.equal(a.key, 'gA'); assert.equal(a.hero, 'hero_orion'); assert.equal(a.result, 'win'); assert.equal(a.played, 1); assert.equal(a.endClock, 600);
+  assert.equal(games[5].played, 0); // menus only
+  assert.equal(downloadable(a), false);
+  assert.equal(downloadable(groupGames(Array.from({ length: 10 }, (_, i) => f(t + i * 4000, { game_clock_secs: 600 + 4 * i }, 'gC')))[0]), true);
+  const name = gameFileName({ start: new Date(2026, 9, 30, 21, 5).getTime(), hero: 'hero_orion', result: 'win' }, () => 'Grey Talon');
+  assert.equal(name, 'deadlock-recording-2026-10-30-2105-grey-talon-win.json');
+  assert.equal(gameFileName({ start: new Date(2026, 0, 2, 3, 4).getTime(), hero: null, result: null }), 'deadlock-recording-2026-01-02-0304.json');
+  // A minute after the last frame still belongs to the game (the death review, the end-of-game call).
+  assert.deepEqual(inWindow([{ t: t - 10000 }, { t: t + 1000 }, { t: t + 64000 }, { t: t + 70000 }], { start: t, end: t + 5000 }).map(x => x.t - t), [1000, 64000]);
+  assert.equal(defaults.autoDownloadRecording, false); assert.equal(normalize({ autoDownloadRecording: true }).autoDownloadRecording, true);
+});

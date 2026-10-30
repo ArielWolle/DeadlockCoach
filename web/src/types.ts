@@ -66,7 +66,8 @@ export interface TacticalDecision {action:string;text:string;rationale:string;la
 export interface Analysis { snapshot: Snapshot; cues: Cue[]; perception?: PerceptionReport | null; tactics?:TacticalDecision|null }
 export interface Options { timers: boolean; economy: boolean; map: boolean; counters: boolean; deaths: boolean; laning:boolean }
 export interface Settings {
-  muted: boolean; voice: string; rate: number; volume: number; interval: number; record: boolean; autoCrop: boolean;
+  muted: boolean; voice: string; rate: number; volume: number; interval: number; record: boolean;
+  /** Save each finished game's recording as a file (recording-games.ts); needs ecord. */ autoDownloadRecording: boolean; autoCrop: boolean;
   options: Options; crop: { x: number; y: number; w: number; h: number };
   laneFocus:'auto'|'Green'|'Blue'|'Yellow';
   heroFocus:string;
@@ -83,7 +84,7 @@ export interface Settings {
   /** Start-of-game pep talk (pregame.ts): a short spoken briefing when a match starts. Default on. */
   pregame: boolean;
 }
-export interface RecordedFrame { id?: number; created: number; timestamp: number; snapshot: Snapshot; cues: Cue[]; image: Blob; perception?: PerceptionReport | null; profile_id?: string }
+export interface RecordedFrame { id?: number; created: number; /** Game id (recording-games.ts); absent on frames recorded before games were split. */ game?: string; timestamp: number; snapshot: Snapshot; cues: Cue[]; image: Blob; perception?: PerceptionReport | null; profile_id?: string }
 export interface Manifest { schema: number; version: string; files: Record<string, { bytes: number; sha256: string }> }
 export interface Knowledge { id: string; title: string; category: string; body: string }
 export interface GameItem { class_name: string; name: string; cost: number; tier: number }

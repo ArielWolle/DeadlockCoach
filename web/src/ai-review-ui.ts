@@ -19,6 +19,8 @@ export interface ReviewUiDeps {
   isLive?: () => boolean;
   /** A live match was closed here (Stop, "Review my last match"): close it in the Player profile too. */
   finalized?: () => void;
+  /** A live match ended (any reason: PostGame, new match, long gap, Stop): the recording starts a new game. */
+  matchEnded?: (m: EndedMatch) => void;
   /** The focus goals the Player profile set for a live match (scored in the digest), if any. */
   goals?: (source: MatchRecord['source']) => MatchGoal[] | null;
 }
@@ -237,7 +239,7 @@ export function mountMatchReviews(deps: ReviewUiDeps): ReviewUi {
     let match = last;
     if (liveTracker.current() && liveAt >= lastAt) {
       if (deps.isLive?.()) match = liveTracker.current();
-      else { const m = liveTracker.finish(); if (m) { match = m; last = m; lastAt = Date.now(); autoDone.add(reviewKey(m.record)); deps.finalized?.(); } }
+      else { const m = liveTracker.finish(); if (m) { match = m; last = m; lastAt = Date.now(); autoDone.add(reviewKey(m.record)); deps.finalized?.(); deps.matchEnded?.(m); } }
     }
     if (!match) {
       // After a reload the live timeline is gone; the Player profile still has the match.
@@ -252,11 +254,11 @@ export function mountMatchReviews(deps: ReviewUiDeps): ReviewUi {
     store, stop: () => reader.stop(), render, reviewLast,
     live(s, wall, cues) {
       liveAt = Date.now();
-      const m = liveTracker.add(s, wall, cues); if (m) ended(m);
+      const m = liveTracker.add(s, wall, cues); if (m) { deps.matchEnded?.(m); ended(m); }
     },
     stopped() {
       const m = liveTracker.stop();
-      if (m) { deps.finalized?.(); ended(m); return; }
+      if (m) { deps.finalized?.(); deps.matchEnded?.(m); ended(m); return; }
       const cur = liveTracker.current();
       if (cur) coachText(`Capture stopped after ${minutes(cur)} min of this match: it stays open (an automatic review needs 10 minutes). `, 'Review it on the Player page');
     },

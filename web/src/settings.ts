@@ -1,6 +1,6 @@
 import type { Settings } from './types';
 export const defaults: Settings = {
-  muted: false, voice: '', rate: 1, volume: 1, interval: 1, record: false, autoCrop: true,
+  muted: false, voice: '', rate: 1, volume: 1, interval: 1, record: false, autoDownloadRecording: false, autoCrop: true,
   options: { timers: true, economy: true, map: true, counters: true, deaths: true, laning:true },
   laneFocus:'auto',
   heroFocus:'',
@@ -17,7 +17,7 @@ const number = (n: unknown, lo: number, hi: number, fallback: number) => typeof 
 export function normalize(input: unknown): Settings {
   const value = input && typeof input === 'object' ? input as Partial<Settings> : {};
   const s = structuredClone(defaults);
-  s.muted = value.muted === true; s.record = value.record === true;
+  s.muted = value.muted === true; s.record = value.record === true; s.autoDownloadRecording = value.autoDownloadRecording === true;
   s.autoCrop = value.autoCrop !== false;
   if (['auto','Green','Blue','Yellow'].includes(value.laneFocus || '')) s.laneFocus=value.laneFocus!;
   s.voice = typeof value.voice === 'string' ? value.voice.slice(0, 200) : '';

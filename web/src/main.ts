@@ -18,8 +18,10 @@ import { PlayerPage } from './player-page';
 import { mountMatchReviews, type ReviewUi } from './ai-review-ui'; // end-of-game AI review
 import { mountPregame, type PregameUi } from './pregame-ui'; // start-of-game pep talk
 import { PREGAME } from './pregame'; // start-of-game pep talk
-import { clearFrames, download, listFrames, recordFrame, snapshotLines } from './storage';
-import type { Analysis, Cue, GameItem, Knowledge, Options, Settings, Snapshot, WorkerReply, ProfileReply, PerceptionReport, TacticalDecision, PoolStatus, HeroStatus } from './types';
+import { clearFrames, deleteFrames, download, listFrames, recordFrame, snapshotLines } from './storage';
+import { clockText, downloadable, gameFileName, groupGames, inWindow, newGameId, type RecordedGame } from './recording-games';
+import type { EndedMatch } from './ai-review';
+import type { Analysis, Cue, GameItem, Knowledge, Options, Settings, Snapshot, WorkerReply, ProfileReply, PerceptionReport, TacticalDecision, PoolStatus, HeroStatus, RecordedFrame } from './types';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const button = (id: string) => $<HTMLButtonElement>(id);
@@ -358,6 +360,8 @@ function schedule(delay = settings.interval * 1000) { clearTimeout(timer); if (r
 /** Every spoken cue from either analysis path, kept for recording exports (the fast path speaks
  *  most cues but its results are not stored as frames). Bounded; persisted only while recording. */
 const CUE_LOG_KEY='deadlock-coach-cue-log-v1';
+/** The game the recorded frames belong to (recording-games.ts); renewed at every live match end. */
+let recordingGame=newGameId();
 /** AI gateway exchanges (with raw replies) persisted while recording, so a reload keeps them for the export. */
 const AI_LOG_KEY='deadlock-coach-ai-log-v1';
 try{restoreAiExchanges(JSON.parse(localStorage.getItem(AI_LOG_KEY)||'[]'));}catch{/* ignore a corrupt log */}
@@ -474,6 +478,7 @@ function liveMatchFrame(analysis:Analysis,timestamp:number){
 // Browser tests feed analyzed live frames (a whole match cannot be captured in a test): opt in by
 // defining window.__deadlockTestHooks = {} before the page loads (tests/browser/ai-review.spec.ts).
 {const hooks=(window as unknown as {__deadlockTestHooks?:Record<string,unknown>}).__deadlockTestHooks;
+  if(hooks&&typeof hooks==='object')hooks.recordingGame=()=>recordingGame;
   if(hooks&&typeof hooks==='object')hooks.liveFrame=(snapshot:Snapshot,timestamp:number)=>liveMatchFrame({snapshot,cues:[]},timestamp);}
 async function analyzeLiveFrame(pixels:Pixels,current:number){
   const timestamp=pixels.timestamp,recording=settings.record,preview=pixels.preview;
@@ -485,7 +490,7 @@ async function analyzeLiveFrame(pixels:Pixels,current:number){
     liveMatchFrame(result.analysis,timestamp);
     const delivered=deliver(result.analysis,timestamp);
     apply(delivered,result.elapsed);status('Coaching live');
-    if(recording&&preview)try{await recordFrame({created:Date.now(),timestamp,snapshot:result.analysis.snapshot,cues:delivered.cues,image:preview,perception:result.analysis.perception,profile_id:activeProfile.id});}
+    if(recording&&preview)try{await recordFrame({created:Date.now(),timestamp,snapshot:result.analysis.snapshot,cues:delivered.cues,image:preview,perception:result.analysis.perception,profile_id:activeProfile.id,game:recordingGame});}
       catch(e){settings.record=false;input('record').checked=false;saveSettings(settings);notice(`Local recording paused: ${String(e)}. Coaching continues.`,true);}
   }catch(e){if(current===generation)notice(e instanceof Error?e.message:String(e),true);}
   finally{busy=false;}
@@ -798,9 +803,58 @@ async function replayImage(file: Blob, crop: Crop): Promise<{ pixels: Pixels; cr
   }
 }
 
+const mb = (bytes: number) => `${(bytes / 1048576).toFixed(1)} MB`;
 async function recordings() {
-  try { const frames = await listFrames(); text('recording-stats', `${frames.length} frames · ${(frames.reduce((n, f) => n + f.image.size, 0) / 1048576).toFixed(1)} MB · stored in this browser`); return frames; }
+  try {
+    const frames = await listFrames();
+    text('recording-stats', `${frames.length} frames · ${mb(frames.reduce((n, f) => n + f.image.size, 0))} · stored in this browser`);
+    renderRecordedGames(frames); return frames;
+  }
   catch (e) { text('recording-stats', `Local storage unavailable: ${String(e)}`); return []; }
+}
+/** The recording shelf, one row per game (recording-games.ts), newest first. */
+function renderRecordedGames(frames: RecordedFrame[]) {
+  const list = $('recording-games'); list.replaceChildren();
+  const games = groupGames(frames).reverse();
+  games.forEach((g, i) => {
+    const live = g.key === recordingGame && running && !replaying;
+    const row = document.createElement('div'); row.className = 'recorded-game'; row.dataset.game = g.key;
+    const info = document.createElement('div'); info.className = 'recorded-game-info';
+    const title = document.createElement('strong');
+    title.textContent = `Game ${games.length - i}` + (g.hero ? ` · ${heroNames[g.hero] || label(g.hero, {})}` : '') + (g.result ? ` · ${g.result === 'win' ? 'Win' : 'Loss'}` : '') + (live ? ' · in progress' : '');
+    const meta = document.createElement('span'); meta.className = 'muted';
+    meta.textContent = `${new Date(g.start).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })} · ` + (g.played ? `clock ${clockText(g.startClock)}–${clockText(g.endClock)}` : 'menus only') + ` · ${g.frames.length} frames · ${mb(g.bytes)}`;
+    info.append(title, meta);
+    const get = document.createElement('button'); get.type = 'button'; get.textContent = 'Download'; get.setAttribute('aria-label', `Download ${title.textContent}`);
+    get.onclick = async () => { get.disabled = true; try { await exportGame(g); } catch (e) { notice(`Export failed: ${String(e)}`, true); } finally { get.disabled = false; } };
+    const del = document.createElement('button'); del.type = 'button'; del.className = 'danger'; del.textContent = 'Delete'; del.setAttribute('aria-label', `Delete ${title.textContent}`);
+    del.onclick = async () => { try { await deleteFrames(g.frames.map(f => f.id!).filter(id => id != null)); await recordings(); notice(`${title.textContent} deleted.`); } catch (e) { notice(String(e), true); } };
+    row.append(info, get, del); list.append(row);
+  });
+}
+/** One recording file: frames (with images), the spoken calls and the AI log (keys redacted). */
+async function recordingBlob(frames: RecordedFrame[], spoken: typeof cueLog, ai: ReturnType<typeof aiExchanges>, game?: RecordedGame) {
+  const rows = []; for (const f of frames) rows.push({ timestamp: f.timestamp, snapshot: f.snapshot, cues: f.cues, perception: f.perception, profile_id: f.profile_id, image: await blobDataURL(f.image) });
+  const meta = game ? { key: game.key, start: game.start, end: game.end, hero: game.hero, result: game.result, start_clock: game.startClock, end_clock: game.endClock } : undefined;
+  return new Blob([JSON.stringify({ schema: 1, assetVersion, game: meta, frames: rows, spoken, ai })], { type: 'application/json' });
+}
+async function exportGame(g: RecordedGame) {
+  download(gameFileName(g, id => heroNames[id] || label(id, {})), await recordingBlob(g.frames, inWindow(cueLog, g), inWindow(aiExchanges(), g), g));
+}
+/** A live match ended (ai-review-ui.ts): later frames are the next game. With "download each game"
+ *  on, the finished game's recording is saved as a file once its last frame is stored. */
+function recordedGameEnded(m: EndedMatch) {
+  const game = recordingGame; recordingGame = newGameId();
+  if (!settings.record || !settings.autoDownloadRecording) return;
+  setTimeout(async () => {
+    try {
+      const g = groupGames((await listFrames()).filter(f => f.game === game))[0];
+      if (!g || !downloadable(g)) return;
+      g.hero ??= m.record.hero; g.result ??= m.record.result;
+      await exportGame(g); notice(`Saved this game's recording (${g.frames.length} frames, ${mb(g.bytes)}) to your downloads.`);
+      if (location.hash === '#replay') void recordings();
+    } catch (e) { notice(`Automatic recording download failed: ${String(e)}`, true); }
+  }, 1500);
 }
 function blobDataURL(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => { const r = new FileReader(); r.onload = () => resolve(String(r.result)); r.onerror = () => reject(r.error); r.readAsDataURL(blob); });
@@ -834,7 +888,7 @@ function voices() {
 function populateSettings() {
   voices(); input('rate').value = String(settings.rate); input('volume').value = String(settings.volume);
   syncVolume();
-  input('interval').value = String(settings.interval); input('record').checked = settings.record;
+  input('interval').value = String(settings.interval); input('record').checked = settings.record; input('auto-download-recording').checked = settings.autoDownloadRecording;
   input('auto-crop').checked = settings.autoCrop;
   $<HTMLSelectElement>('lane-focus').value=settings.laneFocus;
   $<HTMLSelectElement>('hero-focus').value=settings.heroFocus;
@@ -859,7 +913,7 @@ function setVolume(volume:number){
 function saveForm() {
   const next = structuredClone(settings);
   next.voice = $<HTMLSelectElement>('voice').value; next.rate = Number(input('rate').value); next.volume = Number(input('volume').value);
-  next.interval = Number(input('interval').value); next.record = input('record').checked;
+  next.interval = Number(input('interval').value); next.record = input('record').checked; next.autoDownloadRecording = input('auto-download-recording').checked;
   next.autoCrop = input('auto-crop').checked;
   next.playerProfile = input('player-profile-enabled').checked;
   for (const key of Object.keys(next.options) as Array<keyof Options>) next.options[key] = input(`opt-${key}`).checked;
@@ -1043,9 +1097,8 @@ button('export-snapshots').onclick = async () => {
 button('export-recording').onclick = async () => {
   try {
     const frames = await recordings(); if (!frames.length) { notice('No recorded frames to export.'); return; }
-    const rows = []; for (const f of frames) rows.push({ timestamp: f.timestamp, snapshot: f.snapshot, cues: f.cues, perception: f.perception, profile_id: f.profile_id, image: await blobDataURL(f.image) });
     // `ai`: every AI gateway exchange (prompt, HTTP status, whole raw reply, error), keys redacted.
-    download('deadlock-recording.json', new Blob([JSON.stringify({ schema: 1, assetVersion, frames: rows, spoken: cueLog, ai: aiExchanges() })], { type: 'application/json' }));
+    download('deadlock-recording.json', await recordingBlob(frames, cueLog, aiExchanges()));
   } catch (e) { notice(`Export failed: ${String(e)}`, true); }
 };
 button('clear-recordings').onclick = async () => { try { await clearFrames(); cueLog.length = 0; localStorage.removeItem(CUE_LOG_KEY); clearAiExchanges(); localStorage.removeItem(AI_LOG_KEY); await recordings(); notice('Local recordings deleted.'); } catch (e) { notice(String(e), true); } };
@@ -1104,6 +1157,7 @@ reviews = mountMatchReviews({ settings: () => settings, save: s => { settings = 
   knowledge: async () => { await loadKnowledge(); return knowledge; }, name: id => heroNames[id] || label(id, {}), notice, download, stopSpeech: () => speaker.cancel(),
   isLive: () => running && !replaying, goals: source => source === 'live' && playerProfile.goals.length ? playerProfile.goals : null,
   // The review tracker closed the live match (Stop, "Review my last match"): the Player profile follows.
+  matchEnded: recordedGameEnded,
   finalized: () => { mastery.finishSession(); if (playerProfile.finishSession(0) && location.hash === '#player') playerPage?.render(); } });
 // --- Start-of-game pep talk hooks (logic: pregame.ts, UI: pregame-ui.ts) ---
 { const sayDirect = speaker.say.bind(speaker);
