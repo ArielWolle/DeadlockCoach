@@ -44,6 +44,8 @@ export interface Snapshot {
   /** Observed lane structures (only those whose state was read). */ structures?: StructureState[];
   /** Who took the last Midboss when evidence supports it. */ midboss_taken_by?: 'ally' | 'enemy' | null;
   /** Own ability bar, slots 1-4 (4 = ultimate). */ abilities?: AbilityState[];
+  /** A Rejuvenator revive on this frame: the grey "Respawn in: 1" screen (still `dead`) or the live frame right after it. Not a real death. */
+  revived?: boolean;
 }
 export interface ObjectiveBanner { name: 'HIDDEN KING' | 'ARCHMOTHER' | string; own?: boolean | null; health_ratio?: number | null }
 export interface DamageRow { source: string; hits?: number | null; damage: number }

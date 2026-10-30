@@ -120,6 +120,12 @@ pub struct GameSnapshot {
     /// Your own ability bar (slots 1-4, 4 = ultimate): ready / cooldown seconds when read.
     #[serde(default)]
     pub abilities: Vec<AbilityState>,
+    /// A Rejuvenator revive is seen on this frame: the greyed "Respawn in: 1" death screen right
+    /// after a live frame (`dead` stays true there), or, when its countdown was not read, the
+    /// live frame that returns within seconds of such a screen (rec8 39:17). Not a real death:
+    /// the team spent a Rejuvenator charge.
+    #[serde(default)]
+    pub revived: bool,
 }
 
 /// One lane structure's observed state.

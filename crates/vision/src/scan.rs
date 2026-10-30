@@ -102,6 +102,12 @@ pub struct Scanner {
     midboss_taker: crate::objectives::MidbossTaker,
     /// Last ability-bar read: when, and the slots.
     abilities: Option<(u64, Vec<coach_core::AbilityState>)>,
+    /// Rejuvenator revive detection over the current death screen.
+    revive: crate::death::ReviveWatch,
+    /// Last live-HUD (Gameplay) frame.
+    last_alive_ms: Option<u64>,
+    /// Rejuvenator charge icons on the top bar (who holds it).
+    charges: crate::objectives::ChargeHolder,
 }
 
 /// What a HUD frame says about the match boundary (see [`match_boundary`]).
@@ -535,6 +541,9 @@ impl Scanner {
             structures: Default::default(),
             midboss_taker: Default::default(),
             abilities: None,
+            revive: Default::default(),
+            last_alive_ms: None,
+            charges: Default::default(),
         }
     }
 
@@ -591,6 +600,9 @@ impl Scanner {
         self.structures = Default::default();
         self.midboss_taker = Default::default();
         self.abilities = None;
+        self.revive.reset();
+        self.last_alive_ms = None;
+        self.charges = Default::default();
     }
 
     fn text(&self, img: &image::DynamicImage, r: crate::Region) -> Option<String> {
@@ -711,6 +723,7 @@ impl Scanner {
         let digits = banner.then(|| death::digit_glyphs(img, death::SHOP_RESPAWN_BOX)).flatten();
         if let Some((b, n)) = digits {
             snap.dead = true;
+            self.revive.interrupt();
             let read = self.ocr.read_lines(&[death::digits_crop(img, b)]).ok().and_then(|l| l.first().and_then(|s| death::read_count(s, n)));
             let (secs, fresh) = self.respawn.observe(read, now_ms);
             if fresh { self.panel = Default::default(); self.panel_top_raw = None; }
@@ -734,6 +747,7 @@ impl Scanner {
     fn scan_inner(&mut self,img:&image::DynamicImage,minimap:Option<&image::RgbImage>,now_ms:u64,located:(Option<u32>,Option<u32>),
         source:Option<(&image::DynamicImage,coach_perception::Bounds)>,no_map:bool)->GameSnapshot{
         let view = crate::hudtext::View { canon: img, source };
+        let prev_dead = self.was_dead;
         self.regions.clear();
         use crate::screen::{self, Screen};
         use coach_perception::track::LineBatch;
@@ -950,7 +964,16 @@ impl Scanner {
             let verified = if !suspect { fixed } else {
                 let (fw, fh) = (img.width() as f32, img.height() as f32);
                 let area = coach_perception::Bounds { x: (0.5 * fw) as u32, y: ((hud::CLOCK.y + hud::CLOCK.h / 3.0) * fh) as u32, w: (hud::CLOCK.w * fw) as u32, h: (hud::CLOCK.h * fh) as u32 };
-                let glyph = crate::localize::locate_clock_limited(img, &self.ocr, Some(area), 1).map(|(v, _)| v).filter(|v| *v <= 14400);
+                // The glyphs are located and read in the full-resolution source frame when the
+                // context was downsampled to 1600x900: the resample blurs the small digits enough
+                // to read 5 as 6 (rec13 1920x1080: 5:52-6:48 read 6:52-7:48 on the canonical image
+                // by the fixed box and the glyph search alike, then the clock jumped back to 6:51).
+                let native = source.filter(|(_, c)| c.w > 1632 || c.h > 918).and_then(|(src, c)| {
+                    let (sx, sy) = (c.w as f32 / fw, c.h as f32 / fh);
+                    let a = coach_perception::Bounds { x: c.x + (area.x as f32 * sx) as u32, y: c.y + (area.y as f32 * sy) as u32, w: (area.w as f32 * sx) as u32, h: (area.h as f32 * sy) as u32 };
+                    crate::localize::locate_clock_limited(src, &self.ocr, Some(a), 1).map(|(v, _)| v).filter(|v| *v <= 14400)
+                });
+                let glyph = native.or_else(|| crate::localize::locate_clock_limited(img, &self.ocr, Some(area), 1).map(|(v, _)| v).filter(|v| *v <= 14400));
                 if glyph.is_some() && fixed.is_some() && glyph != fixed { self.fixed_clock_distrusted = true; }
                 glyph.or(fixed)
             };
@@ -991,6 +1014,15 @@ impl Scanner {
         if raw_clock.unwrap_or(0) < 600 { map.urn = None; map.urn_pos = None; map.urn_marks.clear(); }
         if let Some(l) = zone_lines.clone().and_then(|r| lines.get(r)) { map.zone = crate::zone::zone_from_lines(l); }
         if !no_map { snap.minimap = Some(self.map_tracker.observe(map, now_ms)); }
+        // Own position: held for a few seconds on live frames whose marker was not found (rings
+        // stacked on it in a dive); never across a death screen (the next live frame may be a
+        // respawn in base).
+        if scr == Screen::Dead { self.map_tracker.forget_you(); }
+        else if scr == Screen::Gameplay {
+            if let Some(m) = snap.minimap.as_mut().filter(|m| m.you.is_none()) {
+                if let Some(p) = self.map_tracker.held_you(now_ms, crate::minimap::OWN_HOLD_MS) { m.you = Some(p); }
+            }
+        }
         // Lane structures: read on frames with the minimap, states held across frames without it.
         if !no_map { let reads = crate::structures::read(map_crop); self.structures.observe(reads.as_ref(), now_ms); }
         snap.structures = self.structures.states(now_ms, self.map_tracker.layout().or(snap.minimap.as_ref().and_then(|m| m.lanes_mirrored)));
@@ -1025,6 +1057,9 @@ impl Scanner {
             };
             // No countdown read for 15 s (a recording gap, a long menu): this may be another death.
             if self.respawn.age_ms(now_ms).is_some_and(|a| a > 15_000) { self.respawn.reset(); self.panel = Default::default(); self.panel_top_raw = None; }
+            // Rejuvenator revive: "Respawn in: 1" on the greyed world right after a live frame.
+            let grey = crate::death::world_colour_share(img) < crate::death::REVIVE_MAX_COLOUR;
+            snap.revived = self.revive.dead(!prev_dead, self.last_alive_ms.map(|t| now_ms.saturating_sub(t)), grey, read, now_ms);
             let (secs, fresh) = self.respawn.observe(read, now_ms);
             // A new countdown (the timer jumped up) is a new death: its panel starts over.
             if fresh { self.panel = Default::default(); self.panel_top_raw = None; }
@@ -1054,6 +1089,10 @@ impl Scanner {
         } else if scr == Screen::Gameplay {
             // Only a live HUD ends the death; menus and the scoreboard flicker in between.
             self.respawn.reset(); self.panel = Default::default(); self.panel_top_raw = None;
+            // Back alive within seconds of a grey death screen whose countdown was never read
+            // above 2: that screen was a Rejuvenator revive, not a death.
+            snap.revived = self.revive.alive(now_ms);
+            self.last_alive_ms = Some(now_ms);
         }
         if scr != Screen::Dead {
             if scr == Screen::Gameplay {
@@ -1308,7 +1347,18 @@ impl Scanner {
         // Midboss taker: decided from the team-total steps around the kill the minimap tracker
         // reported. Frames without the minimap keep the event; a Midboss seen again ends it.
         let down = snap.minimap.as_ref().and_then(|m| if m.midboss_down_ms.is_some() { Some(m.midboss_down_ms) } else if m.midboss_up { Some(None) } else { None });
-        snap.midboss_taken_by = self.midboss_taker.observe(down, now_ms, clock_now).map(String::from);
+        let by_totals = self.midboss_taker.observe(down, now_ms, clock_now);
+        // The Rejuvenator charge icons under a team's total name the taker directly, from the
+        // first frame after the kill (rec8: 38:18 vs the totals' 38:41; rec13 enemy: 39:24 vs
+        // 39:58; rec8 47:07-49:47 enemy charges the totals never decided). Read on every HUD
+        // frame, also without a located minimap (rec8 49:34 base fight); the holder is kept after the icons go (charges spent)
+        // until the Midboss is seen up again or for 10 minutes.
+        if scr.has_hud() { self.charges.observe(crate::objectives::rejuvenator_charges(top), now_ms); }
+        if let Some((_, seen)) = self.charges.holder {
+            let respawned = down == Some(None) && now_ms > seen + 10_000;
+            if respawned || now_ms < seen || now_ms - seen > 600_000 { self.charges.holder = None; }
+        }
+        snap.midboss_taken_by = self.charges.holder.map(|(s, _)| s).or(by_totals).map(String::from);
         // One hero cannot hold more than ~45% of its team's total (a recorded match had 6.8%
         // impossible per-hero values, e.g. 12.4k of a 15k team).
         for s in snap.hero_status.iter_mut().chain(self.team_status.iter_mut()) {

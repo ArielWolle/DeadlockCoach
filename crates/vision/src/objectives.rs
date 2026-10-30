@@ -87,9 +87,67 @@ impl MidbossTaker {
     }
 }
 
+/// Rejuvenator charges on the top bar: the team holding the Rejuvenator shows 1-3 small gold
+/// winged icons under its souls total, beside the Midboss icon below the clock (rec8 38:45 two
+/// under our total, gone after the 39:17 revive; rec13 31:07 three). Canonical 1600x900
+/// coordinates of the (aligned) top bar: ally side left of centre, enemy side mirrored.
+pub const CHARGES_ALLY: coach_perception::Bounds = coach_perception::Bounds { x: 704, y: 62, w: 82, h: 46 };
+pub const CHARGES_ENEMY: coach_perception::Bounds = coach_perception::Bounds { x: 814, y: 62, w: 82, h: 46 };
+
+/// Gold of the charge icons.
+pub fn charge_gold(r: u8, g: u8, b: u8) -> bool { let (h, s, v) = crate::minimap::hsv(r, g, b); (38.0..=60.0).contains(&h) && s > 0.55 && v > 0.65 }
+
+/// Charge icons visible on one side: compact gold blobs of icon size.
+pub fn charge_icons(top: &image::DynamicImage, area: coach_perception::Bounds) -> usize {
+    crate::hudtext::blobs(top, area, charge_gold).into_iter().filter(|b| {
+        let (w, h) = (b.w(), b.h());
+        (8..=26).contains(&w) && (8..=26).contains(&h) && b.area >= 30 && b.area as f32 >= 0.3 * (w * h) as f32
+    }).count()
+}
+
+/// Rejuvenator charges per side this frame: [ally, enemy]. Only plausible counts (1-3) count.
+pub fn rejuvenator_charges(top: &image::DynamicImage) -> [usize; 2] {
+    if top.width() != 1600 || top.height() != 900 { return [0, 0]; }
+    [CHARGES_ALLY, CHARGES_ENEMY].map(|a| { let n = charge_icons(top, a); if n <= 3 { n } else { 0 } })
+}
+
+/// Consecutive frames that must show charges on exactly one side before it decides the holder.
+pub const CHARGE_FRAMES: u32 = 2;
+
+/// Rejuvenator holder from the charge icons: a side is reported once its icons were seen on
+/// `CHARGE_FRAMES` consecutive frames with none on the other side, and held while the Midboss
+/// event lasts (the icons go when the charges are spent).
+#[derive(Default, Clone, Debug)]
+pub struct ChargeHolder { streak: (Option<bool>, u32), pub holder: Option<(&'static str, u64)> }
+impl ChargeHolder {
+    /// Feed one gameplay frame's charge counts. Returns the side newly confirmed, if any.
+    pub fn observe(&mut self, charges: [usize; 2], now_ms: u64) -> Option<&'static str> {
+        let side = match charges { [a, 0] if a > 0 => Some(true), [0, e] if e > 0 => Some(false), _ => None };
+        let Some(ally) = side else { self.streak = (None, 0); return None };
+        self.streak = if self.streak.0 == Some(ally) { (Some(ally), self.streak.1 + 1) } else { (Some(ally), 1) };
+        if self.streak.1 >= CHARGE_FRAMES {
+            let s = if ally { "ally" } else { "enemy" };
+            let new = self.holder.is_none_or(|(h, _)| h != s);
+            self.holder = Some((s, now_ms));
+            return new.then_some(s);
+        }
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn charge_holder_needs_consecutive_one_sided_frames() {
+        let mut c = ChargeHolder::default();
+        assert_eq!(c.observe([2, 0], 0), None);
+        assert_eq!(c.observe([2, 0], 2000), Some("ally"));
+        assert_eq!(c.observe([2, 0], 4000), None, "already known");
+        let mut d = ChargeHolder::default();
+        assert_eq!(d.observe([1, 0], 0), None); assert_eq!(d.observe([1, 1], 2000), None); assert_eq!(d.observe([1, 0], 4000), None);
+        assert_eq!(d.observe([0, 3], 6000), None); assert_eq!(d.observe([0, 3], 8000), Some("enemy"));
+    }
     /// Feed alternate ally / enemy totals every 2 s from `reads` (time s, ally k, enemy k).
     fn run(reads: &[(u64, u32, u32)], down_at_s: u64) -> Vec<Option<&'static str>> {
         let mut m = MidbossTaker::default();
