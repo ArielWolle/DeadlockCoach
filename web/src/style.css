@@ -58,4 +58,7 @@
 .player-goal.met,.review-goal.met{border-left-color:#8fd18b}.player-goal.missed,.review-goal.missed{border-left-color:#e39a8e}.player-goal-total{font-size:13px;color:#a9b8bd}
 .review-focus{margin:12px 0}.review-raw{max-height:320px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font:12px/1.45 Consolas,ui-monospace,monospace}
 .review-status{min-height:1em;margin:8px 0}.review-status.error{color:var(--red)}
-.review-notice{margin:8px 0;padding:8px 10px;border-left:3px solid var(--teal);background:var(--panel)}.review-notice a{color:var(--teal)}
+.review-notice{margin:8px 0;padding:8px 10px;border-left:3px solid var(--teal);background:var(--panel)}.review-notice a{color:var(--teal)}/* Skills and mastery (player-page.ts skills()) */
+.skill-columns{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px;margin-top:8px}.skill-list{list-style:none;margin:0;padding:0;display:grid;gap:10px}
+.skill-item{border:1px solid var(--border);border-radius:8px;padding:10px 12px;background:#141c1f}.skill-item.mastered,.skill-item.assumed{border-left:3px solid #8fd18b}.skill-item.working{border-left:3px solid #e8c36a}
+.skill-item p{margin:6px 0;font-size:13px}.skill-toggle{font-size:12px;padding:4px 10px;margin-right:6px}

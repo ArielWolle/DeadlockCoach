@@ -1,10 +1,13 @@
 /** The Player page: strengths (last match's plays and profile habits), "Improved since last
  *  time", weaknesses, per-match history and profile management. */
 import type { MatchRow, PlayerProfile, Trait } from './player-profile';
+import { LEVEL_LABEL, type SkillDef, type SkillMastery, type SkillState } from './mastery';
 import type { Snapshot } from './types';
 
 export interface PlayerPageDeps {
   profile: PlayerProfile;
+  /** Skills and mastery (exported, imported and reset with the profile). */
+  mastery?: SkillMastery;
   notice: (message: string, error?: boolean) => void;
   download: (name: string, data: Blob) => void;
   /** Snapshots analyzed by the last completed replay, if any. */
@@ -23,20 +26,28 @@ export class PlayerPage {
     $('player-hero').onchange = () => this.render();
     $('player-add-replay').onclick = () => this.addReplay();
     $('replay-add-profile').onclick = () => this.addReplay();
-    $('player-export').onclick = () => deps.download('deadlock-player-profile.json', new Blob([deps.profile.exportJSON()], { type: 'application/json' }));
+    $('player-export').onclick = () => deps.download('deadlock-player-profile.json', new Blob([this.exportJSON()], { type: 'application/json' }));
     $<HTMLInputElement>('player-import-file').onchange = async () => {
       const input = $<HTMLInputElement>('player-import-file'); const file = input.files?.[0]; input.value = '';
       if (!file) return;
       try {
         if (file.size > 5 * 1024 * 1024) throw new Error('Profile exports are at most 5 MB');
-        const added = deps.profile.importJSON(await file.text());
-        deps.notice(`Imported ${added} match${added === 1 ? '' : 'es'} into your player profile.`); this.render();
+        const text = await file.text();
+        const added = deps.profile.importJSON(text);
+        const skills = deps.mastery?.importJSON(text) ?? 0;
+        deps.notice(`Imported ${added} match${added === 1 ? '' : 'es'}${skills ? ` and ${skills} skill record${skills === 1 ? '' : 's'}` : ''} into your player profile.`); this.render();
       } catch (e) { deps.notice(`Import failed: ${e instanceof Error ? e.message : String(e)}`, true); }
     };
     $('player-reset').onclick = () => {
       if (!confirm('Delete your player profile from this browser? Export it first to keep a copy.')) return;
-      deps.profile.reset(); this.render(); deps.notice('Player profile reset.');
+      deps.profile.reset(); deps.mastery?.reset(); this.render(); deps.notice('Player profile reset.');
     };
+  }
+  /** The profile export with the skill mastery alongside (key "mastery"). */
+  exportJSON(): string {
+    const data = JSON.parse(this.deps.profile.exportJSON()) as Record<string, unknown>;
+    if (this.deps.mastery) data.mastery = this.deps.mastery.toJSON();
+    return JSON.stringify(data, null, 1);
   }
   /** Enable the replay buttons once a replay has finished. */
   replayReady() {
@@ -66,6 +77,7 @@ export class PlayerPage {
     this.traits('player-improved', s.improvements, s.matches >= 2 ? 'No clear improvement over the matches before the last one.' : 'Shown once there are two matches to compare.');
     this.traits('player-weaknesses', s.weaknesses, 'No clear weaknesses in the evidence so far.');
     this.goals(s.rows);
+    this.skills();
     const body = $('player-matches'); body.replaceChildren();
     if (!s.rows.length) { const tr = el('tr'); const td = el('td', 'No matches recorded.'); td.colSpan = 9; tr.append(td); body.append(tr); }
     for (const r of s.rows) {
@@ -97,6 +109,38 @@ export class PlayerPage {
     }
     const met = scored.flatMap(r => r.goals).filter(g => g.met === true).length, all = scored.flatMap(r => r.goals).filter(g => g.met != null).length;
     if (all) list.prepend(el('li', `${met} of ${all} goals met in the last ${scored.length} scored match${scored.length === 1 ? '' : 'es'}.`, 'player-goal-total'));
+  }
+  /** Your level and the skills: mastered (quiet), working on (coached), not yet seen; each can be marked by hand. */
+  private skills() {
+    const m = this.deps.mastery; if (!m) return;
+    const lv = m.level(), lists = m.lists();
+    $('player-level').textContent = `Your level: ${LEVEL_LABEL[lv.level]}`;
+    $('player-level-basis').textContent = `Estimated from ${lv.basis}. The coach stays quiet about mastered skills and speaks up once if you slip.`;
+    const item = (s: SkillDef, state: SkillState) => {
+      const r = m.data.skills[s.id], w = m.window(s.id);
+      const li = el('li', undefined, `skill-item ${state}`); li.dataset.skill = s.id;
+      const head = el('div', undefined, 'player-trait-head');
+      head.append(el('strong', s.label), el('span', LEVEL_LABEL[s.level], `tag skill-level ${s.level}`));
+      if (state === 'assumed') head.append(el('span', 'Assumed at your level', 'tag'));
+      if (r?.manual) head.append(el('span', r.manual === 'mastered' ? 'Marked by you' : 'Coach me', 'tag'));
+      const evidence = r && r.performed + r.prompted + r.failed > 0
+        ? `Last ${s.mastered_after.window} matches: ${w.ok} on your own${w.prompted ? `, ${w.prompted} after a reminder` : ''}${w.fail ? `, ${w.fail} missed` : ''}. Mastered after ${s.mastered_after.observations} on your own.`
+        : s.description;
+      const quiet = state === 'mastered' || state === 'assumed';
+      const toggle = el('button', quiet ? 'Coach me on this' : 'I have this', 'secondary skill-toggle'); toggle.type = 'button';
+      toggle.setAttribute('aria-label', `${toggle.textContent}: ${s.label}`);
+      toggle.onclick = () => { m.setManual(s.id, quiet ? 'learning' : 'mastered'); this.render(); };
+      li.append(head, el('p', evidence), toggle);
+      if (r?.manual) { const undo = el('button', 'Let the coach decide', 'secondary skill-toggle'); undo.type = 'button'; undo.onclick = () => { m.setManual(s.id, null); this.render(); }; li.append(undo); }
+      return li;
+    };
+    const fill = (id: string, skills: Array<[SkillDef, SkillState]>, empty: string) => {
+      const list = $(id); list.replaceChildren(...skills.map(([s, st]) => item(s, st)));
+      if (!skills.length) list.append(el('li', empty, 'empty-row'));
+    };
+    fill('skills-mastered', [...lists.mastered.map(s => [s, 'mastered'] as [SkillDef, SkillState]), ...lists.assumed.map(s => [s, 'assumed'] as [SkillDef, SkillState])], 'Nothing mastered yet: skills you do on your own a few matches in a row appear here.');
+    fill('skills-working', lists.working.map(s => [s, 'working']), 'Nothing in progress yet.');
+    fill('skills-unseen', lists.unseen.map(s => [s, 'unseen']), 'Every skill has been seen.');
   }
   private traits(id: string, traits: Trait[], empty: string) {
     const list = $(id); list.replaceChildren();

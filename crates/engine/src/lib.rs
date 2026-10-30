@@ -12,6 +12,7 @@ pub mod review;
 pub mod active;
 pub mod praise;
 pub mod plans;
+pub mod skills;
 mod counter_explanations;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -24,6 +25,25 @@ pub struct Cue {
     pub text: String,
     pub priority: Priority,
     pub cooldown_secs: u32,
+    /// The skill this cue coaches (data/coaching/skills.json), so the browser can stay quiet about
+    /// mastered skills. None only for summaries of several habits (review:pattern) and the
+    /// cause-less death review.
+    #[serde(default)]
+    pub skill: Option<String>,
+}
+impl Cue {
+    /// A cue whose skill comes from its key ([`skills::for_key`]).
+    pub fn new(key: impl Into<String>, text: impl Into<String>, priority: Priority, cooldown_secs: u32) -> Cue {
+        let key = key.into();
+        let skill = skills::for_key(&key);
+        Cue { key, text: text.into(), priority, cooldown_secs, skill }
+    }
+    /// A cue spoken from a coaching card ("<module>.<card id>"): the card's skill, else the key's.
+    pub fn card(card: &str, key: impl Into<String>, text: impl Into<String>, priority: Priority, cooldown_secs: u32) -> Cue {
+        let key = key.into();
+        let skill = skills::of(Some(card), &key);
+        Cue { key, text: text.into(), priority, cooldown_secs, skill }
+    }
 }
 
 /// A scheduled objective, loaded from data/timings.json (interval 0 means one-shot; values are config,
@@ -56,12 +76,7 @@ impl Rule for TimerRule {
         let next = d.first_spawn_secs + n * d.interval_secs;
         let until = next - t;
         if until <= d.warn_ahead_secs && until > 0 {
-            vec![Cue {
-                key: format!("timer:{}:{}", d.name, next),
-                text: format!("{} in {} seconds", d.name, until),
-                priority: Priority::Low,
-                cooldown_secs: d.interval_secs.max(30),
-            }]
+            vec![Cue::new(format!("timer:{}:{}", d.name, next), format!("{} in {} seconds", d.name, until), Priority::Low, d.interval_secs.max(30))]
         } else { vec![] }
     }
 }
@@ -183,7 +198,7 @@ impl Rule for CounterRule {
             let text = if hurt.first().is_some_and(|h| &h.0 == hero) { format!("{owner} {source} hurt you most: buy {}, {} souls.", item.name, thousands_souls(item.cost)) }
                 else { format!("Against {owner} {source}: buy {}, {} souls.", item.name, thousands_souls(item.cost)) };
             seen.push(hero.clone());
-            cues.push(Cue { key: format!("counter:{hero}:{}", item.class_name), text, priority: Priority::Low, cooldown_secs: 1200 });
+            cues.push(Cue::new(format!("counter:{hero}:{}", item.class_name), text, Priority::Low, 1200));
         }
         // 2. Statistical counters. Once death panels name who hurts you, only those heroes
         //    ("Counter-buy against what is actually hurting you", moba-fundamentals): rec8
@@ -210,12 +225,7 @@ impl Rule for CounterRule {
             // The clause, else its part before " and " ("Its barrier absorbs damage"), if it fits.
             let fit=|w:&str|{let t=format!("{base} {w}.");(t.split_whitespace().count()<=15).then_some(t)};
             let text=what.and_then(|w|fit(&w).or_else(||w.split(" and ").next().and_then(|p|fit(p.trim())))).unwrap_or(base);
-            cues.push(Cue {
-                key: format!("counter:{trigger}:{}",if first.suggest_class.is_empty(){&first.suggest}else{&first.suggest_class}),
-                text,
-                priority: Priority::Low,
-                cooldown_secs: 1200,
-            });
+            cues.push(Cue::new(format!("counter:{trigger}:{}",if first.suggest_class.is_empty(){&first.suggest}else{&first.suggest_class}), text, Priority::Low, 1200));
         }
         cues
     }
@@ -275,7 +285,7 @@ impl Rule for UnspentSoulsRule {
                 // shop window: without a respawn timer, wait 5 s into the death screen.
                 if snap.respawn_secs.is_none() && clock < since + 5 { return vec![]; }
                 let wait = snap.respawn_secs.map(|r| format!(" You are back in {r} seconds.")).unwrap_or_default();
-                return vec![Cue { key: "unspent-dead".into(), text: format!("You are dead with {} souls. Buy now.{wait}", thousands_souls(s)), priority: Priority::High, cooldown_secs: 90 }];
+                return vec![Cue::new("unspent-dead", format!("You are dead with {} souls. Buy now.{wait}", thousands_souls(s)), Priority::High, 90)];
             }
             if snap.screen.as_deref() == Some("Gameplay") && snap.hp.is_some() { ep.dead_since = None; ep.dead_said = false; }
             // In your own base the call is specific ("spend them before you walk out"), from the
@@ -299,7 +309,7 @@ impl Rule for UnspentSoulsRule {
             } else {
                 format!("Still holding {} souls. Buy at the next safe moment; unspent souls do nothing.", thousands_souls(s))
             };
-            vec![Cue { key: "unspent".into(), text, priority: Priority::Normal, cooldown_secs: 150 }]
+            vec![Cue::new("unspent", text, Priority::Normal, 150)]
         })();
         self.1.set(cur);
         out
@@ -324,7 +334,7 @@ impl Rule for DeathCauseRule {
     fn evaluate(&self, snap: &GameSnapshot) -> Vec<Cue> {
         let (true, Some(cause)) = (snap.dead, snap.death_cause.as_deref()) else { return vec![] };
         let (tag, text) = death_cause_advice(cause);
-        vec![Cue { key: format!("death:{tag}"), text: text.into(), priority: Priority::High, cooldown_secs: 60 }]
+        vec![Cue::new(format!("death:{tag}"), text, Priority::High, 60)]
     }
 }
 /// What a death-panel cause means for the player: (tag, advice). "heroes" is the generic case.
@@ -382,7 +392,7 @@ impl Rule for NetworthLeadRule {
         } else {
             ("behind", "We are behind in souls. Farm safe and fight near our structures.")
         };
-        vec![Cue { key: key.into(), text: text.into(), priority: Priority::Normal, cooldown_secs: LEAD_REPEAT_SECS }]
+        vec![Cue::new(key, text, Priority::Normal, LEAD_REPEAT_SECS)]
     }
 }
 /// Minimum seconds between two "your team is ahead / behind" calls of the same state.

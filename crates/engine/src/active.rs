@@ -180,7 +180,7 @@ impl ActiveCoach {
         let mut text = c.speech.clone();
         for (k, v) in vars { text = text.replace(&format!("{{{k}}}"), v); }
         let priority = match c.priority.as_str() { "high" => Priority::High, "low" => Priority::Low, _ => Priority::Normal };
-        Cue { key, text, priority, cooldown_secs: c.cooldown_secs }
+        Cue::card(&format!("active.{id}"), key, text, priority, c.cooldown_secs)
     }
 
     /// Which enemy hero did the most damage in a death panel. Only rows naming a single hero that is
@@ -282,7 +282,7 @@ pub fn base_spend(s: &GameSnapshot) -> Option<Option<Cue>> {
     let _ = (t.spend_early, t.spend_late, t.spend_late_clock);
     let Some(v) = s.souls.filter(|v| *v >= need) else { return Some(None) };
     let card = c.cards.iter().find(|c| c.id == "base_spend").expect("base_spend card");
-    Some(Some(Cue { key: "unspent:base".into(), text: card.speech.replace("{souls}", &thousands(v)), priority: Priority::Normal, cooldown_secs: card.cooldown_secs }))
+    Some(Some(Cue::card("active.base_spend", "unspent:base", card.speech.replace("{souls}", &thousands(v)), Priority::Normal, card.cooldown_secs)))
 }
 
 fn health(s: &GameSnapshot) -> Option<f32> { s.hp.zip(s.max_hp).filter(|(h, m)| *m >= 100 && h <= m).map(|(h, m)| h as f32 / m as f32) }

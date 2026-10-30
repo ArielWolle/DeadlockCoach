@@ -1512,7 +1512,8 @@ export function heroMatchup(docs: Knowledge[], hero: string | null | undefined, 
 // ---------------------------------------------------------------------------------------
 // Prompt assembly with budget enforcement
 // ---------------------------------------------------------------------------------------
-export interface PromptInput { trigger: AiTrigger; summary: string; profile?: string | null; excerpts?: Array<{ title: string; heading: string; text: string }>; matchup?: string | null; brief?: string;
+export interface PromptInput { trigger: AiTrigger; summary: string; profile?: string | null;
+  /** Skill level and mastered skills (mastery.ts promptText via setMasteryProvider). */ level?: string | null; excerpts?: Array<{ title: string; heading: string; text: string }>; matchup?: string | null; brief?: string;
   /** Set when asking once more after an answer was rejected as a repeat. */
   retry?: { reason: string; text: string } | null }
 export interface Prompt { system: string; user: string; chars: number; tokens: number }
@@ -1537,6 +1538,7 @@ export function buildPrompt(input: PromptInput, maxChars = MAX_INPUT_CHARS): Pro
   const knowledge = () => [brief, ...(input.matchup ? [input.matchup.slice(0, 300)] : [])].filter(Boolean);
   const render = () => [TASKS[input.trigger], '', 'STATE', summary,
     ...(profile ? ['', 'PLAYER PROFILE (earlier matches, no heroes of this match: coach a weakness only when the live situation matches)', profile] : []),
+    ...(input.level ? ['', 'PLAYER LEVEL (do not coach mastered skills unless STATE shows the player failing one now; pitch the advice at this level)', input.level.slice(0, MASTERY_MAX_CHARS)] : []),
     ...(input.retry ? ['', `YOUR PREVIOUS ANSWER WAS NOT USED (${input.retry.reason}): "${input.retry.text.slice(0, 200)}". Give advice on a different focus, or PASS.`] : []),
     ...(knowledge().length ? ['', 'KNOWLEDGE', ...knowledge()] : []),
     ...(excerpts.length ? ['', 'REFERENCE EXCERPTS', ...excerpts.map(e => `[${e.title} › ${e.heading}] ${e.text}`)] : []),
@@ -1873,6 +1875,15 @@ export function setProfileProvider(fn: (() => string | null) | undefined) { prof
 export function profileText(): string | null {
   try { const v = profileProvider?.(); return typeof v === 'string' && v.trim() ? v.trim().slice(0, PROFILE_MAX_CHARS) : null; } catch { return null; }
 }
+// Skill mastery hook (mastery.ts SkillMastery.promptText): the player's level and mastered skills.
+export const MASTERY_MAX_CHARS = 600;
+let masteryProvider: (() => string | null) | undefined;
+/** Register a callback returning the player's skill level and mastered skills (or null). Used by the
+ *  live prompt and the end-of-game review prompt (ai-review.ts); must not throw. */
+export function setMasteryProvider(fn: (() => string | null) | undefined) { masteryProvider = fn; }
+export function masteryText(): string | null {
+  try { const v = masteryProvider?.(); return typeof v === 'string' && v.trim() ? v.trim().slice(0, MASTERY_MAX_CHARS) : null; } catch { return null; }
+}
 let goalProvider: (() => string | null) | undefined;
 /** Register a callback returning the match focus goal(s) with progress so far (player-profile.ts
  *  PlayerProfile.goalText()), or null. Called on every request; must not throw. */
@@ -2033,7 +2044,7 @@ export class AiCoach {
     const terms = situationTerms(s, this.history, trigger);
     const excerpts = retrieve(terms.includes('midboss') ? this.sectionCache.sections : this.sectionCache.sections.filter(x => !/midboss/i.test(x.heading)), terms, trigger === 'periodic' ? 0 : trigger === 'death' ? 1 : EXCERPTS_MAX);
     const enemies = s.enemy_heroes?.length ? s.enemy_heroes : (s.hero_status || []).filter(p => !p.ally && p.hero).map(p => p.hero!);
-    return buildPrompt({ trigger, summary, profile, excerpts, matchup: heroMatchup(docs, s.hero, enemies, name), retry });
+    return buildPrompt({ trigger, summary, profile, level: masteryText(), excerpts, matchup: heroMatchup(docs, s.hero, enemies, name), retry });
   }
   /** Ask now. `reason` is the WHY NOW line (what changed) for periodic requests. */
   async ask(trigger: AiTrigger, reason?: string | null): Promise<void> {

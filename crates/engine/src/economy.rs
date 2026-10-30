@@ -76,7 +76,7 @@ impl PaceRule{
             "ahead"=>"Good farm: you are ahead of the lobby. Turn it into objectives with us.".into(),
             _=>"Good farm, on pace with the lobby. Keep catching waves between rotations.".into(),
         };
-        Some((band,Cue{key:format!("pace:{band}"),text,priority:Priority::Low,cooldown_secs:120}))
+        Some((band,Cue::new(format!("pace:{band}"),text,Priority::Low,120)))
     }
 }
 /// Lane-by-lane wave summary. A recorded match repeated "contested near the middle" 12 times:
@@ -106,6 +106,6 @@ impl Rule for WaveReportRule{
             if clock>=*at&&(since<90||*prev==summary&&since<300){return vec![];}
         }
         *last=Some((summary.clone(),clock));
-        vec![Cue{key:"wave:overview".into(),text:format!("Waves: {summary}. Catch the farm before you roam."),priority:Priority::Low,cooldown_secs:45}]
+        vec![Cue::new("wave:overview",format!("Waves: {summary}. Catch the farm before you roam."),Priority::Low,45)]
     }
 }

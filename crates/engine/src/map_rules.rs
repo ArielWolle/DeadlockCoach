@@ -10,7 +10,7 @@ fn name(l: Lane) -> &'static str {
 }
 
 fn cue(key: String, text: String, priority: Priority, cooldown_secs: u32) -> Cue {
-    Cue { key, text, priority, cooldown_secs }
+    Cue::new(key, text, priority, cooldown_secs)
 }
 
 impl Rule for MapRule {

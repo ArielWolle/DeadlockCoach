@@ -11,7 +11,8 @@ import {regionsFromReport,drawRegions} from './region-overlays';
 import {QuickMonitor} from './quick';
 import {freshCue} from './live-cues';
 import { mountAiCoach, type AiUi } from './ai-coach-ui';
-import { setProfileProvider, setGoalProvider, aiExchanges, clearAiExchanges, restoreAiExchanges, onAiExchange } from './ai-coach';
+import { setProfileProvider, setGoalProvider, setMasteryProvider, aiExchanges, clearAiExchanges, restoreAiExchanges, onAiExchange } from './ai-coach';
+import { SkillMastery, metricsOf } from './mastery'; // skills and mastery (docs/player-profile.md)
 import { PlayerProfile } from './player-profile';
 import { PlayerPage } from './player-page';
 import { mountMatchReviews, type ReviewUi } from './ai-review-ui'; // end-of-game AI review
@@ -87,6 +88,16 @@ export function playerPromptText(): string | null { return settings.playerProfil
 setProfileProvider(playerPromptText);
 // ...and the match focus goal with its progress so far (docs/player-profile.md "Match focus goal").
 setGoalProvider(() => settings.playerProfile ? playerProfile.goalText() : null);
+// ---- Skills and mastery (mastery.ts): evidence from full scans; deliver() / deliverAi() stay quiet on mastered skills ----
+const mastery = new SkillMastery({ store: (() => { try { return localStorage; } catch { return null; } })(), metrics: () => metricsOf(playerProfile) }).load();
+setMasteryProvider(() => settings.playerProfile ? mastery.promptText() : null);
+/** The cue as it should be spoken (possibly shortened), or null when its skill is mastered. */
+function masteryGate(cue: Cue, clock: number | null): Cue | null {
+  if (!settings.playerProfile || !isDeadlock(activeProfile)) return cue;
+  const g = mastery.gate(cue, clock); if (!g.speak) { mastery.suppressed++; return null; }
+  return g.text ? { ...cue, text: g.text } : cue;
+}
+// ---- end skills and mastery ----
 (window as unknown as { deadlockPlayerProfile?: unknown }).deadlockPlayerProfile = { promptText: playerPromptText, summary: () => playerProfile.summary(), focusTips: (n = 1) => playerProfile.focusTips(n), goalText: () => playerProfile.goalText() };
 
 function notice(message: string, error = false) {
@@ -361,7 +372,9 @@ function deliver(analysis:Analysis,timestamp:number,fast=false){
   for(const original of analysis.cues){
     // While the fast path is live it speaks the shared rules; only full-scan-only cues pass here.
     if(!fast&&now-quick.lastResultAt<3000&&!FULL_ONLY.some(p=>original.key===p||original.key.startsWith(p+':')))continue;
-    const cue=freshCue(original,analysis.snapshot.game_clock_secs,age);if(!cue)continue;
+    const fresh=freshCue(original,analysis.snapshot.game_clock_secs,age);if(!fresh)continue;
+    if(settings.playerProfile)mastery.offered(fresh,clk); // mastery: every offered cue is evidence
+    let cue:Cue=fresh;
     if(now-(spokenAt.get(cue.key)??-Infinity)<cue.cooldown_secs*1000)continue;
     if(cue.priority!=='High'&&clk!=null&&lastRuleClock!=null&&clk>=lastRuleClock&&clk-lastRuleClock<phaseGap(clk))continue;
     if(cue.key.startsWith('counter:')){
@@ -369,6 +382,7 @@ function deliver(analysis:Analysis,timestamp:number,fast=false){
       if(now-(spokenAt.get('$counter-category')??-Infinity)<180000||now-(spokenAt.get(item)??-Infinity)<1200000)continue;
       spokenAt.set('$counter-category',now);spokenAt.set(item,now);
     }
+    {const gated=masteryGate(cue,clk);if(!gated)continue;cue=gated;} // mastery: quiet on mastered skills
     spokenAt.set(cue.key,now);if(spokenAt.size>200)spokenAt.delete(spokenAt.keys().next().value!);
     // A debuff / CC call already says "get out" with the reason: hold the generic health back-off
     // (often from the fast path a second later) for its cooldown, as the engine does.
@@ -376,6 +390,7 @@ function deliver(analysis:Analysis,timestamp:number,fast=false){
     cue.text=cue.text.replace(/hero_[a-z_]+/g,id=>heroNames[id]||id.replace('hero_','').replaceAll('_',' '));
     if(clk!=null)lastRuleClock=clk;
     speaker.say(cue);delivered.push(cue);logCue(cue,analysis.snapshot,fast);
+    if(settings.playerProfile)mastery.noteSpoken(cue,clk); // mastery: a reminder of its skill
   }
   return {...analysis,cues:delivered};
 }
@@ -430,6 +445,7 @@ async function tick() {
 /** An analyzed live frame for the match bookkeeping: Player profile, then the end-of-game review. */
 function liveMatchFrame(analysis:Analysis,timestamp:number){
   playerFrame(analysis,timestamp);
+  if(settings.playerProfile&&isDeadlock(activeProfile))mastery.observe(analysis.snapshot,timestamp); // mastery evidence
   if(isDeadlock(activeProfile))reviews?.live(analysis.snapshot,timestamp,analysis.cues); // end-of-game review
 }
 // Browser tests feed analyzed live frames (a whole match cannot be captured in a test): opt in by
@@ -1043,7 +1059,11 @@ input('opt-timers').closest('fieldset')!.querySelector('legend')!.after($<HTMLTe
 // --- AI coach hooks: advice is spoken only while live (never in replays) and always listed as AI. ---
 function deliverAi(cue: Cue, live: boolean) {
   const now = Date.now();
-  if (live && settings.aiSpeak && running && !paused && !replaying && now - (spokenAt.get(cue.key) ?? -Infinity) >= cue.cooldown_secs * 1000) { spokenAt.set(cue.key, now); speaker.say(cue); }
+  // Mastery: AI advice on mastered skills only is listed but not spoken (skills from its text, mastery.ts skillsOfAdvice).
+  const gated = live ? masteryGate(cue, latest.game_clock_secs ?? null) : cue;
+  if (gated && live && settings.aiSpeak && running && !paused && !replaying && now - (spokenAt.get(cue.key) ?? -Infinity) >= cue.cooldown_secs * 1000) {
+    spokenAt.set(cue.key, now); speaker.say(gated); if (settings.playerProfile) mastery.noteSpoken(gated, latest.game_clock_secs ?? null);
+  }
   logCue(cue, latest, false, true);
   cues.unshift({ ...cue, at: latest.game_clock_secs }); cues = cues.slice(0, 60); renderCues();
 }
@@ -1053,13 +1073,13 @@ ai = mountAiCoach({ settings: () => settings, save: s => { settings = normalize(
   deliver: deliverAi, changed: () => { if (location.hash === '#settings') diagnostics(); } });
 profilePanel = new ProfilePanel({ current: () => activeProfile, apply: applyGameProfile, pick: pickFieldRegion,
   reference: loadReferenceImage, runReference });
-playerPage = new PlayerPage({ profile: playerProfile, notice, download, replay: () => lastReplay });
+playerPage = new PlayerPage({ profile: playerProfile, mastery, notice, download, replay: () => lastReplay });
 // --- End-of-game AI review hooks (logic: ai-review.ts, UI: ai-review-ui.ts) ---
 reviews = mountMatchReviews({ settings: () => settings, save: s => { settings = normalize(s); saveSettings(settings); }, previous: () => playerProfile.matches,
   knowledge: async () => { await loadKnowledge(); return knowledge; }, name: id => heroNames[id] || label(id, {}), notice, download, stopSpeech: () => speaker.cancel(),
   isLive: () => running && !replaying, goals: source => source === 'live' && playerProfile.goals.length ? playerProfile.goals : null,
   // The review tracker closed the live match (Stop, "Review my last match"): the Player profile follows.
-  finalized: () => { if (playerProfile.finishSession(0) && location.hash === '#player') playerPage?.render(); } });
+  finalized: () => { mastery.finishSession(); if (playerProfile.finishSession(0) && location.hash === '#player') playerPage?.render(); } });
 refreshGameLayout();
 populateSettings(); renderSnapshot(latest); renderTactics(null,latest); diagnostics(); route(); void loadNames();
 if (import.meta.env.PROD && 'serviceWorker' in navigator) {

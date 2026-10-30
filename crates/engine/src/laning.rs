@@ -249,7 +249,7 @@ impl Rule for LaneCoach {
             "lane:back_off" if h.is_some_and(|h| h>=self.catalog.thresholds.healthy) && !s.health_delta_ratio.is_some_and(|d| d < -FAST_FALL) => return vec![],
             _ => {}
         }
-        vec![Cue {key:d.cue_key,text:d.text,priority:d.priority,cooldown_secs:d.cooldown_secs}]
+        vec![Cue::new(d.cue_key,d.text,d.priority,d.cooldown_secs)]
     }
     fn spoken(&self,cue:&Cue) {
         let mut m=self.health.borrow_mut();

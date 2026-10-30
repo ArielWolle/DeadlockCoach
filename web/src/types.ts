@@ -1,7 +1,9 @@
 export type Priority = 'Low' | 'Normal' | 'High';
 /** Parallel line-recognition pool status, reported with each analysis result. */
 export interface PoolStatus { state: string; active: boolean; avg_ms: number | null; fallbacks: number }
-export interface Cue { key: string; text: string; priority: Priority; cooldown_secs: number; timer_spawn_ms?:number }
+export interface Cue { key: string; text: string; priority: Priority; cooldown_secs: number; timer_spawn_ms?:number;
+  /** The skill the cue coaches (data/coaching/skills.json; set by the engine, mastery.ts skillOfCue otherwise). */
+  skill?: string | null }
 export interface Point { x: number; y: number }
 export interface LaneState { ally_troopers: number; enemy_troopers: number; ally_progress?: number | null; enemy_progress?: number | null; push?: number | null }
 export interface MinimapState {

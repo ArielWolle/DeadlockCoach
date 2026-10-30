@@ -12,7 +12,7 @@
 //   ReviewStore     localStorage list of reviews (newest first, cap 20, one per match)
 // Nothing here touches the DOM; tests/ai-review.unit.ts imports it directly.
 import { LIMITS, PlayerProfile, killerFamily, PlayerProfileModel, REVIEW, chooseGoals, deadOf, deathSpend, goalTip, scoreGoals, spanOf, spendTarget, resultOf, type GoalResult, type KeyValueStore, type MatchGoal, type MatchRecord } from './player-profile.ts';
-import { GatewayError, HERO_ROLES, aiExchanges, heroMatchup, callGateway, clockText, extractText, jsonCandidates, retrieve, sections, type AiConfig, type CallOptions } from './ai-coach.ts';
+import { GatewayError, HERO_ROLES, aiExchanges, heroMatchup, callGateway, clockText, extractText, jsonCandidates, masteryText, retrieve, sections, type AiConfig, type CallOptions } from './ai-coach.ts';
 import type { Cue, Knowledge, Snapshot } from './types';
 
 export const DIGEST_MAX_CHARS = 9000;
@@ -678,8 +678,10 @@ went_well: 2-5 items, strongest first. improvements: 1-3 by impact, most importa
 "spoken": plain sentences only, no lists, no markdown, no symbols or abbreviations like K/D/A; say times as "around fifteen minutes in" or "at 15:20"; round numbers. Open with the result and the focus goal score; when the game went well, then genuine, specific praise (what you did and why it mattered), never a generic "good game"; then the top fixes with one reason each; end with what to keep doing and the next-game focus.`;
 
 export interface ReviewPrompt { system: string; user: string; chars: number; maxTokens: number }
-export function buildReviewPrompt(digest: Digest | string, aiMaxTokens = 1024): ReviewPrompt {
-  const text = typeof digest === 'string' ? digest : digest.text;
+export function buildReviewPrompt(digest: Digest | string, aiMaxTokens = 1024, level: string | null = masteryText()): ReviewPrompt {
+  // The player's level and mastered skills (mastery.ts, via ai-coach.ts setMasteryProvider): no fixes on mastered basics.
+  const text = (typeof digest === 'string' ? digest : digest.text)
+    + (level ? `\n\nPLAYER LEVEL (do not list a mastered skill as an improvement unless this match shows it failing; pitch the review at this level)\n${level}` : '');
   const good = typeof digest !== 'string' && digest.goodGame;
   const user = [good ? 'Review this match for the player. It went well: open with the strengths and why they worked, then the fixes, then what to keep doing and the next focus.' : 'Review this match for the player: what went well and why, the fixes by impact, what to keep doing and the next focus.', '', text, '', 'Reply with the JSON object only.'].join('\n');
   return { system: REVIEW_SYSTEM_PROMPT, user, chars: REVIEW_SYSTEM_PROMPT.length + user.length, maxTokens: reviewMaxTokens(aiMaxTokens) };

@@ -422,7 +422,7 @@ impl Rule for PraiseCoach {
         st_ref.offered = picks.iter().map(|p| p.id.clone()).collect();
         let card = self.card(&picks[0].card);
         let priority = if card.priority == "low" { Priority::Low } else { Priority::Normal };
-        vec![Cue { key: format!("praise:{}", picks[0].id), text, priority, cooldown_secs: card.cooldown_secs }]
+        vec![Cue::card(&format!("praise.{}", picks[0].card), format!("praise:{}", picks[0].id), text, priority, card.cooldown_secs)]
     }
     fn spoken(&self, cue: &Cue) {
         let mut st = self.state.borrow_mut();
