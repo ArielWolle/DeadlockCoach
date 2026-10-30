@@ -110,10 +110,20 @@ function masteryGate(cue: Cue, clock: number | null): Cue | null {
 // ---- end skills and mastery ----
 (window as unknown as { deadlockPlayerProfile?: unknown }).deadlockPlayerProfile = { promptText: playerPromptText, summary: () => playerProfile.summary(), focusTips: (n = 1) => playerProfile.focusTips(n), goalText: () => playerProfile.goalText() };
 
-function notice(message: string, error = false) {
-  text('notice', message); $('notice').hidden = !message; $('notice').classList.toggle('error', error);
-  if (!message) button('fix-viewport').hidden = true;
+/** Banner messages. Information disappears by itself (8 s, or 15 s for a long one) so the next
+ *  message is clearly new; errors stay until dismissed (×) or replaced. Each message replaces the
+ *  previous one and briefly flashes. Pass `sticky` to keep an informational message. */
+let noticeTimer: ReturnType<typeof setTimeout> | undefined;
+function notice(message: string, error = false, sticky = false) {
+  clearTimeout(noticeTimer);
+  const el = $('notice');
+  text('notice-text', message); el.hidden = !message; el.classList.toggle('error', error);
+  el.classList.remove('fresh'); void el.offsetWidth; if (message) el.classList.add('fresh');
+  if (!message) { button('fix-viewport').hidden = true; return; }
+  // The viewport fix button stays with its own (error) message; keep that notice until resolved.
+  if (!error && !sticky && button('fix-viewport').hidden) noticeTimer = setTimeout(() => notice(''), message.length > 90 ? 15000 : 8000);
 }
+document.getElementById('notice-close')?.addEventListener('click', () => notice(''));
 function engineOptions(){return {...settings.options,focus_lane:settings.laneFocus==='auto'?null:settings.laneFocus,focus_hero:settings.heroFocus||null};}
 function configureOptions() { const options=engineOptions();worker?.postMessage({type:'configure',options});quick.configure(options); }
 function status(value: string, source?: string) {

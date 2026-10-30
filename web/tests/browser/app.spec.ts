@@ -28,7 +28,9 @@ test('settings persist, mute works and empty recording export is handled', async
   await expect(page.getByRole('button', { name: 'Unmute voice' })).toHaveAttribute('aria-pressed', 'true');
   await page.getByRole('link', { name: 'Replay lab' }).click();
   await page.getByRole('button', { name: 'Export snapshots', exact: true }).click();
-  await expect(page.locator('#notice')).toHaveText('No recorded frames to export.');
+  await expect(page.locator('#notice-text')).toHaveText('No recorded frames to export.');
+  // Information clears itself so the next message is clearly new; errors stay until dismissed.
+  await expect(page.locator('#notice')).toBeHidden({ timeout: 12000 });
 });
 
 test('real WASM initializes cross-origin isolated and replays recorded snapshots', async ({ page }) => {
