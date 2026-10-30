@@ -169,6 +169,6 @@ AI death prompts (`ai-coach-eval.ts`, rec16 after):
 - Shop frames read `dead: false` on rec16 37:06 / 37:22 (the shop's respawn banner not found):
   still the same death for the engine and the AI; not changed here.
 
-Fixtures: `samples/frames/00590`-`00597` (`crates/vision/tests/death_panel.rs`); engine tests in
+Fixtures: `samples/frames/00600`-`00607` (`crates/vision/tests/death_panel.rs`); engine tests in
 `crates/engine/tests/review.rs` (open, closed + one tip per match, unreadable, stale, revive); web
 tests in `web/tests/ai-coach.unit.ts` and `ai-review.unit.ts`.

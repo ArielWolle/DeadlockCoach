@@ -542,7 +542,7 @@ fn panel_state(t: u32, state: &str) -> GameSnapshot { let mut d = dead(t, None);
 
 #[test]
 fn an_open_panel_names_what_killed_you() {
-    // rec16 37:02 (fixture 00593): Lurking Terrors 3,142 on top, read and confirmed.
+    // rec16 37:02 (fixture 00603): Lurking Terrors 3,142 on top, read and confirmed.
     let mut e = review_engine();
     let cues = panel_death(&mut e, 2200, &|t| { let mut d = panel_state(t, "open"); d.death_cause = Some("Lurking Terrors".into());
         d.death_damage = rows(&[("Lurking Terrors", 3142), ("Escalating Exposure", 761), ("Torment Pulse", 285), ("Gun Damage", 229)]); d.death_total_damage = Some(5352); d });
@@ -553,7 +553,7 @@ fn an_open_panel_names_what_killed_you() {
 
 #[test]
 fn a_closed_panel_gets_one_open_it_tip_per_match_and_no_damage_cause() {
-    // rec16 27:49 (fixture 00591): the panel collapsed to the portrait tab for the whole death.
+    // rec16 27:49 (fixture 00601): the panel collapsed to the portrait tab for the whole death.
     let mut e = review_engine();
     let cues = panel_death(&mut e, 1650, &|t| panel_state(t, "closed"));
     let tips: Vec<&coach_engine::Cue> = cues.iter().filter(|c| c.key == "review:panel_closed").collect();
