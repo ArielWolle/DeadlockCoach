@@ -98,7 +98,7 @@
     { "id": "threat_tracking", "label": "Tracking the enemy's dangerous heroes", "level": "advanced",
       "mastered_after": { "observations": 3, "window": 3, "max_failures": 1 },
       "description": "Know where their divers and fed heroes are; fight them only together.",
-      "cues": ["threat:*", "death:heroes"], "cards": ["review.killer", "review.repeat_killer", "review.involved", "review.panel_top", "review.repeat_cause", "review.repeat_note"] },
+      "cues": ["threat:*", "death:heroes"], "cards": ["review.killer", "review.repeat_killer", "review.involved", "review.panel_top", "review.panel_closed", "review.repeat_cause", "review.repeat_note"] },
     { "id": "low_hp_after_win", "label": "Resetting after a won fight", "level": "advanced",
       "mastered_after": { "observations": 3, "window": 3, "max_failures": 1 },
       "description": "A won fight at low health is not a free structure: heal first, then take it together.",

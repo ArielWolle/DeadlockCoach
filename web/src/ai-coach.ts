@@ -178,7 +178,7 @@ Reply with ONLY one JSON object, no code fence, no other text:
 
 export const TASKS: Record<AiTrigger, string> = {
   periodic: 'TASK: Decide our next 30 seconds from what WHY NOW says changed: one call on a theme not blocked in THEMES COACHED (unless WHY NOW is a new trigger for it). PASS if the rule coach already said it, the window closes before you are heard, or nothing new is worth the player\'s attention.',
-  death: 'TASK: The player just died. Explain WHY from the evidence of THIS death only (its Death line, Damage by hero, the rule death review of this death, killing blow, status effects or crowd control, health before, allies near, Before this death: teammates dead and a walk-out from base, rule calls just before it such as "outnumbered" or "hold in base"), then the ONE change for the next life. Name only heroes of this match: never one from the PLAYER PROFILE or an earlier death. If the panel cause says Trooper but hero abilities did the damage, heroes killed the player. The rule coach already spoke its death review (STATE): speak only to add a DIFFERENT concrete lesson (the named threat, the decision that caused it, the next-life plan), else PASS. Talk about souls only if STATE says "Souls advice: allowed"; acknowledge death-screen shopping in a few words. At most 2 short sentences and 30 words.',
+  death: 'TASK: The player just died. Explain WHY from the evidence of THIS death only (its Death line, Damage by hero, the rule death review of this death, killing blow, status effects or crowd control, health before, allies near, Before this death: teammates dead and a walk-out from base, rule calls just before it such as "outnumbered" or "hold in base"), then the ONE change for the next life. Name only heroes of this match: never one from the PLAYER PROFILE or an earlier death. If the panel cause says Trooper but hero abilities did the damage, heroes killed the player. If the Death line says the damage panel was not visible or not readable, the cause is unknown: never name what killed the player. The rule coach already spoke its death review (STATE): speak only to add a DIFFERENT concrete lesson (the named threat, the decision that caused it, the next-life plan), else PASS. Talk about souls only if STATE says "Souls advice: allowed"; acknowledge death-screen shopping in a few words. At most 2 short sentences and 30 words.',
   manual: 'TASK: The player pressed "Ask the coach now". Give the most useful specific call for this moment, preferably a COACHING ANGLE or a theme not in THEMES COACHED; only PASS if there is no usable evidence.',
 };
 
@@ -204,6 +204,8 @@ export interface FightState { kind: 'won' | 'lost' | 'even' | 'none'; enemies: T
   /** A fight is on now: 2+ deaths in the last FIGHT_ON_SECS or your health falling fast. */
   on: boolean; why: string | null }
 export interface DeathRecord { t: number; clock: number | null; cause: string | null; damage: Array<{ source: string; damage: number | null }>; killingBlow: string | null;
+  /** The damage panel as the vision last saw it on this death screen (`death_panel`). */
+  panel?: string | null;
   soulsBefore: number | null; unsecuredBefore: number | null; hpBefore: number | null; respawn: number | null;
   /** Souls read on the death screen (the death-spend check uses the larger of this and soulsBefore). */
   soulsDead?: number | null;
@@ -394,6 +396,13 @@ export class AiHistory {
       const end = prevDeath.respawnEnd;
       if (end != null ? clock < end - 2 : prevDeath.clock != null && clock - prevDeath.clock < FLICKER_SECS) dead = true;
     }
+    // A Rejuvenator revive (vision `revived`): the grey screen is not a death (rec17 26:12: the
+    // scoreboard deaths did not change), and the live frame flagged right after one undoes the
+    // death that screen started.
+    if (s.revived === true) {
+      if (dead) dead = false;
+      else if (last?.dead && prevDeath && prevDeath.clock != null && clock != null && clock - prevDeath.clock <= 10) { this.deaths.pop(); this.deathCount = Math.max(0, this.deathCount - 1); }
+    }
     const near = nearCounts(s);
     this.noteState(s, now, clock);
     if (typeof s.hero === 'string' && s.hero && !this.hero) this.hero = s.hero;
@@ -434,13 +443,20 @@ export class AiHistory {
     }
     const death = dead ? this.deaths.at(-1) : undefined;
     if (death) {
-      death.cause = str(s.death_cause) ?? death.cause;
+      // The damage panel counts only when the vision confirmed it ('open'; snapshots without the
+      // field are trusted), and never when it repeats the previous death's panel (a stale read).
+      const panel = typeof s.death_panel === 'string' ? s.death_panel : null;
+      if (panel) death.panel = panel;
+      const dmg = Array.isArray(s.death_damage) ? s.death_damage.map(d => ({ source: str(d?.source, 40) || 'unknown', damage: num(d?.damage) })).slice(0, 6) : [];
+      const earlier = this.deaths.at(-2);
+      const stale = !!earlier && dmg.length > 0 && earlier.damage.length === dmg.length && earlier.damage.every((x, i) => x.source === dmg[i].source && x.damage === dmg[i].damage);
+      const readable = (panel == null || panel === 'open') && !stale;
+      if (readable) death.cause = str(s.death_cause) ?? death.cause;
       death.respawn = num(s.respawn_secs) ?? death.respawn;
       if (num(s.respawn_secs) != null && clock != null && s.respawn_secs! > 0) death.respawnEnd = clock + s.respawn_secs!;
       death.soulsDead = num(s.souls) ?? death.soulsDead ?? null;
-      const dmg = Array.isArray(s.death_damage) ? s.death_damage.map(d => ({ source: str(d?.source, 40) || 'unknown', damage: num(d?.damage) })).slice(0, 6) : [];
-      if (dmg.length) death.damage = dmg;
-      death.killingBlow = describe(s.death_killing_blow) ?? death.killingBlow;
+      if (readable && dmg.length) death.damage = dmg;
+      if (readable) death.killingBlow = describe(s.death_killing_blow) ?? death.killingBlow;
       const st = statusOf(s); if (st.length) death.status = [...new Set([...(death.status || []), ...st])].slice(0, 6);
       // Shopping on the death screen: two reads at least the death-spend threshold below the peak.
       const souls = num(s.souls);
@@ -1037,6 +1053,15 @@ export function strangerHeroes(text: string, history: AiHistory): string[] {
   }
   return out;
 }
+/** The Death line's note when no damage-panel rows were read: the panel was collapsed or not
+ *  readable on the death screen, so what killed the player is unknown (never guessed). */
+export function panelNote(d: Pick<DeathRecord, 'damage' | 'panel'>): string {
+  if (d.damage.length) return '';
+  if (d.panel === 'closed') return ' · damage panel: NOT VISIBLE (collapsed on the death screen), so what killed the player is unknown: name no damage source, ability or killer';
+  if (d.panel === 'unreadable' || d.panel === 'reading') return ' · damage panel: on screen but not readable, so what killed the player is unknown: name no damage source, ability or killer';
+  return '';
+}
+
 /** Damage-panel rows attributed to this match's enemy heroes by ability name (data/abilities.json). */
 export function damageByHero(rows: DeathRecord['damage'], history: AiHistory): { heroes: Array<{ hero: string; damage: number; sources: string[] }>; other: DeathRecord['damage'] } {
   const enemies = new Set(history.rosterOf().enemies);
@@ -1489,7 +1514,7 @@ export function buildSummary({ snapshot: s, history, now, trigger, name = defaul
     const need = deathSpend(d.clock);
     const soulsAt = Math.max(d.soulsBefore ?? -1, d.soulsDead ?? -1);
     const current = (trigger === 'death' || dead) && d === lastDeath;
-    add(current ? 10 : trigger === 'death' ? 6 : 8, `${current || trigger !== 'death' ? '' : 'Earlier '}Death at ${clockText(d.clock)}${current && shown.length > 1 ? ' (THIS death)' : ''}: cause ${d.cause || 'unknown'}${d.damage.length ? ` · damage taken: ${d.damage.map(x => `${x.source}${x.damage != null ? ` ${fmt(x.damage)}` : ''}`).join(', ')}` : ''}${d.killingBlow ? ` · killing blow ${d.killingBlow}` : ''}${d.status?.length ? ` · status effects before death: ${d.status.join(', ')}` : ''}${d.hpBefore != null ? ` · last alive HP ${d.hpBefore}%` : ''}${d.alliesNear != null ? ` · allies near you ${d.alliesNear}, enemies near ${d.enemiesNear ?? '?'}` : ''}${d.soulsBefore != null ? ` · unspent before death ${fmt(d.soulsBefore)}` : ''}${d.unsecuredBefore != null ? ` (unsecured ${fmt(d.unsecuredBefore)})` : ''}${soulsAt >= 0 ? ` · death-spend threshold ${fmt(need)}: ${soulsAt >= need ? 'reached' : 'not reached'}` : ''}${d.respawn != null ? ` · respawn ${d.respawn}s` : ''}`);
+    add(current ? 10 : trigger === 'death' ? 6 : 8, `${current || trigger !== 'death' ? '' : 'Earlier '}Death at ${clockText(d.clock)}${current && shown.length > 1 ? ' (THIS death)' : ''}: cause ${d.cause || 'unknown'}${d.damage.length ? ` · damage taken: ${d.damage.map(x => `${x.source}${x.damage != null ? ` ${fmt(x.damage)}` : ''}`).join(', ')}` : panelNote(d)}${d.killingBlow ? ` · killing blow ${d.killingBlow}` : ''}${d.status?.length ? ` · status effects before death: ${d.status.join(', ')}` : ''}${d.hpBefore != null ? ` · last alive HP ${d.hpBefore}%` : ''}${d.alliesNear != null ? ` · allies near you ${d.alliesNear}, enemies near ${d.enemiesNear ?? '?'}` : ''}${d.soulsBefore != null ? ` · unspent before death ${fmt(d.soulsBefore)}` : ''}${d.unsecuredBefore != null ? ` (unsecured ${fmt(d.unsecuredBefore)})` : ''}${soulsAt >= 0 ? ` · death-spend threshold ${fmt(need)}: ${soulsAt >= need ? 'reached' : 'not reached'}` : ''}${d.respawn != null ? ` · respawn ${d.respawn}s` : ''}`);
     // Who did the damage, by ability name, among THIS match's enemies (rec12 22:10: the panel said
     // "Trooper" while Drifter's Rend and Silver's Boot Kick were on it).
     if (current) add(9, beforeDeathLine(history, d));

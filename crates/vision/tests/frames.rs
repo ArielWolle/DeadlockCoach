@@ -59,13 +59,20 @@ fn reads_death_screen() {
     let snap = s.scan_at(&frame("00216"), 1000);
     assert!(snap.dead);
     assert_eq!(snap.respawn_secs, Some(4));
-    assert_eq!(snap.death_cause.as_deref(), Some("T2 Walker"));
     assert!(snap.hp.is_none()&&snap.max_hp.is_none());
+    // The damage panel is reported once a second read 4 s later agrees (docs/coach-review-16-17-panel.md).
+    assert_eq!(snap.death_cause, None);
+    let snap = s.scan_at(&frame("00216"), 4000);
+    // The row name box starts right of the (absent) ability icon: "T2" is cut off, "Walker" read.
+    assert!(snap.death_cause.as_deref().is_some_and(|c| c.ends_with("Walker")), "{:?} {:?}", snap.death_panel, snap.death_cause);
+    assert_eq!(snap.death_killing_blow, snap.death_cause);
 }
 
 #[test]
 fn midboss_death_cause() {
-    let snap = scanner().scan_at(&frame("00262"), 0);
+    let mut s = scanner();
+    s.scan_at(&frame("00262"), 0);
+    let snap = s.scan_at(&frame("00262"), 4000);
     assert!(snap.dead);
     let cause = snap.death_cause.unwrap_or_default().to_lowercase();
     assert!(cause.contains("temple"), "cause: {cause}");

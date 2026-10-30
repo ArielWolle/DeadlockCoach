@@ -118,6 +118,8 @@
       "sources": [{ "path": "strategy/common-mistakes.md", "section": "16. Fighting split / piecemeal", "basis": "COMMUNITY", "excerpt": "Fall back and regroup. Don't fight split." }] },
     { "id": "panel_top", "speech": "{source} did most of the damage", "lesson": "check the damage panel and buy a counter",
       "sources": [{ "path": "strategy/common-mistakes.md", "section": "8. Not countering the enemy build", "basis": "COMMUNITY", "excerpt": "Check what is killing you and buy a counter." }] },
+    { "id": "panel_closed", "speech": "Open the damage panel: click your hero portrait at the right edge of the death screen, so I can tell you what killed you.", "lesson": "",
+      "sources": [{ "path": "strategy/common-mistakes.md", "section": "8. Not countering the enemy build", "basis": "COMMUNITY", "excerpt": "Check what is killing you and buy a counter." }] },
     { "id": "counter_item", "speech": "", "lesson": "Buy {item} ({cost}){afford}: {why}.",
       "sources": [{ "path": "strategy/common-mistakes.md", "section": "8. Not countering the enemy build", "basis": "COMMUNITY", "excerpt": "Check what is killing you and buy a counter." },
                   { "path": "strategy/teamfighting.md", "section": "5. Target priority", "basis": "WIKI", "excerpt": "Counter items:" }] },

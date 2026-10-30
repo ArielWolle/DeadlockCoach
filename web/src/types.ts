@@ -36,6 +36,11 @@ export interface Snapshot {
   /** "N HAUNTED SOULS"; null = not read (not zero). */
   unsecured_souls?: number | null;
   death_damage?: DamageRow[]; death_killing_blow?: string | null; death_total_damage?: number | null;
+  /** The damage panel on this death screen: 'open' (a confirmed read: the death_* panel fields are
+   *  reported), 'reading' (on screen, not confirmed yet), 'unreadable' (on screen, no reliable read:
+   *  disregarded), 'closed' (collapsed to the portrait tab). null = nothing seen (shop, not dead).
+   *  Unless 'open', no damage-panel field is reported. */
+  death_panel?: DeathPanelState | null;
   /** e.g. "stunned", "silenced", "out_of_stamina", "knocked_off_zipline", "afflicted", "frozen", "slowed", "carrying_urn", or a debuff name. Empty = none read. */
   status_effects?: string[];
   /** Top-centre boss health banner (a Patron under attack); own = your team's objective (null = layout unknown). */
@@ -49,6 +54,7 @@ export interface Snapshot {
 }
 export interface ObjectiveBanner { name: 'HIDDEN KING' | 'ARCHMOTHER' | string; own?: boolean | null; health_ratio?: number | null }
 export interface DamageRow { source: string; hits?: number | null; damage: number }
+export type DeathPanelState = 'open' | 'reading' | 'unreadable' | 'closed';
 export interface HeroStatus {ally:boolean;slot:number;hero?:string|null;critical?:boolean|null;health_ratio?:number|null;networth?:number|null;networth_observations:number;observations:number;position?:Point|null;position_observations:number;lane?:string|null;
   /** false = enemy not seen recently (no top-bar health bar); not dead. */
   bar_visible?:boolean|null;health_observations?:number;dead?:boolean|null;respawn_secs?:number|null;

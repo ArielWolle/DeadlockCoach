@@ -423,7 +423,14 @@ pub struct LifeTracker {
     /// Clock of the last confirmed respawn, and the start of the last death.
     pub respawned_at: Option<u32>, pub last_death: Option<u32>,
     ends: Vec<u32>, last_dead: u32, hp_frames: u8, first_hp: Option<u32>, blind_since: Option<u32>, last_clock: Option<u32>,
+    /// (respawned_at, last_death) before the current death started: restored when it turns out
+    /// to be a Rejuvenator revive.
+    before: (Option<u32>, Option<u32>),
 }
+/// A screen flagged as a Rejuvenator revive this soon after the death screen appeared cancels it.
+pub const REVIVE_CANCEL_SECS: u32 = 10;
+/// Screen name given to a revive frame: no rule evaluates it ([`Engine::step`] skips it).
+pub const REVIVE_SCREEN: &str = "Revive";
 impl LifeTracker {
     /// The snapshot as the rules should see it: None = this frame unchanged.
     pub fn observe(&mut self, s: &GameSnapshot) -> Option<GameSnapshot> {
@@ -431,9 +438,24 @@ impl LifeTracker {
         if self.last_clock.is_some_and(|c| clock + 120 < c) { *self = LifeTracker::default(); }
         self.last_clock = Some(clock);
         let death_frame = s.dead || s.screen.as_deref() == Some("Dead");
+        // The vision flags a Rejuvenator revive ("Respawn in: 1" on the grey world, or a quick
+        // return to the live HUD after it): not a death (rec17 26:12 got a death review; the
+        // scoreboard deaths did not change). The death it started is undone.
+        if s.revived {
+            if self.dead_since.is_some_and(|d| clock <= d + REVIVE_CANCEL_SECS) {
+                (self.respawned_at, self.last_death) = self.before;
+                self.dead_since = None; self.ends.clear(); self.hp_frames = 0; self.first_hp = None; self.blind_since = None;
+            }
+            if death_frame {
+                let mut d = s.clone();
+                d.dead = false; d.screen = Some(REVIVE_SCREEN.into());
+                return Some(d);
+            }
+            if self.dead_since.is_none() { return None; }
+        }
         if death_frame {
             // More than a minute without any frame on a death screen is a new death (a recording gap).
-            if self.dead_since.is_none() || clock > self.last_dead + 60 { self.dead_since = Some(clock); self.last_death = Some(clock); self.ends.clear(); }
+            if self.dead_since.is_none() || clock > self.last_dead + 60 { self.before = (self.respawned_at, self.last_death); self.dead_since = Some(clock); self.last_death = Some(clock); self.ends.clear(); }
             if let Some(r) = s.respawn_secs.filter(|r| *r <= 120) { self.ends.push(clock + r); }
             self.last_dead = clock; self.hp_frames = 0; self.first_hp = None; self.blind_since = None;
             return None;

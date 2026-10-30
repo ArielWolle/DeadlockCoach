@@ -109,6 +109,13 @@ gateway that is not running.
   review, but never into the last 10 s of the respawn timer (`DEATH_RESPAWN_MARGIN_SECS`): rec8's
   20:40 death sat in the shop for 30 s and the old call went out at 21:01 with "cause unknown";
   now it goes out at 21:10 with "cause Tankbuster · damage taken: Tankbuster 479, Barrage 459, …".
+  The panel counts only when the vision confirmed it (`death_panel` "open": a complete read that a
+  second read 4 s later agrees with); "reading", "unreadable" and "closed" panels are disregarded,
+  and a panel equal to the previous death's is a stale read. With the panel collapsed or unreadable
+  the Death line says so ("damage panel: NOT VISIBLE (collapsed on the death screen), so what killed
+  the player is unknown: name no damage source, ability or killer") and the task forbids naming a
+  killer; the rule coach asks once per match to open it (docs/coach-review-16-17-panel.md). A
+  Rejuvenator revive (`revived`) is not a death.
   The death prompt also carries `Before this death: teammates dead at the death (top bar): 3 of 5 ·
   you left our base at 41:44 with 3 teammates dead, 21 s before the death · you were in our half`
   (`beforeDeathLine()`; "your position was not read (unknown)" without a marker), and a throw in

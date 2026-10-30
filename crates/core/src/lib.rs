@@ -97,6 +97,14 @@ pub struct GameSnapshot {
     /// "Total Damage: N" from the same panel.
     #[serde(default)]
     pub death_total_damage: Option<u32>,
+    /// The damage panel on this death screen: "open" (a complete read confirmed by a second
+    /// read: death_damage / death_killing_blow / death_total_damage / death_cause are reported),
+    /// "reading" (rows on screen, not confirmed yet), "unreadable" (rows on screen but no
+    /// reliable read: disregarded, nothing is reported), "closed" (collapsed to the portrait tab
+    /// at the right edge). None = not dead or nothing seen of the panel (e.g. the shop covers it).
+    /// Unless "open", no damage-panel field is reported.
+    #[serde(default)]
+    pub death_panel: Option<String>,
     /// Status effects on you this frame: "stunned", "silenced", "disarmed", "out_of_stamina",
     /// "knocked_off_zipline", "afflicted", "frozen", "slowed" (a movement-speed debuff badge),
     /// "carrying_urn" (the "DELIVER THE URN" prompt), plus debuff badge names (e.g. "Aura of

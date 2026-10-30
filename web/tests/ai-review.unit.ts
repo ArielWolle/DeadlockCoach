@@ -71,6 +71,18 @@ test('digest: deterministic, bounded, observed facts with unknowns marked, impro
   assert.notEqual(reviewKey(m.record), reviewKey(prev.record));
 });
 
+test('digest: a death with the damage panel collapsed or unreadable names no damage cause', () => {
+  // rec16 27:49 (closed) and a panel that never read reliably (death_panel "unreadable").
+  for (const [state, want] of [['closed', /damage panel: not visible \(collapsed on the death screen\), damage cause unknown/], ['unreadable', /damage panel: not readable, damage cause unknown/]] as const) {
+    const frames = match('hero_orion', 30, 900, [450], { postGame: true });
+    for (const f of frames) if (f.snapshot.dead) { f.snapshot.death_panel = state; f.snapshot.death_damage = []; f.snapshot.death_cause = null; }
+    const [m] = ended(frames);
+    const text = buildDigest({ match: m }).text;
+    assert.match(text, want, text);
+    assert.ok(!/damage panel: Melee/.test(text), text);
+  }
+});
+
 test('prompt: persona, JSON contract, evidence rules; token budget', () => {
   const [m] = ended(match('hero_orion', 30, 900, [450], { postGame: true }));
   const p = buildReviewPrompt(buildDigest({ match: m }), 1024);
