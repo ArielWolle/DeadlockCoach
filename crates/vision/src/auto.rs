@@ -66,6 +66,18 @@ fn canonical_of(frame:&DynamicImage,left:u32,top:u32,w:u32,h:u32)->(image::RgbaI
     };
     (img,Bounds{x:left,y:top,w,h})
 }
+/// A context derived from the minimap box that nearly fills a 16:9 frame is the frame itself.
+/// The minimap's landmark box jitters by a few pixels (rec16: 1891-1920 px wide contexts at
+/// offsets up to 23,15 on a full-screen 1920x1080 capture), which slid every fixed top-bar crop
+/// by up to 19 canonical pixels: health bars went unseen and portraits read dead (rec16 13:29-13:37,
+/// 24:05-24:12: allies 1 and 2 dead while alive). (x, y, w, h) in frame pixels.
+pub fn snap_full_frame(fw:u32,fh:u32,x:f32,y:f32,w:f32,h:f32)->(f32,f32,f32,f32){
+    let (fw,fh)=(fw as f32,fh as f32);
+    let wide=((fw/fh)/(16./9.)-1.).abs()<=0.02;
+    let near=(w/fw-1.).abs()<=0.035&&(h/fh-1.).abs()<=0.035&&x.abs()<=fw*0.03&&y.abs()<=fh*0.03
+        &&(x+w-fw).abs()<=fw*0.03&&(y+h-fh).abs()<=fh*0.03;
+    if wide&&near{(0.,0.,fw,fh)}else{(x,y,w,h)}
+}
 /// Template similarity needed to keep the verified map box without landmarks (normal frames
 /// measured 0.52-0.61, late-game base fights 0.26-0.37, the end screen 0.0).
 const MAP_HOLD_SCORE:f32=0.2;
@@ -236,6 +248,7 @@ impl AutoScanner {
         if x < -width*0.04 || y < -height*0.04 || x+width>frame.width() as f32+width*0.04 || y+height>frame.height() as f32+height*0.04 {
             off_map!();
         }
+        let (x,y,width,height)=snap_full_frame(frame.width(),frame.height(),x,y,width,height);
         let left=x.max(0.) as u32;let top=y.max(0.) as u32;
         let w=(width as u32).min(frame.width()-left);let h=(height as u32).min(frame.height()-top);
         if w<320||h<180{off_map!();}

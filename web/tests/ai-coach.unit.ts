@@ -31,7 +31,7 @@ function snap(clock: number, extra: Partial<AiSnapshot> = {}): AiSnapshot {
     hero_status: [
       { ally: true, slot: 0, hero: 'hero_haze', health_ratio: .6, networth_observations: 3, observations: 3, position_observations: 0 },
       { ally: false, slot: 0, hero: 'hero_graves', dead: true, respawn_secs: 22, networth_observations: 3, observations: 3, position_observations: 0 },
-      { ally: false, slot: 1, hero: 'hero_shiv', bar_visible: false, networth_observations: 3, observations: 3, position_observations: 0 },
+      { ally: false, slot: 1, hero: 'hero_shiv', dead: false, bar_visible: false, networth_observations: 3, observations: 3, position_observations: 0 },
     ],
     minimap: { observations: 3, green: lane(.6), blue: lane(.4), yellow: lane(.5), midboss_up: true, urn: null, enemies: [], allies: [], enemy_count: 1,
       you: { x: .5, y: .5 }, your_lane: 'Blue', your_progress: .45, zone: 'Blue jungle',
@@ -1031,4 +1031,25 @@ test('death prompt: teammates dead at the death and the walk-out from base (rec8
   const blind = new AiHistory(); t = 0; const p = (x: AiSnapshot) => { blind.push(x, [], t); t += 4000; };
   p(at(2490, null, 0)); p(at(2510, null, 0)); p(s13(2525, { dead: true, screen: 'Dead', hp: null, max_hp: null, minimap: null }));
   assert.match(beforeDeathLine(blind, blind.deaths.at(-1)!)!, /your position was not read \(unknown\)$/);
+});
+
+test('top bar in the prompt (rec16 34:04, 34:56): teammates exclude you, unread slots are not alive, WHY NOW restates the current dead count', () => {
+  const slot = (ally: boolean, i: number, dead: boolean | undefined, respawn: number | null, hero: string) => ({ ally, slot: i, hero, dead, respawn_secs: respawn, bar_visible: dead ? false : true, networth_observations: 1, observations: 1, position_observations: 0 });
+  const allies = ['hero_werewolf', 'hero_shiv', 'hero_vampirebat', 'hero_bookworm', 'hero_orion', 'hero_punkgoat'];
+  const enemies = ['hero_priest', 'hero_gigawatt', 'hero_ratking', 'hero_nurse', 'hero_hornet', 'hero_atlas'];
+  // Five teammates dead, you (Grey Talon, slot 4) alive: no teammate is alive.
+  const wiped = snap(2044, { hero: 'hero_orion', hero_status: [...allies.map((h, i) => slot(true, i, i !== 4, i !== 4 ? 30 + i : null, h)), ...enemies.map((h, i) => slot(false, i, i === 5 ? undefined : false, null, h))] });
+  const s = buildSummary({ snapshot: wiped, history: new AiHistory(), now: 0, trigger: 'periodic' });
+  assert.match(s, /Teammates \(not counting you\): 0 alive, dead: /); assert.doesNotMatch(s, /Allies: 1 alive/);
+  assert.doesNotMatch(s, /dead: [^\n]*Grey Talon/, 'you are not a dead teammate');
+  assert.match(s, /Enemies: 5 alive, not read: 1/, 'an unread slot is not counted alive');
+  // An enemy-dead window that grew from 2 to 3 dead: WHY NOW says 3, as the top bar does.
+  let now = 1000; const team = (deadEnemies: number) => snap(2090, { hero: 'hero_orion', hp: 1000, hero_status: [...allies.map((h, i) => slot(true, i, false, null, h)), ...enemies.map((h, i) => slot(false, i, i < deadEnemies, i < deadEnemies ? 60 + i : null, h))] });
+  const coach = new AiCoach({ settings: () => settings({ aiInterval: 600 }), isLive: () => true, generation: () => 1, knowledge: async () => [], now: () => now,
+    fetchImpl: (async () => new Response(JSON.stringify({ choices: [{ message: { content: '{"speak":null}' } }] }))) as unknown as typeof fetch, onAdvice: () => {} });
+  coach.observe(team(0), [], true); now = 3000; coach.observe(team(2), [], true); now = 6000; coach.observe(team(3), [], true);
+  const why = coach.pendingReason(now)!;
+  assert.match(why, /enemy-dead window: 3 enemies dead/); assert.doesNotMatch(why, /2 enemies dead/);
+  now = 9000; coach.observe(team(0), [], true);
+  assert.doesNotMatch(coach.pendingReason(now) ?? '', /enemy-dead window/, 'a closed window is no reason');
 });

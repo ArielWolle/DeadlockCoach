@@ -53,6 +53,10 @@ pub struct BarReading{
     pub dead:bool,
     /// Red respawn-timer pixels over the portrait ([`timer_pixels`]).
     pub timer:u32,
+    /// Respawn-digit glyph pixels ([`digit_glyph`]): the evidence `dead` rests on.
+    pub digits:u32,
+    /// Some digit-coloured pixels but too few to tell: neither dead nor alive.
+    pub unsure:bool,
 }
 /// Measured on 1600x900 frames: bars span rows 24..=62. Ally bars keep their right edge at
 /// cx-20 (left edge cx-28 -> cx-22); enemy bars mirror (cx+25..34 at the top, cx+22..24 at the bottom).
@@ -95,6 +99,30 @@ pub fn glow_pixels(frame:&image::RgbImage,cx:f32)->u32{
 }
 /// Timer pixels that mark a dead slot on their own (see [`read_bar`]).
 pub const TIMER_DEAD:u32=55;
+/// Respawn-digit glyph evidence of one slot: (core pixels, rows spanned). The digits are a vivid,
+/// bright red-orange (rec16/rec17: hue 7-18, saturation median 0.86, value median 0.89) on rows
+/// 41-58; portrait art with red in it is duller (Shiv: saturation median 0.66-0.76, value 0.71-0.75,
+/// 92-98 [`timer_pixels`] every frame while alive, which read his slot dead whenever his bar was
+/// not drawn: rec16 ally 1, rec17 enemy 3). Measured over 14,400 slot-frames of rec16/rec17: a
+/// living slot has 0 core pixels (3 slot-frames 10-39), a dead one 40-250 (a single "1": 45-60).
+pub fn digit_glyph(frame:&image::RgbImage,cx:f32)->(u32,u32){
+    let (mut n,mut rows)=(0u32,0u32);
+    for y in 38u32..62{
+        let mut row=0;
+        for x in (cx as u32).saturating_sub(16)..(cx as u32+16){
+            if x>=frame.width()||y>=frame.height(){continue;}
+            let p=frame.get_pixel(x,y);let (h,s,v)=crate::minimap::hsv(p[0],p[1],p[2]);
+            if (3. ..=25.).contains(&h)&&s>0.78&&v>0.8{row+=1;}
+        }
+        n+=row;if row>=2{rows+=1;}
+    }
+    (n,rows)
+}
+/// Core digit pixels (and rows) that mark a dead slot: below [`DIGITS_UNSURE`] the slot is alive,
+/// in between the read is uncertain (the previous state is kept).
+pub const DIGITS_DEAD:u32=30;
+pub const DIGITS_UNSURE:u32=12;
+const DIGIT_ROWS:u32=8;
 fn portrait_dead(frame:&image::RgbImage,cx:f32)->bool{
     // Living portraits sit on a saturated team backdrop (orange / blue) with coloured art; a dead
     // hero's portrait is greyed. The red respawn digits are excluded.
@@ -135,31 +163,39 @@ pub fn read_bar(frame:&image::RgbImage,slot:usize)->BarReading{
         let visible=fill>=2&&empty_frac>=0.7;
         let all_empty=fill==0&&empty_frac>=0.92;
         let score=if visible{fill+empty}else{empty/2};
-        if score>best.0||best.0==0&&all_empty{best=(score,BarReading{visible,ratio:visible.then(||fill as f32/BAR_ROWS as f32),empty:all_empty,dead,timer:0});}
+        if score>best.0||best.0==0&&all_empty{best=(score,BarReading{visible,ratio:visible.then(||fill as f32/BAR_ROWS as f32),empty:all_empty,dead,..Default::default()});}
     }
-    // A dead hero's bar is gone and the portrait is greyed; a pale living portrait keeps its bar.
-    // ...and only a dead portrait carries the red respawn timer (dead: 78-216 px on recorded and
-    // fixture frames; pale living portraits without a bar: 0).
-    // The red digits alone decide when they are plentiful: dark portraits (Haze, Rat King) never
-    // read as greyed, and a dark greyed portrait can look like an empty bar column. Over all 7,200
-    // rec5 slot-frames, living slots without a bar peaked at 44 timer pixels (red death-screen
-    // tint) and dead slots started at 65 (a single "7").
+    // A dead hero's bar is gone, the portrait is greyed and it carries the respawn countdown.
+    // The countdown digits decide: greyed-looking living portraits (pale Silver, dark Shiv / Billy)
+    // and portrait art with red in it (Shiv: ~95 loose red pixels every frame) read dead whenever
+    // their bar was not drawn (rec16/rec17: 48 phantom deaths in 100 checked frames, every one
+    // without a respawn timer read), while every truly dead slot showed its digits. Dark portraits
+    // (Haze, Rat King) never read as greyed, so the greyed test alone cannot decide either.
     let timer=timer_pixels(frame,cx);
-    let glow=glow_pixels(frame,cx)>=50;
-    best.1.dead=!best.1.visible&&(timer>=TIMER_DEAD&&!glow||dead&&!best.1.empty&&timer>=40);
-    if best.1.dead{best.1.empty=false;best.1.ratio=None;}
-    best.1.timer=timer;
+    let (digits,rows)=digit_glyph(frame,cx);
+    let glyph=digits>=DIGITS_DEAD&&rows>=DIGIT_ROWS;
+    // A drawn bar with a little digit colour is a living hero (a bar never coexists with a timer).
+    best.1.dead=glyph&&!(best.1.visible&&digits<2*DIGITS_DEAD);
+    best.1.unsure=!best.1.dead&&!best.1.visible&&(digits>=DIGITS_UNSURE||glyph);
+    if best.1.dead{best.1.empty=false;best.1.ratio=None;best.1.visible=false;}
+    best.1.timer=timer;best.1.digits=digits;
     best.1
 }
 /// Update all twelve slots from their health bars (pixel-only, every gameplay frame).
 /// Returns the slots that look dead, for respawn-timer recognition.
-pub fn apply_bars(frame:&DynamicImage,status:&mut Vec<HeroStatus>)->Vec<usize>{
+pub fn apply_bars(frame:&DynamicImage,status:&mut Vec<HeroStatus>)->Vec<usize>{apply_bars_at(frame,status,None)}
+/// [`apply_bars`] at frame time `now_ms`: a confirmed countdown is counted down to it (the last
+/// committed `respawn_secs` can be several seconds old).
+pub fn apply_bars_at(frame:&DynamicImage,status:&mut Vec<HeroStatus>,now_ms:Option<u64>)->Vec<usize>{
     if status.len()!=12{*status=twelve(status);}
     if frame.width()!=1600||frame.height()<70{return vec![];}
     let band=frame.crop_imm(0,0,1600,70).to_rgb8();
     let mut dead=vec![];
     for (i,s) in status.iter_mut().enumerate(){
         let r=read_bar(&band,i);
+        // Too few digit pixels to tell dead from alive: keep the previous state (a dead slot keeps
+        // asking for its timer read).
+        if r.unsure{if s.dead==Some(true){dead.push(i);}continue;}
         // An all-empty bar is ~0 HP only when the CRITICAL banner confirms it; otherwise it can
         // be a missing bar over a dark scene.
         let near_zero=r.empty&&s.critical==Some(true);
@@ -172,7 +208,12 @@ pub fn apply_bars(frame:&DynamicImage,status:&mut Vec<HeroStatus>)->Vec<usize>{
         // Unmistakable evidence commits at once: a dense red timer (>= 100 px; living slots peak
         // at 44) starts a death, a drawn bar ends one. rec5 lagged one frame on every death and
         // respawn (a respawned hero still reported dead without a timer).
-        let decisive=r.dead&&r.timer>=100||s.dead==Some(true)&&r.visible;
+        // A countdown that was about to end and whose digits are gone is a respawn (an enemy's bar
+        // stays undrawn after it: rec16 19:25, 24:45, 35:27 and 36:01 kept a respawned enemy dead
+        // for one more frame).
+        let left=match (s.respawn_anchor,now_ms){(Some((v,t)),Some(n))=>Some(v as i64-(n.saturating_sub(t)/1000) as i64),_=>s.respawn_secs.map(|v|v as i64)};
+        let respawned=s.dead==Some(true)&&!r.dead&&r.digits==0&&left.is_none_or(|v|v<=5);
+        let decisive=r.dead&&r.digits>=90||s.dead==Some(true)&&r.visible||respawned;
         if known&&!decisive&&(s.bar_visible,s.dead==Some(true))!=state&&s.pending_state!=Some(state){
             s.pending_state=Some(state);
             // A slot that now shows a respawn timer has no live health, even before the change is
@@ -256,13 +297,20 @@ pub fn apply_respawn(lines:&[String],slots:&[usize],now_ms:u64,status:&mut [Hero
             (Some(v),Some(e)) if agrees(v,e)=>{s.respawn_anchor=Some((v,now_ms));s.respawn_observations=s.respawn_observations.saturating_add(1);}
             (Some(v),e)=>{
                 // Two consecutive reads that count down together (re)start the countdown.
-                if expect(s.respawn_candidate).is_some_and(|c|agrees(v,c)){s.respawn_anchor=Some((v,now_ms));s.respawn_observations=2;s.respawn_candidate=None;}
+                // ...and over 2 s or more the second read must be lower: the same number read twice
+                // is static art, not a countdown (rec17 24:02 read "29" on Shiv's living portrait).
+                let counts_down=s.respawn_candidate.is_some_and(|(c,t)|elapsed(t)<2||v<c);
+                if expect(s.respawn_candidate).is_some_and(|c|agrees(v,c))&&counts_down{s.respawn_anchor=Some((v,now_ms));s.respawn_observations=2;s.respawn_candidate=None;}
                 else{s.respawn_candidate=Some((v,now_ms));if e.is_none_or(|e|e<=0){s.respawn_anchor=None;s.respawn_observations=0;}}
             }
             (None,_)=>{}
         }
         s.respawn_secs=expect(s.respawn_anchor).filter(|e|*e>=1).map(|e|e as u32);
     }
+}
+/// Respawn timers read `age_secs` ago, counted down to now (a timer that has run out is dropped).
+pub fn age_respawn(status:&mut [HeroStatus],age_secs:u32){
+    for t in status{t.respawn_secs=t.respawn_secs.and_then(|v|v.checked_sub(age_secs)).filter(|v|*v>=1);}
 }
 fn twelve(previous:&[HeroStatus])->Vec<HeroStatus>{
     if previous.len()==12{return previous.to_vec();}

@@ -324,8 +324,8 @@ impl ReviewCoach {
             enemies_dead: team.as_ref().map(|p| p.enemies_dead.len()), souls: s.souls, fight_at, deep_wave, effects,
             alive: area != Area::Dead && s.screen.as_deref() == Some("Gameplay"), respawn: if area == Area::Dead { s.respawn_secs } else { None },
             allies_dead_heroes: s.hero_status.iter().filter(|h| h.ally && h.dead == Some(true)).filter_map(|h| h.hero.clone()).collect(),
-            enemies_dead_slots: if s.hero_status.len() == 12 { Some(s.hero_status.iter().filter(|h| !h.ally && h.dead == Some(true)).map(|h| h.slot).collect()) } else { None },
-            allies_dead_slots: if s.hero_status.len() == 12 { Some(s.hero_status.iter().filter(|h| h.ally && h.dead == Some(true)).map(|h| h.slot).collect()) } else { None },
+            enemies_dead_slots: crate::positioning::dead_set(s, false),
+            allies_dead_slots: crate::positioning::dead_set(s, true),
             allies_alive_heroes: s.hero_status.iter().filter(|h| h.ally && h.dead == Some(false)).filter_map(|h| h.hero.clone()).filter(|h| s.hero.as_ref() != Some(h)).collect(),
             banner: s.objective_banner.as_ref().filter(|b| b.own != Some(true) && !b.name.trim().is_empty()).map(|b| {
                 let n = b.name.trim().to_ascii_uppercase();

@@ -61,8 +61,12 @@ impl Monitor {
         // health bars / dead portraits are pixel reads refreshed every fast sample.
         if snapshot.hero_status.len()==12{
             if self.previous_team.len()==12{for(t,p) in snapshot.hero_status.iter_mut().zip(&self.previous_team){
-                t.health_ratio=p.health_ratio;t.health_observations=p.health_observations;t.respawn_secs=t.respawn_secs.or(p.respawn_secs);}}
-            crate::team::apply_bars(&game,&mut snapshot.hero_status);
+                t.health_ratio=p.health_ratio;t.health_observations=p.health_observations;}}
+            // Respawn timers are the full scan's reads, `age` seconds old: they count down meanwhile
+            // (rec16 17:01 / 30:07 said "the first back in about 14 / 28 seconds" for 10 / 25).
+            crate::team::age_respawn(&mut snapshot.hero_status,((now-c.timestamp_ms)/1000) as u32);
+            let dy=crate::team::top_bar_offset(&game);
+            crate::team::apply_bars_at(&crate::team::top_bar_aligned(&game,dy),&mut snapshot.hero_status,Some(now));
         }
         if let Some(library)=&self.library{crate::team::positions(&mut snapshot,&map,library);}else{for slot in &mut snapshot.hero_status{slot.position=None;slot.lane=None;slot.position_observations=0;}}
         self.previous_team=snapshot.hero_status.clone();
