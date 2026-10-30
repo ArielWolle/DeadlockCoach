@@ -569,3 +569,12 @@ test('recordings split by game: tags, then match id, clock restart and long paus
   assert.deepEqual(inWindow([{ t: t - 10000 }, { t: t + 1000 }, { t: t + 64000 }, { t: t + 70000 }], { start: t, end: t + 5000 }).map(x => x.t - t), [1000, 64000]);
   assert.equal(defaults.autoDownloadRecording, false); assert.equal(normalize({ autoDownloadRecording: true }).autoDownloadRecording, true);
 });
+
+import { planTrim } from '../src/storage.ts';
+test('recording trim never drops the game being recorded; older games go oldest first', () => {
+  const fr = [{ id: 1, size: 10, game: 'old' }, { id: 2, size: 10, game: 'old' }, { id: 3, size: 10 }, { id: 4, size: 10, game: 'cur' }, { id: 5, size: 10, game: 'cur' }, { id: 6, size: 10, game: 'cur' }];
+  assert.deepEqual(planTrim(fr, 'cur', c => c <= 4), [1, 2]);
+  assert.deepEqual(planTrim(fr, 'cur', (_, b) => b <= 10), [1, 2, 3]); // over the cap with only the current game left: it is kept whole
+  assert.deepEqual(planTrim(fr, 'cur', () => true), []);
+  assert.deepEqual(planTrim(fr, undefined, c => c <= 4), [1, 2]);
+});
