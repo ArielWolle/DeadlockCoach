@@ -13,6 +13,13 @@ through the newest vision + rule engine (AI calls cannot be replayed; the AI is 
 | rec13 · old live | live, before b873284 | 139 | 39% | 4% | 35% | 10% | 3.9 (my count 4.15 incl. AI) | 6; 8 in 60 s (n/a) | 2.2 (13 for 6; one death got 5) | 7 s (4 / 6); review-13: ~8 s | 17 / 34 | [coach-review-13.md](coach-review-13.md) |
 | rec8 · new | 7da548e | 55 | **58%** | 15% | **22%** | **2%** | **1.45** | **3 (2)** | **1.0** (6 for 6) | 2.5 s (4 / 6) | 15 / 22 | [coach-review-8.md](coach-review-8.md) |
 | rec13 · new | 7da548e | 54 | **59%** | 15% | **24%** | **2%** | **1.45** | **3 (3)** | 0.83 (5 for 6; first death none) | 5 s (6 / 6) | 13 / 21 | this file, below |
+| rec8 · new | 00f02b9 (review-8 batch) | 54 | not regraded | n/a | n/a | n/a | **1.43** | 3 (2) | 1.0 (6 for 6) | 4 s (5 / 7)* | 15 / 24 | this file, below |
+| rec13 · new | 00f02b9 (review-8 batch) | 57 | not regraded | n/a | n/a | n/a | **1.49** | 3 (2) | **1.0** (6 for 6) | 6 s (6 / 6)* | 12 / 21 | this file, below |
+
+\* Measured with the automatic death list and warning-key set below (`metrics.js`, deaths = first
+`snapshot.dead` frame, revives excluded; warning keys now include `forward_exit`, `escape_in`,
+`ult_out`). On that same method 7da548e scores rec8 0 s (6 / 7) and rec13 0 s (5 / 6), so the
+change is +4 s / +6 s. The automatic list counts rec8 28:50 as a death (no review there), hence 7.
 
 Also tracked: mistimed rec8 8% → 13%, rec13 9% → 9%; redundant rec13 8% → 6%, rec8 new 5%. The
 first warning inside the last 30 s before a death: rec8 9 s → 13.5 s, rec13 15 s → 12.5 s.
@@ -31,6 +38,14 @@ calls/min (3 in 30 s), helpful calls from 24-39% to 58-59%, wrong calls from 6-1
 death now gives one review. Not improved: the last health warning still lands 2-5 s before a death,
 and death reviews pick a symptom ("X and Y focused you") over the decision in 4 of 6 rec8 deaths.
 Open items: [coach-review-8.md](coach-review-8.md) section D.
+
+00f02b9 (section D batch) keeps the cadence (1.43-1.49 calls/min, ≤ 2 calls per fight) and moves
+the median last warning from 0 s to 4-6 s before a death. Death reviews now name the decision in 4 of
+6 rec8 deaths ("used Rain of Arrows to go in with four of them missing", "walked out with three
+teammates dead after the call to hold", "stayed deep in their half after the call to get out") and
+rec13's first death has its review again (clock fix). Not regraded by a reviewer yet. Still open:
+rec8 22:04 (four enemies dead) gets no plan, the throw call also fires on mid-game 10k swings, and
+the 0 s leads are health calls at the moment of death.
 
 ## rec13 · new: grading notes
 54 calls: 8 great, 24 useful, 13 generic, 5 mistimed, 1 wrong, 3 redundant. Great: 11:23 Guardian
