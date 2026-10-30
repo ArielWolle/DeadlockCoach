@@ -156,6 +156,7 @@ test('region overlays use reported boxes and preserve their provenance across ca
 import './ai-coach.unit.ts';
 import './ai-review.unit.ts';
 import './pregame.unit.ts';
+import './fights.unit.ts';
 // ---- Player profile ------------------------------------------------------------------------
 type Frame=Record<string,unknown>;
 function team(alliesDead=0,enemiesDead=0,unseen=0){

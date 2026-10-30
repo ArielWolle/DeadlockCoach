@@ -2,7 +2,7 @@
 // the input files.
 //   node --experimental-strip-types scripts/player-profile-replay.ts <file.jsonl> [more.jsonl]
 //     JSONL: one {t|ms, snapshot} per line, or bare snapshots; add --no-wall to ignore the recorded
-//     wall time (as a replay in the app does).
+//     wall time (as a replay in the app does); --fights lists every team fight with its status.
 //   node --experimental-strip-types scripts/player-profile-replay.ts --live <recording.json>...
 //     Replay lab exports ({frames: [{timestamp, snapshot}]}): the live full-scan snapshots, fed as
 //     main.ts playerFrame does (one profile across all files, frames in wall-clock order, now() =
@@ -93,7 +93,11 @@ if (isMain && process.argv.includes('--live')) {
   const args = process.argv.slice(2);
   const profile = profileOf(args.filter(a => !a.startsWith('--')), !args.includes('--no-wall'), args.includes('--verbose'));
   const s = profile.summary();
-  for (const [i, r] of s.rows.entries()) console.log(`match ${r.heroName}: ${r.minutes} min, ${r.deaths} deaths, ${r.deadPct}% dead (${profile.matches[i]?.deadSecs} of ${profile.matches[i]?.spanSecs} s; per death ${profile.matches[i]?.deaths.map(d => d.deadSecs).join('/')}), fights ${r.fightsJoined}/${r.fightsJoined + r.fightsMissed}, unspent at death ${r.unspentAtDeath}, top killer ${r.topKiller}${r.excluded ? ` (not counted: ${r.excluded})` : ''}`);
+  for (const [i, r] of s.rows.entries()) {
+    console.log(`match ${r.heroName}: ${r.minutes} min, ${r.deaths} deaths, ${r.deadPct}% dead (${profile.matches[i]?.deadSecs} of ${profile.matches[i]?.spanSecs} s; per death ${profile.matches[i]?.deaths.map(d => d.deadSecs).join('/')}), fights ${r.fights}, unspent at death ${r.unspentAtDeath}, top killer ${r.topKiller}${r.excluded ? ` (not counted: ${r.excluded})` : ''}`);
+    // --fights: every fight with its clock span, deaths, status and evidence.
+    if (args.includes('--fights')) for (const e of profile.matches[i]?.fights.at ?? []) console.log(`  fight ${clockText(e.t)}-${clockText(e.end)} ${e.deaths} deaths: ${e.s} (${e.why})`);
+  }
   console.log('\nWEAKNESSES');
   for (const t of s.weaknesses) console.log(`- [${t.id}] ${t.label} (sev ${t.severity}, conf ${t.confidenceLabel} ${t.confidence}, ${t.trend}): ${t.evidence}\n    tip: ${t.tip}`);
   console.log('STRENGTHS');
