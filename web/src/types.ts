@@ -78,6 +78,8 @@ export interface Settings {
   aiReview: boolean;
   /** Player profile (player-profile.ts): learn from matches and speak one focus reminder. Local only. */
   playerProfile:boolean;
+  /** Start-of-game pep talk (pregame.ts): a short spoken briefing when a match starts. Default on. */
+  pregame: boolean;
 }
 export interface RecordedFrame { id?: number; created: number; timestamp: number; snapshot: Snapshot; cues: Cue[]; image: Blob; perception?: PerceptionReport | null; profile_id?: string }
 export interface Manifest { schema: number; version: string; files: Record<string, { bytes: number; sha256: string }> }

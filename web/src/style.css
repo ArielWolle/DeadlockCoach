@@ -62,3 +62,6 @@
 .skill-columns{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px;margin-top:8px}.skill-list{list-style:none;margin:0;padding:0;display:grid;gap:10px}
 .skill-item{border:1px solid var(--border);border-radius:8px;padding:10px 12px;background:#141c1f}.skill-item.mastered,.skill-item.assumed{border-left:3px solid #8fd18b}.skill-item.working{border-left:3px solid #e8c36a}
 .skill-item p{margin:6px 0;font-size:13px}.skill-toggle{font-size:12px;padding:4px 10px;margin-right:6px}
+
+/* Start-of-game pep talk panel (pregame-ui.ts) */
+.pregame-body{padding:17px 19px}.pregame-body .muted{margin:4px 0;font-size:12px}.pregame-text{font-size:17px;line-height:1.5;margin:8px 0;padding:8px 10px;border-left:3px solid var(--teal);color:#f1efe3}.pregame-details h4{margin:10px 0 4px}.pregame-details ul{margin:0 0 8px;padding-left:20px}.pregame-details p{margin:6px 0}#pregame-status.error{color:var(--red)}

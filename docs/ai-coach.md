@@ -771,3 +771,81 @@ Example (illustrative, written by hand for this document from the rec12 digest; 
  "hero_tips": ["As Grey Talon, take fights from max range behind your front line"],
  "spoken": "That was your cleanest game so far, and you played a real part in the win. When five or six of them were dead you were already in their base, and that is exactly how a lead turns into structures ..."}
 ```
+
+## Start-of-game pep talk
+
+When a new match starts, the coach gives one short, personal briefing (at most 120 spoken words,
+about 20-40 seconds) on what to focus on this game: the forward-looking twin of the end-of-game
+review. Every player gets it: with the AI coach on, the model writes it from a compact pre-game
+digest; without the AI coach (or when the request fails or the reply is unusable) the rule coach
+speaks a template built from the same digest. Settings > Advice categories > **Start-of-game pep
+talk** (default on). Logic: `web/src/pregame.ts` (DOM-free); UI: `web/src/pregame-ui.ts`.
+
+**Content, in this order.** (a) One line about the last game from the Player profile: praise
+first when the last counted match clearly improved ("Last game was a real step up: you were dead 7%
+of the time, down from 17%"), honest when it was rough (>= 15% dead, >= 2.5 deaths per 10 minutes
+or 7+ deaths: "Honest look at last game: 7 deaths and 17% of the game spent dead, but you delivered
+the Soul Urn without dying"), else steady; the first coached match sets a baseline. (b) The 1-2
+focus goals the profile chose for this match (`PlayerProfile.goals`), each in plain words with a
+concrete trigger (`GOAL_TRIGGERS`: "when two enemies are dead, we push the nearest tower together.
+Don't farm"; "when you have 1,600, buy at the next safe moment"). (c) Matchup: the 1-2 enemy heroes
+of this match's roster that threaten the player most (`threatsFor`): the plans.json threat table
+(+2, its danger and the counter for the player's role, Grey Talon / Vindicta = long range), the
+review.json ability lessons (+1), close-range divers (+1, +2 against a long-range hero) and the
+heroes that killed the player in the last 5 matches (+3 per death, up to 3: "Drifter caught you
+twice recently"); one counter-play each and, for the first, the counter item of its need
+(review.json `counters`: Reactive Barrier against stuns, Dispel Magic against Stalker's Mark,
+Spirit Shielding against spirit burst). Heroes outside the tables get a counter-play from their kit
+role (`HERO_ROLES`). (d) A short motivating close ("Same discipline as last game. Let's go." after
+an improved one). The template drops the counter item, then the second threat, then the second goal
+until it fits. The panel also shows the focus, the matchup tips and a one-line plan.
+
+**When.** `PregameWatch` sees every live full-scan frame (never replays): a match starts at the
+first clocked HUD frame, a clock more than 2 minutes below the last read, 5 minutes without a frame,
+or an early clock after the Countdown screen (Loading screens also occur mid-match, rec12 9:36, so
+they are no boundary). A match first seen after 3:00 gets no pep talk (rec13 starts at 5:52: the
+panel says so). The briefing waits until the roster is known: at least 0:35 and 3 fresh roster reads
+with 5+ enemy heroes read twice; at 1:30 it comes without matchup lines if the roster is still
+unknown; after 2:30 (no frames in the window) it is skipped. **Stale roster guard:** the vision held
+the previous match's roster (rec11's) for rec12's first reads at 0:31-0:42, so rosters read 2+ times
+in the previous match do not vote. The own hero is named only when 60% of the fresh reads agree and
+it is in the ally roster. One pep talk per match (key `pregame:<start wall s>:<start clock>`); the
+last one is kept across reloads (`deadlock-coach-pregame-v1`) with Replay and Stop. The Player
+profile's start focus cue is not spoken at an early match start while the pep talk is on (the pep
+talk says the goals).
+
+**Speech.** Read sentence by sentence (`ReviewReader`, as the review) after the coach's current call
+finished; respects mute, and "Speak AI advice" for the AI text (the template is the rule coach's
+voice). The speech gate (`main.ts` wraps `speaker.say`): a **High** safety call stops the pep talk
+at once and is spoken; Normal / Low calls wait until it ends (spoken if under 15 s old). Also logged
+in Recent calls as `pregame:ai` / `pregame:template`. Not spoken after 3:00 (shown only).
+
+**AI prompt.** System: `PREGAME_SYSTEM_PROMPT` (the structure above, digest facts only, heroes of
+this match only, plain words, <= 110 words). User: the PRE-GAME DIGEST (hero and roles, allies,
+enemies, LAST GAME with a verdict, the profile's top traits, FOCUS GOALS with their triggers,
+THREATS TO YOU with counter-play and counter item, the correlational matchup line from
+docs/heroes). Reply: one JSON object `{"spoken", "focus", "matchup_tips": [], "plan"}`; fenced or
+cut-off replies are repaired, `spoken` is cut to 120 words at a sentence end, and a reply naming a
+hero who is not in this match is rejected (the template is spoken instead, the panel says why).
+`max_tokens` = max(1,024, the setting), timeout 30 s, exchange log trigger `pregame`.
+
+**Offline check** (`node --max-old-space-size=8000 --experimental-strip-types scripts/pregame-eval.ts`,
+rec11 -> rec12 -> rec13 in wall-clock order through the Player profile and the watch): rec11 (first
+seen at 6:13) and rec13 (5:52) are skipped; rec12 (start 0:31, after rec11 in the profile) gets its
+pep talk at 0:50, the stale rec11 roster of 0:31-0:42 ignored:
+
+> Honest look at last game: 7 deaths and 17% of the game spent dead, but you delivered the Soul Urn
+> without dying. Today we clean up the rest. Your focus this match: spend your souls. When you have
+> 1,600, buy at the next safe moment, never walk into a fight with an item in your pocket. Watch
+> Drifter: his mark reaches across the map, so stay next to a teammate. If Drifter gets ahead, Dispel
+> Magic is your counter item. Watch Abrams: his Shoulder Charge stuns on walls, so keep a teammate
+> between you. You know what to do. Let's have a great game. (104 words)
+
+Known limit: in rec12 the vision read the own hero as Mirage until 5:15 (Grey Talon is on the
+same team), so the 0:50 digest says "Your hero: Mirage" and uses the default role's counters. The
+prompt is about 3.2k characters (~800 tokens). `PREGAME_AI_URL` / `PREGAME_AI_MODEL` /
+`PREGAME_AI_KEY` send it to a gateway.
+
+Tests: `web/tests/pregame.unit.ts` (watch, threat table, digest, template, JSON parsing, gateway,
+store) and `web/tests/browser/pregame.spec.ts` (template and AI paths with a mocked gateway, Replay /
+Stop, reload, the High-call gate, a mid-game join, the setting).
