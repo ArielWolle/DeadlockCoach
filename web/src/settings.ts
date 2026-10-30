@@ -10,6 +10,8 @@ export const defaults: Settings = {
   aiEnabled: false, aiProvider: 'openai', aiBaseUrl: '', aiModel: '', aiKey: '', aiInterval: 90, aiMaxTokens: 1024, aiSpeak: true, aiHeaders: '', aiReasoning: 'low',
   // End-of-game review (ai-review.ts): on by default, used only when the AI coach is enabled.
   aiReview: true,
+  // Start-of-game pep talk (pregame.ts): on by default; rule-based without the AI coach.
+  pregame: true,
 };
 const number = (n: unknown, lo: number, hi: number, fallback: number) => typeof n === 'number' && Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : fallback;
 export function normalize(input: unknown): Settings {
@@ -39,6 +41,7 @@ export function normalize(input: unknown): Settings {
   const tokens = Math.round(number(value.aiMaxTokens, 32, 8192, defaults.aiMaxTokens));
   s.aiMaxTokens = tokens < 512 ? defaults.aiMaxTokens : tokens;
   s.playerProfile=value.playerProfile!==false;
+  s.pregame = value.pregame !== false; // start-of-game pep talk
   for (const key of Object.keys(s.options) as Array<keyof Settings['options']>) if (typeof value.options?.[key] === 'boolean') s.options[key] = value.options[key];
   const c = value.crop;
   // Preserve precise visual selections, including a small game player inside a large

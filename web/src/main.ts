@@ -15,6 +15,8 @@ import { setProfileProvider, setGoalProvider, aiExchanges, clearAiExchanges, res
 import { PlayerProfile } from './player-profile';
 import { PlayerPage } from './player-page';
 import { mountMatchReviews, type ReviewUi } from './ai-review-ui'; // end-of-game AI review
+import { mountPregame, type PregameUi } from './pregame-ui'; // start-of-game pep talk
+import { PREGAME } from './pregame'; // start-of-game pep talk
 import { clearFrames, download, listFrames, recordFrame, snapshotLines } from './storage';
 import type { Analysis, Cue, GameItem, Knowledge, Options, Settings, Snapshot, WorkerReply, ProfileReply, PerceptionReport, TacticalDecision, PoolStatus, HeroStatus } from './types';
 
@@ -70,6 +72,8 @@ const playerProfile = new PlayerProfile({ store: (() => { try { return localStor
 let playerPage: PlayerPage | undefined;
 /** End-of-game AI review (ai-review-ui.ts): fed live and replay frames, reviews a match when it ends. */
 let reviews: ReviewUi | undefined;
+/** Start-of-game pep talk (pregame-ui.ts): fed live frames, briefs once per match. */
+let pregame: PregameUi | undefined;
 /** Snapshots analyzed by the replay in progress / the last completed replay (for "Add replay results"). */
 let replayCollect: Snapshot[] | null = null, lastReplay: { snapshots: Snapshot[]; label: string } | null = null;
 /** Feeds a live full-scan result to the profile; at a match start or a respawn it may append one
@@ -78,7 +82,9 @@ function playerFrame(analysis: Analysis, timestamp: number) {
   if (!settings.playerProfile || !isDeadlock(activeProfile)) return;
   const ev = playerProfile.observe(analysis.snapshot, timestamp);
   // focusCue('respawn') never praises right after a death (rec13 6:17); goals only when this death broke one.
-  if (ev.matchStarted || ev.respawned) { const cue = playerProfile.focusCue(ev.matchStarted ? 'start' : 'respawn'); if (cue) analysis.cues = [...analysis.cues, cue]; }
+  // Start-of-game pep talk hook: it says the focus goals at an early match start, so the start focus cue is skipped then.
+  const pepTalk = ev.matchStarted && settings.pregame && (analysis.snapshot.game_clock_secs ?? Infinity) <= PREGAME.max_start_secs;
+  if ((ev.matchStarted && !pepTalk) || ev.respawned) { const cue = playerProfile.focusCue(ev.matchStarted ? 'start' : 'respawn'); if (cue) analysis.cues = [...analysis.cues, cue]; }
   if (ev.ended && location.hash === '#player') playerPage?.render();
 }
 /** Compact profile text for the AI coach prompt (null when off or empty): setProfileProvider(playerPromptText). */
@@ -431,6 +437,7 @@ async function tick() {
 function liveMatchFrame(analysis:Analysis,timestamp:number){
   playerFrame(analysis,timestamp);
   if(isDeadlock(activeProfile))reviews?.live(analysis.snapshot,timestamp,analysis.cues); // end-of-game review
+  if(isDeadlock(activeProfile))pregame?.live(analysis.snapshot,timestamp); // start-of-game pep talk
 }
 // Browser tests feed analyzed live frames (a whole match cannot be captured in a test): opt in by
 // defining window.__deadlockTestHooks = {} before the page loads (tests/browser/ai-review.spec.ts).
@@ -805,6 +812,7 @@ function populateSettings() {
   text('rate-value', `${settings.rate.toFixed(1)}×`); text('volume-value', `${Math.round(settings.volume * 100)}%`);
   button('mute').textContent = settings.muted ? 'Unmute voice' : 'Mute voice'; button('mute').setAttribute('aria-pressed', String(settings.muted));
   ai?.populate(settings); reviews?.populate(settings); // end-of-game review setting
+  pregame?.populate(settings); // start-of-game pep talk setting
 }
 function syncVolume(){
   const level=Math.round(settings.volume*100),label=`${level}%`;
@@ -827,6 +835,7 @@ function saveForm() {
   if(activeProfile.viewport.auto_crop===false)next.crop={x:0,y:0,w:1,h:1};
   const aiProblem = ai?.read(next); if (aiProblem) { notice(aiProblem, true); return; }
   reviews?.read(next); // end-of-game review setting
+  pregame?.read(next); // start-of-game pep talk setting
   if (next.crop.x + next.crop.w > 1.001 || next.crop.y + next.crop.h > 1.001) { notice('Calibration extends beyond the captured source. Offset + size must be no more than 100%.', true); return; }
   if (JSON.stringify(next.crop) !== JSON.stringify(settings.crop)) { manualViewport = true; automaticViewport = false; }
   settings = normalize(next); saveSettings(settings); speaker.configure(settings); configureOptions();
@@ -1060,6 +1069,16 @@ reviews = mountMatchReviews({ settings: () => settings, save: s => { settings = 
   isLive: () => running && !replaying, goals: source => source === 'live' && playerProfile.goals.length ? playerProfile.goals : null,
   // The review tracker closed the live match (Stop, "Review my last match"): the Player profile follows.
   finalized: () => { if (playerProfile.finishSession(0) && location.hash === '#player') playerPage?.render(); } });
+// --- Start-of-game pep talk hooks (logic: pregame.ts, UI: pregame-ui.ts) ---
+{ const sayDirect = speaker.say.bind(speaker);
+  // The speech gate: a High call stops the pep talk; other calls wait until it ends.
+  speaker.say = (cue: Cue, test = false) => { if (!test && pregame?.intercept(cue)) return; sayDirect(cue, test); };
+  pregame = mountPregame({ settings: () => settings, previous: () => settings.playerProfile ? playerProfile.matches : [],
+    goals: () => settings.playerProfile ? playerProfile.goals : [], knowledge: async () => { await loadKnowledge(); return knowledge; },
+    name: id => heroNames[id] || label(id, {}), stopSpeech: () => speaker.cancel(), say: cue => sayDirect(cue),
+    log: cue => { logCue(cue, latest, false, cue.key === 'pregame:ai'); cues.unshift({ ...cue, at: latest.game_clock_secs }); cues = cues.slice(0, 60); renderCues(); } });
+  const hooks = (window as unknown as { __deadlockTestHooks?: Record<string, unknown> }).__deadlockTestHooks;
+  if (hooks && typeof hooks === 'object') hooks.coachSay = (cue: Cue) => speaker.say(cue); }
 refreshGameLayout();
 populateSettings(); renderSnapshot(latest); renderTactics(null,latest); diagnostics(); route(); void loadNames();
 if (import.meta.env.PROD && 'serviceWorker' in navigator) {

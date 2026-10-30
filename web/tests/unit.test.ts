@@ -155,6 +155,7 @@ test('region overlays use reported boxes and preserve their provenance across ca
 // Optional AI coach tests live in their own file to keep merges with other modules simple.
 import './ai-coach.unit.ts';
 import './ai-review.unit.ts';
+import './pregame.unit.ts';
 // ---- Player profile ------------------------------------------------------------------------
 type Frame=Record<string,unknown>;
 function team(alliesDead=0,enemiesDead=0,unseen=0){
