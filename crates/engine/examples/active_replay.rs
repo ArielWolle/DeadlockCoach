@@ -25,7 +25,6 @@ fn main() {
     let mut args = std::env::args().skip(1);
     let path = args.next().expect("replay .jsonl path");
     let all = args.any(|a| a == "--all");
-    let file = std::fs::File::open(&path).expect("open replay");
     // As the web coach registers them: the Urn timer readout is replaced by the Urn plan (plans.rs).
     let mut rules = rules_from_timings(&coach_engine::plans::unplanned_timings(include_str!("../../../data/timings.json"))).expect("timings");
     rules.extend(default_rules(RulesConfig::default()));

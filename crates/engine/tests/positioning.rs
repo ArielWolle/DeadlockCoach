@@ -148,7 +148,7 @@ fn dead_enemies_are_not_missing_and_create_a_team_window() {
     let visible = vec![gone, hero(2, false, 0.1, 0.1), hero(3, false, 0.15, 0.1)];
     let mut s = snap(visible); team(&mut s, [Some(0.9), FULL, FULL, FULL, FULL, FULL], [FULL, FULL, Some(-1.0), Some(-1.0), Some(-1.0), Some(-1.0)]);
     let a = PositionCoach::default().assess(&s).unwrap();
-    assert_eq!(a.id, "enemies_down"); assert!(a.text.contains("4 enemies are dead, the first back in about 28 seconds"), "{}", a.text);
+    assert_eq!(a.id, "enemies_down"); assert_eq!(a.text, "Four of them are dead for 28 more seconds: push Blue lane with the team now.");
 }
 
 #[test]

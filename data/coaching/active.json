@@ -12,8 +12,15 @@
     "loss_deaths": 2, "loss_window_secs": 15, "loss_far": 0.3, "loss_radius": 0.15,
     "hold_dead": 3, "hold_min_secs": 8, "hold_soon_secs": 15, "hold_exit_secs": 20, "hold_exit_y": 0.55,
     "raid_enemies": 2, "raid_y": 0.76, "raid_far": 0.3, "raid_min_clock": 900,
-    "urn_dead": 2, "urn_enemy_radius": 0.2
+    "urn_dead": 2, "urn_enemy_radius": 0.2,
+    "exit_y": 0.38, "exit_back_secs": 12, "exit_recent_secs": 8, "exit_back_min": 2, "exit_unseen": 4, "exit_allies_near": 2, "exit_ally_radius": 0.15,
+    "ult_half_y": 0.45, "ult_unseen": 3, "escape_missing": 2, "escape_fresh_cd": 6, "escape_y": 0.42, "forward_min_clock": 900
   },
+  "r8_calls_note": "exit_*: deep in their half (y < exit_y, or their base label) while two or more enemies are back within exit_back_secs (top-bar respawn timers, or respawned in the last exit_recent_secs), or exit_unseen enemies are unseen, with fewer than exit_allies_near teammates within exit_ally_radius (rec8 20:14, 27:39, 39:00; rec13 40:33). ult_*: your ultimate (ability slot 4) on cooldown in their half (y < ult_half_y) with ult_unseen enemies unseen. escape_*: your escape ability (escapes below, e.g. Grey Talon's Rain of Arrows in slot 2) cast fresh (ready shortly before, then a cooldown read at or above escape_fresh_cd) at y < escape_y with escape_missing enemies unseen or just back (rec8 16:54, 20:27). Both need you without two teammates beside you and no window open (fewer than two enemies dead on longer timers): rec8 cast Rain of Arrows ten times in their half, eight of them in a won fight or a window. forward_min_clock: not in the laning phase, where most enemies are unseen in their lanes (rec13 10:35). The enemy-dead window names only a lane you reach before it closes (positioning::TRAVEL_SECS_PER_MAP, a coach estimate; rec8 29:41 / 31:11 said Yellow from Blue with 17-19 s left).",
+  "escapes_note": "Escape abilities by hero and HUD slot (slot 4 is the ultimate). On the wiki Grey Talon's Rain of Arrows is ability 2 and Guided Owl is the ultimate.",
+  "escapes": [
+    { "hero": "hero_orion", "slot": 2, "ability": "Rain of Arrows", "source": { "path": "strategy/hero-threats.md", "section": "## Grey Talon: Rain of Arrows (ability 2) and Guided Owl (ultimate)", "basis": "WIKI", "excerpt": "Cancelling Rain of Arrows while rising keeps the launch momentum, which can be used for mobility and evasion." } }
+  ],
   "new_calls_note": "loss_*: two ally deaths on the top bar within 15 s, with the fight (an enemy marker within 0.15 of an allied one) more than 0.3 map away from you (rec8 34:46-34:52). hold_*: walking out of base, or still in it, while three teammates are dead on timers of 8 s or more or unread (rec8 41:50), or two teammates respawn within 15 s (rec8 48:07). raid_*: two enemy heroes inside the bottom-centre base region of the minimap, or your structure's health banner, while you are not in base. urn_*: carrying the urn with two teammates dead and an enemy within 0.2 (rec8 27:12-27:39).",
   "debuffs": [
     { "status": "aura of suffering", "hero": "hero_frank", "card": "aura" },
@@ -57,8 +64,8 @@
       "rationale": "Being knocked off a zipline drops you where the enemy chose to fight, usually alone.",
       "sources": [
         { "path": "strategy/common-mistakes.md", "section": "## 16. Fighting split / piecemeal", "basis": "COMMUNITY", "excerpt": "Fall back and regroup. Don't fight split." } ] },
-    { "id": "window", "speech": "{count} enemies are dead for {secs} more seconds. Group up and push {lane} now.", "priority": "normal", "cooldown_secs": 45,
-      "rationale": "Greyed enemy portraits with long timers are a numbers advantage; on your own half with good health, the wave furthest toward their base converts it.",
+    { "id": "window", "speech": "{count} of them are dead for {secs} more seconds: {target} now.", "priority": "normal", "cooldown_secs": 45,
+      "rationale": "Greyed enemy portraits with long timers are a numbers advantage; on your own half with good health, the lane you are on (else the nearest one you reach before the window closes) and its next standing enemy structure convert it. The count is the heroes dead for the whole window.",
       "sources": [
         { "path": "strategy/teamfighting.md", "section": "## 4. Engage / disengage", "basis": "COMMUNITY", "excerpt": "count survivors and take the highest-value safe action (objective, wave, reset) rather than chasing" },
         { "path": "strategy/common-mistakes.md", "section": "## 10. Chasing kills instead of taking objectives", "basis": "COMMUNITY", "excerpt": "They are dead. Take the Walker now." } ] },
@@ -97,6 +104,11 @@
       "sources": [
         { "path": "strategy/lategame-and-closing.md", "section": "## 6. Throw prevention", "basis": "COMMUNITY", "excerpt": "A fight entered with team split or a teammate still walking from base is usually lost (metabot)." },
         { "path": "strategy/common-mistakes.md", "section": "## 24. Late-game solo splitting while the team is dead", "basis": "COMMUNITY", "excerpt": "Your team is dead. Don't push in alone." } ] },
+    { "id": "hold_base_again", "speech": "Still {count} of us down{next}: back to base, don't walk out alone.", "priority": "high", "cooldown_secs": 30,
+      "rationale": "Every walk-out while the same teammates are still dead gets the hold call again (rec8 41:44: a second walk-out with three dead after two hold calls, dead at 42:05).",
+      "sources": [
+        { "path": "strategy/lategame-and-closing.md", "section": "## 6. Throw prevention", "basis": "COMMUNITY", "excerpt": "A fight entered with team split or a teammate still walking from base is usually lost (metabot)." },
+        { "path": "strategy/common-mistakes.md", "section": "## 24. Late-game solo splitting while the team is dead", "basis": "COMMUNITY", "excerpt": "Your team is dead. Don't push in alone." } ] },
     { "id": "wait_respawn", "speech": "Wait for them: {count} teammates respawn within {secs} seconds. Walk out together.", "priority": "high", "cooldown_secs": 60,
       "rationale": "Teammates a few seconds from respawning are worth waiting for: the next fight is fought together instead of alone.",
       "sources": [
@@ -120,6 +132,26 @@
       "rationale": "The courier cannot parry or zipline and drops the urn to a melee hit or stun; without teammates to escort, an enemy beside you takes it.",
       "sources": [
         { "path": "strategy/midgame-macro.md", "section": "## 7. Soul Urn decisions", "basis": "WIKI", "excerpt": "Courier cannot use ziplines, teleporters, parry. Melee hits and stuns force a drop." },
-        { "path": "strategy/common-mistakes.md", "section": "## 15. Carrying the Urn into danger / not escorting", "basis": "WIKI", "excerpt": "courier cannot parry/zipline; melee/stun drops the urn" } ] }
+        { "path": "strategy/common-mistakes.md", "section": "## 15. Carrying the Urn into danger / not escorting", "basis": "WIKI", "excerpt": "courier cannot parry/zipline; melee/stun drops the urn" } ] },
+    { "id": "forward_exit", "speech": "Out of their base: {who} {is_are} back {when}.", "priority": "high", "cooldown_secs": 45,
+      "rationale": "The enemy-dead window closes while you are deep in their half: the heroes coming back spawn in their base, between you and your team (rec8 20:14, 27:39, 39:00; the last warning used to come 2.5 s before those deaths).",
+      "sources": [
+        { "path": "strategy/lategame-and-closing.md", "section": "## 6. Throw prevention", "basis": "COMMUNITY", "excerpt": "Don't throw a won game by chasing one last kill into the enemy base - take the objective, then reset." },
+        { "path": "strategy/teamfighting.md", "section": "## 4. Engage / disengage", "basis": "COMMUNITY", "excerpt": "Engage only with an advantage: pick available, key ability landed, ult advantage, numbers/respawns" } ] },
+    { "id": "forward_unseen", "speech": "Out of their base: {count} of them are unseen and you're deep.", "priority": "high", "cooldown_secs": 45,
+      "rationale": "Deep in their half with most of their team off the map and no teammate beside you, they choose the next fight (rec13 40:33: five unseen, dead at 41:05).",
+      "sources": [
+        { "path": "strategy/lategame-and-closing.md", "section": "## 6. Throw prevention", "basis": "COMMUNITY", "excerpt": "Don't throw a won game by chasing one last kill into the enemy base - take the objective, then reset." },
+        { "path": "strategy/common-mistakes.md", "section": "## 22. Ignoring the minimap / missing alerts", "basis": "WIKI", "excerpt": "enemy markers disappear from the minimap while the player pushes forward" } ] },
+    { "id": "ult_out", "speech": "Ult's down and {count} are missing: back to {front}.", "priority": "high", "cooldown_secs": 60,
+      "rationale": "With the ultimate (ability slot 4) on cooldown in their half and several enemies unseen, the next fight starts without your biggest tool: regroup first.",
+      "sources": [
+        { "path": "strategy/teamfighting.md", "section": "## 4. Engage / disengage", "basis": "COMMUNITY", "excerpt": "Engage only with an advantage: pick available, key ability landed, ult advantage, numbers/respawns" },
+        { "path": "strategy/hero-threats.md", "section": "## Grey Talon: Rain of Arrows (ability 2) and Guided Owl (ultimate)", "basis": "WIKI", "excerpt": "After 1.5s cast time, launch a spirit owl that you control and which explodes on impact, damaging and stunning enemies." } ] },
+    { "id": "escape_in", "speech": "{ability} is your escape: {count} are missing, back out.", "priority": "high", "cooldown_secs": 30,
+      "rationale": "The mobility ability spent on the way in, toward enemies that are not on the map, leaves no way out (rec8 16:54 and 20:27: Rain of Arrows forward, dead 6 and 13 s later).",
+      "sources": [
+        { "path": "strategy/hero-threats.md", "section": "## Grey Talon: Rain of Arrows (ability 2) and Guided Owl (ultimate)", "basis": "WIKI", "excerpt": "Cancelling Rain of Arrows while rising keeps the launch momentum, which can be used for mobility and evasion." },
+        { "path": "strategy/hero-threats.md", "section": "## Grey Talon: Rain of Arrows (ability 2) and Guided Owl (ultimate)", "basis": "WIKI", "excerpt": "Holding a direction while activating Rain of Arrows influences the direction Talon launches in." } ] }
   ]
 }

@@ -8,7 +8,10 @@ use std::sync::Arc;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Source { pub path:String, pub section:String, pub basis:String, pub excerpt:String }
 #[derive(Clone, Deserialize)]
-pub struct Card { pub id:String, pub speech:String, pub rationale:String, pub cooldown_secs:u32, pub sources:Vec<Source> }
+pub struct Card { pub id:String, pub speech:String, pub rationale:String, pub cooldown_secs:u32, pub sources:Vec<Source>,
+    /// Other phrasings said in rotation, the fast-fall phrasings (critical) and situation phrasings
+    /// ("afflicted", "forward"); "{pct}", "{hero}" and "{front}" are filled in.
+    #[serde(default)] pub variants:Vec<String>, #[serde(default)] pub fast:Vec<String>, #[serde(default)] pub situations:std::collections::HashMap<String,String> }
 #[derive(Clone, Deserialize)]
 pub struct Thresholds { pub low_health:f32, pub healthy:f32, pub damage_drop:f32, pub danger_front:f32, pub crashed_front:f32,
     pub camp_min_clock:u32, pub laning_end:u32, pub nearby_radius:f32 }
@@ -26,9 +29,11 @@ pub struct Decision {
 }
 
 #[derive(Clone)]
-pub struct LaneCoach { catalog:Arc<Catalog>, position:crate::positioning::PositionCoach, jungle:crate::jungle::JungleCoach, health:std::cell::RefCell<HealthMemo> }
+pub struct LaneCoach { catalog:Arc<Catalog>, position:crate::positioning::PositionCoach, jungle:crate::jungle::JungleCoach, health:std::cell::RefCell<HealthMemo>,
+    /// Health-call phrasings spoken per family ("back_off", "critical", "fast") and the family offered last.
+    voice:std::cell::RefCell<(std::collections::HashMap<String,usize>,Option<String>)> }
 impl Default for LaneCoach {
-    fn default() -> Self { Self { catalog:Arc::new(serde_json::from_str(include_str!("../../../data/coaching/laning.json")).expect("shipped lane policy")), position:Default::default(), jungle:Default::default(), health:Default::default() } }
+    fn default() -> Self { Self { catalog:Arc::new(serde_json::from_str(include_str!("../../../data/coaching/laning.json")).expect("shipped lane policy")), position:Default::default(), jungle:Default::default(), health:Default::default(), voice:Default::default() } }
 }
 /// Health warnings per episode. rec8 said "Health critical" three times in 41 s at the same low
 /// (44:03 / 44:23 / 44:44) and 4 of 9 came 3-6 s before death: the critical call is said once per
@@ -208,6 +213,40 @@ impl LaneCoach {
         d.speak=clock<=cfg.laning_end; Some(d)
     }
 }
+impl LaneCoach {
+    /// The spoken health call (docs/coach-review-8.md D10): the situation when it is read
+    /// (afflicted, in their half), else the next phrasing of its family in rotation. "Health
+    /// critical" only under 30% health; a fast fall above that gets the fast phrasings.
+    fn voice(&self,key:&str,s:&GameSnapshot,h:Option<f32>) -> Option<String> {
+        let h=h?;
+        let pct=format!("{:.0}",(h*100.0).max(1.0));
+        let card=|id:&str| self.catalog.cards.iter().find(|c| c.id==id);
+        let (family,c)=match key {
+            "lane:critical" if h<0.30 => ("critical",card("critical")?),
+            "lane:critical" => ("fast",card("critical")?),
+            "lane:back_off" => ("back_off",card("back_off")?),
+            _ => return None,
+        };
+        let mut v=self.voice.borrow_mut();
+        let fill=|t:&str| t.replace("{pct}",&pct);
+        if family=="back_off" {
+            let afflicted=s.status_effects.iter().any(|e| e.eq_ignore_ascii_case("afflicted"));
+            let hero=crate::review::game_data().ability_hero("Affliction",&s.enemy_heroes).map(|h| crate::review::game_data().hero_name(&h));
+            if let (true,Some(hero),Some(t))=(afflicted,hero,c.situations.get("afflicted")) {v.1=Some("afflicted".into());return Some(fill(t).replace("{hero}",&hero));}
+            let forward=s.minimap.as_ref().and_then(|m| m.you).is_some_and(|p| p.y<0.5);
+            let front=crate::active::front_name(s);
+            if let (true,true,Some(t))=(forward,front!="the team",c.situations.get("forward")) {
+                let n=v.0.get("forward").copied().unwrap_or(0);
+                if n%2==0 {v.1=Some("forward".into());return Some(fill(t).replace("{front}",&front));}
+            }
+        }
+        let all:Vec<&String>=match family { "fast" => c.fast.iter().collect(), _ => std::iter::once(&c.speech).chain(c.variants.iter()).collect() };
+        if all.is_empty() {return None;}
+        let n=v.0.get(family).copied().unwrap_or(0);
+        v.1=Some(family.into());
+        Some(fill(all[n%all.len()]))
+    }
+}
 impl Rule for LaneCoach {
     fn evaluate(&self,s:&GameSnapshot) -> Vec<Cue> {
         let mut d=self.decide(s);
@@ -237,7 +276,7 @@ impl Rule for LaneCoach {
                 x.evidence.push(format!("Health fell {:.0} points within {FALL_SECS} s",(peak-h.unwrap_or(peak))*100.0));
             }
         }
-        let Some(d)=d.filter(|d| d.speak) else {return vec![]};
+        let Some(mut d)=d.filter(|d| d.speak) else {return vec![]};
         let truly=h.is_some_and(|h| h<CRITICAL);
         match d.cue_key.as_str() {
             "lane:critical" if m.critical_said => return vec![],
@@ -249,9 +288,15 @@ impl Rule for LaneCoach {
             "lane:back_off" if h.is_some_and(|h| h>=self.catalog.thresholds.healthy) && !s.health_delta_ratio.is_some_and(|d| d < -FAST_FALL) => return vec![],
             _ => {}
         }
+        drop(m);
+        if let Some(text)=self.voice(&d.cue_key,s,h) {d.text=text;}
         vec![Cue::new(d.cue_key,d.text,d.priority,d.cooldown_secs)]
     }
     fn spoken(&self,cue:&Cue) {
+        if matches!(cue.key.as_str(),"lane:back_off"|"lane:critical") {
+            let mut v=self.voice.borrow_mut();
+            if let Some(f)=v.1.take() {*v.0.entry(f).or_default()+=1;}
+        }
         let mut m=self.health.borrow_mut();
         let now=m.last_clock;
         // A debuff / crowd-control escape call is the back-off call for this episode.

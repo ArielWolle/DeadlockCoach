@@ -21,14 +21,16 @@ pub struct Thresholds {
     pub plan_ahead_max: u32, pub plan_ahead_min: u32,
     pub near_radius: f32, pub enemy_half_y: f32, pub missing_min_clock: u32,
     pub missing_min_secs: u32, pub missing_max_secs: u32, pub threat_repeat_secs: u32, pub threat_gap_secs: u32,
-    pub lead_min: i64, pub lead_drop: i64, pub lead_window_secs: u32, pub lead_gap_secs: u32,
+    pub lead_min: i64, pub lead_drop: i64, pub lead_window_secs: u32, pub lead_gap_secs: u32, pub lead_fast_drop: i64,
     pub fed_ratio: f32, pub fed_reads: u32, pub fed_secs: u32, pub fed_min_clock: u32, pub fed_min_networth: u32, pub fed_sum_tolerance: f32,
     pub midboss_swing: i64, pub midboss_window_before: u32, pub midboss_window_after: u32, pub midboss_dead_margin: usize,
     pub window_dead: usize, pub window_secs: u32, pub window_allies_alive: usize,
     pub reset_hp: f32, pub reset_min_hp: f32, pub reset_dead: usize, pub reset_rearm_secs: u32,
 }
 #[derive(Clone, Deserialize)]
-pub struct Card { pub id: String, pub family: String, pub speech: String, pub priority: String, pub cooldown_secs: u32, pub rationale: String, pub sources: Vec<Source> }
+pub struct Card { pub id: String, pub family: String, pub speech: String, pub priority: String, pub cooldown_secs: u32, pub rationale: String, pub sources: Vec<Source>,
+    /// Other phrasings: the threat call's repeat form, the throw call's away-from-base form.
+    #[serde(default)] pub variants: Vec<String> }
 #[derive(Clone, Deserialize)]
 pub struct RoleRow { pub hero: String, pub role: String }
 #[derive(Clone, Deserialize)]
@@ -58,12 +60,18 @@ struct State {
     /// Raw team totals and top-bar dead counts of the last ~90 s (Midboss taker heuristic).
     nw_hist: Vec<(u32, Option<u32>, Option<u32>)>, dead_hist: Vec<(u32, usize, usize)>,
     lead_said_at: Option<u32>, falling_peak: i64, fed_said: Vec<String>, midboss_said: Vec<usize>,
+    /// The last throw call: (clock, lead it named now, highest lead since), and what the offered one would commit.
+    falling_said: Option<(u32, i64, i64)>, falling_offer: Option<(i64, i64)>,
+    /// Our Midboss kills whose Rejuvenator push was called.
+    rejuv_said: Vec<usize>,
     /// Fed candidate: (hero, frames agreeing, since clock, souls); clock of the last fed call.
     fed: Option<(String, u32, u32, u32)>, fed_at: Option<u32>,
     mb_up_seen: bool, mb_up_at: Option<u32>, mb_first_false: Option<u32>, kills: Vec<Kill>, taken_prev: Option<String>,
     /// Enemy heroes without a health bar since (clock), their last known lane.
     missing_since: HashMap<String, u32>, last_lane: HashMap<String, Lane>,
-    threat_said: HashMap<String, u32>, threat_last: Option<u32>,
+    /// Per hero: when the last threat call was said and its state ("is close" / "is missing");
+    /// the state offered this step.
+    threat_said: HashMap<String, (u32, String)>, threat_last: Option<u32>, threat_offer: Option<String>,
     /// Death-panel damage per enemy hero: this match, and the current death (largest panel read).
     damage: HashMap<String, u32>, cur_death: HashMap<String, u32>, was_dead: bool,
     reset_said_at: Option<u32>,
@@ -92,6 +100,8 @@ pub fn unplanned_timings(json: &str) -> String {
     serde_json::to_string(&v).unwrap_or_else(|_| json.to_string())
 }
 
+/// Rejuvenator credits last 3 minutes (docs/strategy/lategame-and-closing.md "5. Rejuvenator usage").
+pub const REJUV_SECS: u32 = 180;
 fn k(v: i64) -> String { format!("{}", (v as f64 / 1000.0).round() as i64) }
 fn lane_name(l: Lane) -> &'static str { crate::laning::lane_name(l) }
 fn dist(a: Pt, b: Pt) -> f32 { (a.x - b.x).hypot(a.y - b.y) }
@@ -185,7 +195,10 @@ impl PlanCoach {
         if let Some(by) = s.midboss_taken_by.as_deref().filter(|b| st.taken_prev.as_deref() != Some(*b)) {
             st.taken_prev = Some(by.to_string());
             let taker = if by == "enemy" { Taker::Enemy } else if by == "ally" { Taker::Ally } else { Taker::Unknown };
-            match st.kills.last_mut().filter(|k| k.clock + 120 >= clock && k.taker.is_none_or(|t| t == Taker::Unknown)) {
+            // The boss respawns 5+ minutes after a kill: a taker read within 4 minutes of the
+            // last kill is that kill (and overrides the heuristic), not a second one (rec13 said
+            // "They took Midboss" at 39:50 and again at 40:38).
+            match st.kills.last_mut().filter(|k| k.clock + 240 >= clock) {
                 Some(k) => k.taker = Some(taker),
                 None => { st.kills.push(Kill { clock, taker: Some(taker) }); st.mb_up_seen = false; }
             }
@@ -232,39 +245,102 @@ impl PlanCoach {
     }
 
     // ---------------------------------------------------------------- calls
-    fn lead_calls(&self, st: &State, clock: u32) -> Vec<Cue> {
+    /// Our Midboss kill whose Rejuvenator is still up (credits last 3 minutes): (kill index, seconds left).
+    fn our_rejuvenator(st: &State, clock: u32) -> Option<(usize, u32)> {
+        st.kills.iter().enumerate().rev().find(|(_, k)| k.taker == Some(Taker::Ally) && clock < k.clock + REJUV_SECS).map(|(i, k)| (i, k.clock + REJUV_SECS - clock))
+    }
+
+    fn lead_calls(&self, s: &GameSnapshot, st: &mut State, clock: u32) -> Vec<Cue> {
         let t = &self.catalog.thresholds;
+        st.falling_offer = None;
         // Enemy Midboss: Rejuvenator for three minutes. A new state: said even right after another
         // lead call (rec13 39:03 lead falling, 39:38 their Midboss).
         if let Some((i, _)) = st.kills.iter().enumerate().rev().find(|(i, k)| k.taker == Some(Taker::Enemy) && clock < k.clock + 150 && !st.midboss_said.contains(i)) {
             return vec![self.cue("lead_midboss", format!("lead:midboss:{i}"), &[])];
         }
-        if st.lead_said_at.is_some_and(|at| clock < at + t.lead_gap_secs) { return vec![]; }
         let now = st.lead.last().filter(|l| l.0 + 30 >= clock).map(|l| l.1);
+        // Throw detector (docs/coach-review-8.md D3): the lead fell lead_fast_drop within 60 s, or
+        // by a quarter of its peak of the last 3 minutes (rec8 fired at 43:01 for a drop that began
+        // 41:07; rec13 42:08 said "46k to 35k" when it was 10k). The numbers are the newest reads.
+        if let Some(&(cur_at, cur)) = st.lead.last().filter(|l| l.0 + 10 >= clock) {
+            // Peaks held over two reads in a row (rec8 34:18 read +38k once between +33k reads);
+            // the drop confirmed by the read before the newest one.
+            let n = st.lead.len();
+            let held = |secs: u32| st.lead.windows(2).filter(|w| w[1].0 + secs >= cur_at).map(|w| w[0].1.min(w[1].1)).max().unwrap_or(cur);
+            let (peak60, peak) = (held(60), held(180));
+            let prev = if n >= 2 { st.lead[n - 2].1 } else { cur };
+            let fast = peak60 - cur >= t.lead_fast_drop && peak60 - prev >= t.lead_fast_drop * 4 / 5 && peak60 >= t.lead_fast_drop;
+            let slow = peak >= t.lead_min && peak - cur >= t.lead_fast_drop.max(peak / 4) && peak - prev >= t.lead_fast_drop * 4 / 5;
+            if let Some(s) = st.falling_said.as_mut() { s.2 = s.2.max(cur); }
+            // One call per throw: a new one only after the lead came back 10k from the last call's low.
+            let fresh = st.falling_said.is_none_or(|(_, said, high)| high >= said + t.lead_fast_drop);
+            if (fast || slow) && fresh {
+                let from = if fast { peak60 } else { peak };
+                st.falling_offer = Some((from, cur));
+                return vec![self.throw_call(s, from, cur)];
+            }
+        }
+        if st.lead_said_at.is_some_and(|at| clock < at + t.lead_gap_secs) { return vec![]; }
         let data = review::game_data();
-        // Fed enemy.
         // Fed enemy: one call per 10 minutes (a top-bar slot misread can crown another hero: rec8
-        // named Pocket, then Lash and Nurse Harrow within 5 minutes).
+        // named Pocket, then Lash and Nurse Harrow within 5 minutes). With our Rejuvenator up the
+        // call never says "without Rejuvenator" (rec13 32:18, two minutes after our Midboss).
         if let Some((hero, n, since, nw)) = &st.fed {
             if *n >= t.fed_reads && clock >= since + t.fed_secs && !st.fed_said.contains(hero) && st.fed_at.is_none_or(|at| clock >= at + 600) {
                 let name = data.hero_name(hero);
+                let ours = Self::our_rejuvenator(st, clock).is_some();
                 return vec![match now.filter(|l| *l >= t.lead_min) {
+                    Some(l) if ours => self.cue("lead_fed_rejuv", format!("lead:fed:{hero}"), &[("lead", k(l)), ("hero", name)]),
                     Some(l) => self.cue("lead_fed", format!("lead:fed:{hero}"), &[("lead", k(l)), ("hero", name)]),
                     None => self.cue("fed", format!("lead:fed:{hero}"), &[("hero", name), ("nw", k(*nw as i64))]),
                 }];
             }
         }
-        // A lead of lead_min+ two to three minutes ago, lead_drop lower now, still ahead.
-        if let Some(now) = now.filter(|n| *n > 0) {
-            let w = t.lead_window_secs;
-            let past = st.lead.iter().filter(|l| l.0 + w + 30 >= clock && l.0 + w <= clock).map(|l| l.1).max();
-            if let Some(past) = past.filter(|p| *p >= t.lead_min && p - now >= t.lead_drop) {
-                if st.falling_peak == 0 || past >= st.falling_peak + 10_000 {
-                    return vec![self.cue("lead_falling", format!("lead:falling:{}", k(past)), &[("peak", k(past)), ("now", k(now))])];
-                }
-            }
-        }
         vec![]
+    }
+
+    /// The throw call, fitted to where the fight is: on our half (or our structure under attack)
+    /// "back to our <structure> together"; in their half "out of their base, regroup".
+    fn throw_call(&self, s: &GameSnapshot, from: i64, now: i64) -> Cue {
+        let key = format!("lead:falling:{}", k(from));
+        let now_s = if now >= 1000 { format!("{}k", k(now)) } else if now > -1000 { "even".into() } else { format!("{}k behind", k(-now)) };
+        let map = s.minimap.as_ref();
+        let theirs = map.and_then(|m| m.you).is_some_and(|p| p.y < 0.5) || map.is_some_and(|m| m.zone_area == Some(ZoneArea::EnemyBase));
+        if theirs { return self.cue_variant("lead_falling", 0, key, &[("peak", k(from)), ("now", now_s)]); }
+        // Our structure to hold: the one under attack (banner), else the next standing one on your lane.
+        let banner = s.objective_banner.as_ref().filter(|b| b.own == Some(true) && !b.name.trim().is_empty()).map(|_| "Patron".to_string());
+        let lane = crate::laning::focus(s);
+        let ours = lane.and_then(|l| {
+            let mut guardians = 0;
+            let mut found = None;
+            for x in s.structures.iter().filter(|x| x.own && x.lane == Some(l)) {
+                let name = match x.kind.as_str() { "guardian" => { guardians += 1; if guardians == 1 { "Guardian" } else { "base Guardian" } } "walker" => "Walker", _ => continue };
+                if x.alive && found.is_none() { found = Some(format!("{} {name}", lane_name(l))); }
+            }
+            found
+        });
+        let structure = banner.or(ours).unwrap_or_else(|| "base".into());
+        self.cue("lead_falling", key, &[("peak", k(from)), ("now", now_s), ("structure", structure)])
+    }
+
+    fn cue_variant(&self, id: &str, i: usize, key: String, vars: &[(&str, String)]) -> Cue {
+        let mut c = self.cue(id, key, vars);
+        if let Some(v) = self.card(id).variants.get(i) {
+            let mut text = v.clone();
+            for (k, v) in vars { text = text.replace(&format!("{{{k}}}"), v); }
+            c.text = text;
+        }
+        c
+    }
+
+    /// After our Midboss: one call to spend the Rejuvenator on a push (docs/coach-review-8.md D2:
+    /// rec8 38:41 and rec13 30:13 had none). Said once per kill, while alive, with 45 s or more left.
+    fn rejuv_call(&self, s: &GameSnapshot, st: &State, clock: u32) -> Option<Cue> {
+        let (i, left) = Self::our_rejuvenator(st, clock)?;
+        if st.rejuv_said.contains(&i) || left < 45 { return None; }
+        let time = if left >= 150 { "three minutes".to_string() } else if left >= 90 { "two minutes".into() } else { format!("{left} seconds") };
+        let target = crate::positioning::push_target(s).unwrap_or_else(|| "their base".into());
+        Some(self.cue("rejuv_push", format!("plan:rejuv:{i}"), &[("time", time), ("target", target)]))
     }
 
     fn midboss_up(s: &GameSnapshot, st: &State, clock: u32) -> bool {
@@ -287,7 +363,7 @@ impl PlanCoach {
         Some(self.cue("reset", "reset:fight".into(), &[("pct", format!("{:.0}", hp * 100.0)), ("objective", objective.into())]))
     }
 
-    fn threat_call(&self, s: &GameSnapshot, st: &State, clock: u32) -> Option<Cue> {
+    fn threat_call(&self, s: &GameSnapshot, st: &mut State, clock: u32) -> Option<Cue> {
         let t = &self.catalog.thresholds;
         if st.threat_last.is_some_and(|at| clock < at + t.threat_gap_secs) { return None; }
         let map = s.minimap.as_ref()?;
@@ -308,11 +384,18 @@ impl PlanCoach {
         for h in s.hero_status.iter().filter(|h| !h.ally && h.dead != Some(true)) {
             let Some(hero) = h.hero.as_deref() else { continue };
             let Some(threat) = self.catalog.threats.iter().find(|x| x.hero == hero) else { continue };
-            if st.threat_said.get(hero).is_some_and(|at| clock < at + t.threat_repeat_secs) { continue; }
             let close = h.bar_visible == Some(true) && match h.position.filter(|_| h.position_observations >= 1) {
                 Some(p) => dist(p, me) <= t.near_radius,
                 None => track_near,
             };
+            // The same warning at most once per threat_repeat_secs; the same "is missing" call needs
+            // twice that (rec13 said "Abrams is missing" four times, 4-6 minutes apart). A hero newly
+            // on you after a missing call is a new trigger.
+            if let Some((at, state)) = st.threat_said.get(hero) {
+                let newly_close = close && state == "is missing" && clock >= at + t.threat_gap_secs;
+                let gap = if !close && state == "is missing" { 2 * t.threat_repeat_secs } else { t.threat_repeat_secs };
+                if clock < at + gap && !newly_close { continue; }
+            }
             let missing = threat.reach == "any" && forward && st.missing_since.get(hero).is_some_and(|since| {
                 let secs = clock.saturating_sub(*since);
                 secs >= t.missing_min_secs && secs <= t.missing_max_secs
@@ -326,8 +409,11 @@ impl PlanCoach {
         }
         let (_, threat, state) = best?;
         let counter = threat.counter.get(role).or_else(|| threat.counter.get("default")).cloned().unwrap_or_default();
-        Some(self.cue("threat", format!("threat:{}", threat.hero), &[("hero", review::game_data().hero_name(&threat.hero)), ("state", state.into()),
-            ("danger", threat.danger.clone()), ("counter", capitalize(&counter))]))
+        // A hero already explained gets the short repeat form (no danger sentence again).
+        let again = st.threat_said.contains_key(&threat.hero);
+        let vars = [("hero", review::game_data().hero_name(&threat.hero)), ("state", state.into()), ("danger", threat.danger.clone()), ("counter", capitalize(&counter))];
+        st.threat_offer = Some(state.to_string());
+        Some(if again { self.cue_variant("threat", 0, format!("threat:{}", threat.hero), &vars) } else { self.cue("threat", format!("threat:{}", threat.hero), &vars) })
     }
 
     /// The lane to push for a structure plan: the most pushed lane whose enemy structure of that
@@ -400,12 +486,13 @@ impl Rule for PlanCoach {
         if clock + 120 < st.clock { *st = State::default(); }
         st.clock = clock;
         self.observe(s, &mut st, clock);
-        let mut out = self.lead_calls(&st, clock);
+        let mut out = self.lead_calls(s, &mut st, clock);
         let playing = !s.dead && s.screen.as_deref().is_none_or(|v| v == "Gameplay");
         if playing {
             let team = TeamPicture::from(s);
+            out.extend(self.rejuv_call(s, &st, clock));
             out.extend(self.reset_call(s, &st, clock, team.as_ref()));
-            out.extend(self.threat_call(s, &st, clock));
+            out.extend(self.threat_call(s, &mut st, clock));
             out.extend(self.plan_calls(s, &st, clock, team.as_ref()));
         }
         out
@@ -415,14 +502,18 @@ impl Rule for PlanCoach {
         let now = st.clock;
         let mut parts = cue.key.splitn(3, ':');
         match (parts.next(), parts.next(), parts.next()) {
-            (Some("threat"), Some(hero), _) => { st.threat_said.insert(hero.to_string(), now); st.threat_last = Some(now); }
+            (Some("threat"), Some(hero), _) => { let state = st.threat_offer.take().unwrap_or_default(); st.threat_said.insert(hero.to_string(), (now, state)); st.threat_last = Some(now); }
             (Some("reset"), _, _) => st.reset_said_at = Some(now),
+            (Some("plan"), Some("rejuv"), Some(i)) => { if let Ok(i) = i.parse() { st.rejuv_said.push(i); } }
             (Some("lead"), Some(kind), rest) => {
                 st.lead_said_at = Some(now);
                 match (kind, rest) {
                     ("midboss", Some(i)) => { if let Ok(i) = i.parse() { st.midboss_said.push(i); } }
                     ("fed", Some(h)) => { st.fed_said.push(h.to_string()); st.fed_at = Some(now); }
-                    ("falling", Some(p)) => { if let Ok(p) = p.parse::<i64>() { st.falling_peak = p * 1000; } }
+                    ("falling", Some(p)) => {
+                        if let Some((from, cur)) = st.falling_offer.take() { st.falling_peak = from; st.falling_said = Some((now, cur, cur)); }
+                        else if let Ok(p) = p.parse::<i64>() { st.falling_peak = p * 1000; }
+                    }
                     _ => {}
                 }
             }
