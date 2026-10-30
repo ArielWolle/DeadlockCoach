@@ -104,6 +104,15 @@ gateway that is not running.
   spoken, or 4 s after the death panel has been read (8 s at most); with a respawn timer of 25 s or
   more (or none read after 15:00) it waits up to 15 s for that review, with 40 s or more (or none
   read after 30:00) up to 25 s (rec12's reviews came 7-25 s after the death, rec13's 41:05 one 25 s).
+  **Without a damage panel** (no `death_damage` / `death_cause` / killing blow read: the shop hides
+  it) it waits for the panel up to `DEATH_PANEL_MAX_WAIT_MS` (40 s), or 4 s after the rule death
+  review, but never into the last 10 s of the respawn timer (`DEATH_RESPAWN_MARGIN_SECS`): rec8's
+  20:40 death sat in the shop for 30 s and the old call went out at 21:01 with "cause unknown";
+  now it goes out at 21:10 with "cause Tankbuster · damage taken: Tankbuster 479, Barrage 459, …".
+  The death prompt also carries `Before this death: teammates dead at the death (top bar): 3 of 5 ·
+  you left our base at 41:44 with 3 teammates dead, 21 s before the death · you were in our half`
+  (`beforeDeathLine()`; "your position was not read (unknown)" without a marker), and a throw in
+  progress (THROW RISK) outranks the other context lines.
   The answer (≤ 2 sentences, 30 words) is spoken only when it adds a **different concrete lesson**
   to the rule review (`deathCovered()`: not ≥ 45% of its words, and its next-life sentence not only
   the review's "Next time" concepts): one coach voice on the death screen. No cheap retry for a
@@ -278,8 +287,14 @@ Praise: allowed (fresh good play: pushed into the enemy base at 13:54 while 6 en
 The model may then open with one short, specific praise and the next action ("Good push while
 three were dead: that is how a lead snowballs. Next, back off before they respawn."), focus
 `reinforce`. **Gate** (`reinforceGate()`, enforced by `checkAdvice()`): a fresh good play (≤ 90 s,
-not praised yet), none of the last 3 AI tips was praise (at most 1 in 4), and at least 150 s since
-the last praise. Without it, praise sentences ("Good…", "Nice…", "Well done", "That's how…") are
+not praised yet, **not one that led to a death**), none of the last 3 AI tips was praise (at most 1
+in 4), and at least 150 s since the last praise. `deathAfter(history, play)`: a play is never
+praised when a death followed within `DEATH_PRAISE_SECS` (20 s), when it was a push you never came
+back from (every marker read between the push and the death in the enemy half), or a deathless
+stretch that ended in a death. rec8's 21:01 death prompt said `Praise: allowed (fresh good play:
+pushed Yellow lane deep at 20:14 …)` for the push that killed him at 20:40; now the line reads
+`- [20:14] pushed Yellow lane deep … (led to the 20:40 death: never praise it)` and `Praise: not
+allowed (the 20:14 play led to the 20:40 death)`. Without it, praise sentences ("Good…", "Nice…", "Well done", "That's how…") are
 dropped and the rest must stand alone. A praise of death-screen shopping is not souls advice (the
 souls gate does not cut it). Reinforcement has its own gate instead of the theme memory.
 
@@ -356,7 +371,20 @@ to that gateway and prints the answers and reasoning tokens. Keys are never prin
 cd web
 node --experimental-strip-types scripts/ai-coach-eval.ts            # defaults to frames/rec11/recording.json
 node --experimental-strip-types scripts/ai-coach-eval.ts --quiet     # counts only
+node --experimental-strip-types scripts/ai-coach-eval.ts <replay.jsonl> --quiet --prompt 21:10,42:12   # full prompts at those clocks
+node --experimental-strip-types scripts/ai-review-eval.ts --replay <replay.jsonl> --cues <active_replay --all output> [--deaths]   # digest of a vision replay
 ```
+
+coach-review-8 D11/D12 on the new rec8 / rec13 replays (fake model):
+
+| Item | Before | After |
+|---|---|---|
+| Death prompt rec8 20:40 | asked at 21:01 in the shop: `cause unknown`; `Praise: allowed (fresh good play: pushed Yellow lane deep at 20:14 …)` | asked at 21:10: `cause Tankbuster · damage taken: Tankbuster 479, Barrage 459, Flying Slash 426, …`; `… (led to the 20:40 death: never praise it)`, `Praise: not allowed (the 20:14 play led to the 20:40 death)` |
+| Death prompt rec8 42:05 | no team context; THROW RISK line kept | `Before this death: teammates dead at the death (top bar): 3 of 5 · you left our base at 41:44 with 3 teammates dead, 21 s before the death · you were in our half` and the THROW RISK line |
+| Profile text | `… (melee hits x3, a hero Aura of Suffer...; … Spent 2.3k souls between the 10:12 deat` | `… came from melee range; … Spent 2.3k souls between the 10:12 death and the respawn (3 of 7 deaths).` |
+| rec13 30:13-33:00 | `Midboss: taken by our team at about 30:13: our Rejuvenator makes the next fight or push safer` | `Rejuvenator: WE hold it until about 32:58 (1:54 left) (… at about 29:52; up to 3 revives in place): use it now with all five on a standing structure; never spend a credit alone`, then `ours runs out in about 3 s`, `ours ran out at about 32:58` |
+| Digest rec8 20:40 / 42:05 | `alone no; forward with 3+ enemies unseen no` | `in the enemy half yes (deep, near their base)` / `top bar at the death: 3 of 5 teammates dead …; left our base at 41:44 with 3 teammates dead …; rule call …: "Go back to base: three teammates are dead …", then you left base anyway with 3 teammates still dead (an ignored call)` |
+| Digest rec13 41:05 / 43:06 | `alone no` / `alone no; forward no` | `in the enemy half yes (deep, near their base); alone yes (nearest teammate 0.31 map away)` / `not read: your position in the last 12 s (… unknown)` |
 
 rec11, 6:13-40:00 (33.8 game minutes, 600 frames, defaults: reasoning Low, 90 s quiet interval):
 
@@ -426,7 +454,8 @@ The input budget is **about 2,500 tokens**, estimated as characters ÷ 4 and enf
 | System prompt | ~3,100 chars | `SYSTEM_PROMPT` in `web/src/ai-coach.ts` (one coach voice; the essentials of the old wiki block in rule 9) |
 | Task line | ~250–800 chars | depends on the trigger (periodic / death / manual) |
 | State summary | ≤ 3,000 chars | `buildSummary()`: the latest snapshot plus about 90 s of history, recent AI advice and coaching angles |
-| Player profile | ≤ 500 chars | `setProfileProvider(fn)` callback, scrubbed of heroes of other matches (`scrubProfile()`) |
+| Player profile | ≤ 500 chars | `setProfileProvider(fn)` callback, scrubbed of heroes of other matches (`scrubProfile()`), weaknesses about mastered skills left out and cut at a sentence / item end (`profileForPrompt()`, `clipAtBoundary()`) |
+| Player level | ≤ 600 chars | `setMasteryProvider(fn)` (mastery.ts `promptText()`), cut at a boundary |
 | Matchup line | ≤ 300 chars | `docs/heroes/<hero>.md` win rates vs the enemies you face |
 | Excerpts | periodic none · death 1 · manual 2, ≤ 450 chars each | sections from strategy/jungle/timings docs, ranked by keyword score |
 
@@ -479,8 +508,15 @@ means safe. It includes:
   or 15k+ overall, or a 15k+ lead while the enemy took the Midboss); `Structures (read; a
   structure not listed is unknown, never a target): theirs: Blue Guardian destroyed; Yellow Walker
   standing · ours: …` (destroyed is final) or `Structures: not read: do not name a specific
-  Guardian, Walker or Shrine as the target`; `Midboss: taken by the enemy at about 33:10: they may
-  hold the Rejuvenator …` (`midboss_taken_by`).
+  Guardian, Walker or Shrine as the target`; the Rejuvenator (coach-review-8 D2/D11,
+  `rejuvenatorLine()`): from `midboss_taken_by` and the clock the Midboss icon went away (the
+  kill), plus 6 s landing and 180 s of credits: `Rejuvenator: WE hold it until about 32:58 (1:54
+  left) (Midboss taken by our team at about 29:52; up to 3 revives in place): use it now with all
+  five on a standing structure; never spend a credit alone`, `Rejuvenator: THEY hold it until about
+  42:46 (…): their deaths may revive in place, so no fights in their base until it runs out`, `ours
+  runs out in about 8 s` (last 20 s), `ours ran out at about 32:58` (for 2 minutes); a revive read
+  by the vision (optional `revived`) counts a credit used. The throw text follows the holder ("fight
+  only together while our Rejuvenator lasts" / "they hold the Rejuvenator").
 
 **Word budgets** (`wordBudget()`, item 14): death screen 30 words / 2 sentences, during a fight 10 /
 1, laning (before 8:00) and the 20 s after a respawn 15, otherwise 20 (also right after a fight);
@@ -576,6 +612,13 @@ enemy comes near) — or PASSes.
 - `setProfileProvider(fn: () => string | null)` from `web/src/ai-coach.ts`: returns a short
   player-profile text (at most 500 characters are used, hero names of other matches scrubbed). The
   app calls it on every request, and it must not throw.
+- `setSkillStateProvider(fn: (skill) => string | null)`: the skill tracker (`mastery.state()`,
+  registered by main.ts when the player profile is on). A skill read `mastered` / `assumed` is not
+  coached: profile weaknesses about it are left out of PLAYER PROFILE (and its Focus line), the
+  coaching angles that remind it (respawn → walk out with a teammate, hurt → heal first, divers →
+  max range, alone with enemies missing) are dropped, and souls advice is not allowed for a
+  mastered death-screen / base buy unless 1.5× the usual buy sits unspent. `setMasteryProvider`
+  gives the PLAYER LEVEL block ("pitch the advice at this level").
 - `setGoalProvider(fn: () => string | null)`: the match focus goal(s) with progress so far
   (`PlayerProfile.goalText()`, registered by main.ts), the `MATCH FOCUS GOAL` line.
 - `RULE_THEMES` / `ruleThemes(key)` / `ruleCovered(theme, history, now)`: the rule-call themes by
@@ -697,9 +740,17 @@ praise."); team souls every 5 minutes; your net
 worth at 10/20/30 min; unspent souls against the usual tier (1,600 before 10:00, 3,200 before 20:00,
 6,400 after); time dead and the time shares by phase (lane / jungle / base / shop / dead); every death
 (cause, damage panel rows, killing blow, close-range share of the panel, CC/status before, HP fall,
-alone, forward with enemies unseen, seconds after respawn, souls held vs the tier, seconds dead) with
-the rule coach's death review; fights joined / missed / while dead with times; enemy-dead windows used
-/ unused; objectives seen (Midboss take, Urn carries, Patron banner); the rule coach's pattern calls;
+the top bar at the death ("3 of 5 teammates dead, 0 of 6 enemies dead"), in the enemy half (and
+"deep, near their base"), alone (nearest teammate marker; your own icon read as an ally within 0.04
+is ignored), forward with enemies unseen, seconds after respawn, the last walk-out from our base
+with the teammates dead then, a hold / back-off rule call before it and whether it was ignored,
+souls held vs the tier, seconds dead) with the rule coach's death review. Position facts come from
+your marker in the last 12 s alive; when it was not read they are "not read: your position … (alone,
+enemy half and forward are unknown)", never "no" (coach-review-8 D12: rec8 20:40, a solo dive deep in
+their base, and 42:05, a walk-out with three teammates dead, both read "alone no; forward no").
+Stored timelines without these fields keep the profile's alone / forward values; fights joined / missed / while dead with times; enemy-dead windows used
+/ unused; objectives seen (Midboss take with "we held the Rejuvenator until about mm:ss", Rejuvenator
+revives read via the optional `revived` field, Urn carries, Patron banner); the rule coach's pattern calls;
 the comparison with earlier profile matches (per metric: this match vs the pooled newest 10, verdict
 improved / worse / same; the profile's known weaknesses with their verdict); up to 3 short knowledge
 excerpts (hero matchup stats, sections retrieved for the worst metrics). Budget: the lowest-priority
@@ -799,6 +850,17 @@ Spirit Shielding against spirit burst). Heroes outside the tables get a counter-
 role (`HERO_ROLES`). (d) A short motivating close ("Same discipline as last game. Let's go." after
 an improved one). The template drops the counter item, then the second threat, then the second goal
 until it fits. The panel also shows the focus, the matchup tips and a one-line plan.
+
+**Skill tracker consistency** (mastery.ts, wired by main.ts when the Player profile is on:
+`skillState: mastery.state`, `level: mastery.promptText`). The pep talk never coaches a mastered
+(or level-assumed) skill: `setGoalVeto` already keeps such goals from being chosen, and
+`buildPregameDigest` also drops a goal set before the skill was mastered, the "Main issue" and
+profile weaknesses about mastered skills (`TRAIT_SKILLS` / `masteredTrait()`), and the counter item
+when counter items / threat tracking are mastered. The digest carries a `PLAYER LEVEL` block (the
+system prompt: never coach a skill it lists as mastered, pitch the talk at that level), and the
+template's focus and plan follow the level (basic: farm from max range, group when enemies die;
+intermediate: catch waves, push every enemy-dead window together; advanced: plan objectives a minute
+ahead, never fight alone with a lead).
 
 **When.** `PregameWatch` sees every live full-scan frame (never replays): a match starts at the
 first clocked HUD frame, a clock more than 2 minutes below the last read, 5 minutes without a frame,

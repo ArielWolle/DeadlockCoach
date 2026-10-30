@@ -202,6 +202,12 @@ for (const c of calls.filter(x => x.trigger === 'death' && !x.retry)) {
   console.log(`  DEATH PROMPT [${c.clock}] heroes named in STATE: ${named.join(', ') || 'none'}${roster ? '' : ' (no roster line)'}\n${lines.map(l => `      ${l.slice(0, 260)}`).join('\n')}`);
 }
 for (const d of delivered.filter(x => x.trigger === 'death')) console.log(`  DEATH SPOKEN [${d.clock}] ${d.text}`);
+// --prompt m:ss[,m:ss]: the full user prompt of the requests at those clocks (death or periodic).
+for (const at of (opt('--prompt') || '').split(',').filter(Boolean)) {
+  const secs = (x: string) => { const [m, s] = x.split(':').map(Number); return Number.isFinite(m) && Number.isFinite(s) ? m * 60 + s : -1; };
+  const c = calls.find(x => x.clock === at && !x.retry) ?? calls.find(x => secs(x.clock) >= secs(at) && !x.retry);
+  console.log(`\n${'='.repeat(100)}\nPROMPT at ${at} → ${c ? `${c.trigger} request at ${c.clock}` : 'none'}\n${'='.repeat(100)}\n${c?.body ?? ''}`);
+}
 
 // Prompt size and one coach voice (docs/coach-review-13.md item 12-14): the live log vs this build.
 {

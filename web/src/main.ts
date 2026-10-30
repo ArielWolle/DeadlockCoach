@@ -11,7 +11,7 @@ import {regionsFromReport,drawRegions} from './region-overlays';
 import {QuickMonitor} from './quick';
 import {freshCue} from './live-cues';
 import { mountAiCoach, type AiUi } from './ai-coach-ui';
-import { setProfileProvider, setGoalProvider, setMasteryProvider, aiExchanges, clearAiExchanges, restoreAiExchanges, onAiExchange } from './ai-coach';
+import { setProfileProvider, setGoalProvider, setMasteryProvider, setSkillStateProvider, aiExchanges, clearAiExchanges, restoreAiExchanges, onAiExchange } from './ai-coach';
 import { SkillMastery, metricsOf } from './mastery'; // skills and mastery (docs/player-profile.md)
 import { PlayerProfile, setGoalVeto, GOAL_SKILLS } from './player-profile';
 import { PlayerPage } from './player-page';
@@ -99,6 +99,8 @@ const mastery = new SkillMastery({ store: (() => { try { return localStorage; } 
 // Focus goals skip what the player has mastered (e.g. shopping): the coach stays quiet about it.
 setGoalVeto(id => { const skills = GOAL_SKILLS[id]; return !!skills?.length && skills.every(s => mastery.state(s) === 'mastered'); });
 setMasteryProvider(() => settings.playerProfile ? mastery.promptText() : null);
+// The AI prompts leave mastered skills out (profile weaknesses, coaching angles, souls reminders).
+setSkillStateProvider(id => settings.playerProfile ? mastery.state(id) : null);
 /** The cue as it should be spoken (possibly shortened), or null when its skill is mastered. */
 function masteryGate(cue: Cue, clock: number | null): Cue | null {
   if (!settings.playerProfile || !isDeadlock(activeProfile)) return cue;
@@ -1100,6 +1102,8 @@ reviews = mountMatchReviews({ settings: () => settings, save: s => { settings = 
   pregame = mountPregame({ settings: () => settings, previous: () => settings.playerProfile ? playerProfile.matches : [],
     goals: () => settings.playerProfile ? playerProfile.goals : [], knowledge: async () => { await loadKnowledge(); return knowledge; },
     name: id => heroNames[id] || label(id, {}), stopSpeech: () => speaker.cancel(), say: cue => sayDirect(cue),
+    // The skill tracker: no pep-talk lines about mastered skills, pitched at the player's level.
+    skillState: id => settings.playerProfile ? mastery.state(id) : null, level: () => settings.playerProfile ? mastery.promptText() : null,
     log: cue => { logCue(cue, latest, false, cue.key === 'pregame:ai'); cues.unshift({ ...cue, at: latest.game_clock_secs }); cues = cues.slice(0, 60); renderCues(); } });
   const hooks = (window as unknown as { __deadlockTestHooks?: Record<string, unknown> }).__deadlockTestHooks;
   if (hooks && typeof hooks === 'object') hooks.coachSay = (cue: Cue) => speaker.say(cue); }

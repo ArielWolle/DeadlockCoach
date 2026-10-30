@@ -106,7 +106,7 @@ test('digest (rec13 items 13-14): the Defeat banner (match_result), the focus go
   assert.match(d.text, /FOCUS GOALS \(set at the match start\): score each one first\n- No close-range deaths: (MISSED|not measurable)[^\n]*\n- No deaths within 60 s of a respawn: MET: 2 deaths, none broke it/);
   assert.deepEqual(d.goals.map(g => g.id), ['close_range', 'respawn_deaths']);
   assert.match(d.text, /LEAD AND THROW\nTeam souls lead peaked at \+33k at 18:20 and was \+5k at the last read 25:00 \(28k lost; it started to fall by \d+:\d\d\), and the match was lost: name the throw/);
-  assert.match(d.text, /Midboss \(Rejuvenator\) taken by: your team at about 15:00; the enemy at about 20:50\./);
+  assert.match(d.text, /Midboss \(Rejuvenator\) taken by: your team at about 15:00 \(we held the Rejuvenator until about 18:06\); the enemy at about 20:50 \(they held the Rejuvenator until about 23:56\)\./);
   assert.match(d.text, /Structures destroyed \(first read gone\): theirs Blue Guardian 16:40; ours none read\.\nStill standing at the last read: theirs Yellow Walker\./);
   // Without goals set at the start, the earlier matches' goals are scored and marked as not announced.
   const [prev] = ended(match('hero_orion', 30, 900, [100, 250, 400, 550, 700], { postGame: true, day: -1 }));
@@ -292,4 +292,43 @@ test('match end on Stop: a match observed for 10+ minutes is closed and reviewab
   assert.equal(short.stop(), null); assert.ok(short.current()); assert.ok(short.openSecs > 400 && short.openSecs < 600);
   // "Review my last match" closes it explicitly.
   assert.equal(short.finish()?.endedBy, 'finish');
+});
+test('digest deaths (coach-review-8 D12): top bar at the death, the walk-out from base, an ignored hold call; position unknown is "unknown", never "no"', () => {
+  // rec8 42:05: three teammates dead, a "hold in base" call, a walk-out from base 21 s before the death.
+  const frames = match('hero_orion', 30, 900, [600]);
+  for (const f of frames) {
+    const t = f.snapshot.game_clock_secs!, s = f.snapshot;
+    s.hero_status = Array.from({ length: 12 }, (_, i) => ({ ally: i < 6, slot: i % 6, hero: i === 0 ? 'hero_orion' : null, dead: i >= 1 && i <= 3 && t >= 520 && t <= 640, respawn_secs: 20,
+      networth_observations: 1, observations: 1, position_observations: 0 })) as Snapshot['hero_status'];
+    if (s.minimap) {
+      s.minimap.you = t >= 540 && t < 575 ? { x: 0.45, y: 0.92 } : t >= 575 && t < 600 ? { x: 0.6, y: 0.72 } : { x: 0.5, y: 0.7 };
+      s.minimap.heroes = [{ id: 1, ally: true, pos: { x: 0.65, y: 0.76 }, unseen_ms: 0, hits: 9 }, { id: 2, ally: true, pos: { x: s.minimap.you.x + 0.01, y: s.minimap.you.y }, unseen_ms: 0, hits: 9 }];
+    }
+    if (t === 550) f.cues.push({ key: 'active:hold_base', text: "Hold in base: three teammates are dead, the next back in 23 seconds. Don't walk out alone.", priority: 'High', cooldown_secs: 0 });
+  }
+  const [m] = ended(frames);
+  assert.equal(m.timeline.holds?.length, 1);
+  const p = m.timeline.points.find(x => x.t === 580)!;
+  assert.equal(p.alliesDead, 3); assert.equal(p.y, 0.72);
+  assert.equal(p.allyDist, 0.06, 'a teammate marker on top of yours is your own icon (ignored)');
+  const d = buildDigest({ match: m }).text;
+  assert.match(d, /1\. 10:00: [^\n]*top bar at the death: 3 of 5 teammates dead, 0 of 6 enemies dead; in the enemy half no; alone no \(nearest teammate on the minimap 0\.06 map away\)/);
+  assert.match(d, /left our base at 9:35 with 3 teammates dead \(0 enemies dead\), 25 s before the death; rule call 50 s before: "Hold in base: three teammates are dead[^"]*", then you left base anyway with 3 teammates still dead \(an ignored call\)/);
+  // A death in their half with no marker read near it: alone / enemy half / forward are unknown, not "no".
+  const blind = match('hero_orion', 30, 900, [600]);
+  for (const f of blind) { const t = f.snapshot.game_clock_secs!; if (f.snapshot.minimap) f.snapshot.minimap.you = t >= 585 ? null : { x: 0.5, y: 0.3 }; }
+  const b = buildDigest({ match: ended(blind)[0] }).text;
+  assert.match(b, /1\. 10:00: [^\n]*not read: your position in the last 12 s \(alone, enemy half and forward are unknown\)/);
+  assert.doesNotMatch(b, /1\. 10:00: [^\n]*(alone no|forward with 3\+ enemies unseen no)/);
+  // Deep in their base: said so; and a stored timeline without the new fields keeps the old wording.
+  const deep = match('hero_orion', 30, 900, [600]);
+  for (const f of deep) if (f.snapshot.minimap) f.snapshot.minimap.you = { x: 0.3, y: 0.25 };
+  assert.match(buildDigest({ match: ended(deep)[0] }).text, /in the enemy half yes \(deep, near their base\)/);
+  const old = ended(match('hero_orion', 30, 900, [600]))[0];
+  for (const x of old.timeline.points) { delete x.alliesDead; delete x.y; delete x.allyDist; }
+  assert.doesNotMatch(buildDigest({ match: old }).text, /teammates dead|your position in the last 12 s/);
+  // A Rejuvenator revive read by the vision is listed with the objectives.
+  const rev = match('hero_orion', 30, 900, []);
+  for (const f of rev) { const t = f.snapshot.game_clock_secs!; if (t === 500) f.snapshot.midboss_taken_by = 'ally'; if (t === 560) (f.snapshot as Snapshot & { revived?: boolean }).revived = true; }
+  assert.match(buildDigest({ match: ended(rev)[0] }).text, /Rejuvenator revives in place read on your screen: 9:20 \(each spends one team credit\)\./);
 });

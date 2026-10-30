@@ -151,3 +151,26 @@ test('requestPregame: gateway reply parsed; failures throw for the template fall
   assert.equal(sanitizeBriefing({ key: 'other:1', spoken: 'x' }), null);
   mem.set('deadlock-coach-pregame-v1', '{corrupt'); assert.equal(new PregameStore(kv).last, null);
 });
+
+test('skill tracker: the pep talk never coaches a mastered skill and is pitched at the player\'s level', () => {
+  const rough = [match({ hero: 'hero_artist', span: 1980, dead: 340, deaths: Array.from({ length: 7 }, (_, i) => ({ clock: 300 + i * 200, souls: 3000 })) })];
+  const goals = [{ id: 'unspent_souls', text: 'Spend at the usual buy' }, { id: 'unused_windows', text: 'Push every enemy-dead window' }];
+  const mastered = new Set(['shop_on_death', 'shop_in_base', 'dont_die_holding_souls', 'threat_tracking', 'counter_items']);
+  const state = (s: string) => mastered.has(s) ? 'mastered' : 'working';
+  const level = 'Level: Advanced (6 basic and 4 intermediate skills mastered; time dead 8%). Mastered, do not coach unless failed now: Spending souls on the death screen; Spending souls when you are in base. Pitch advice at the advanced level; no generic shopping, healing or last-hit reminders.';
+  const d = buildPregameDigest({ key: 'pregame:9:31', clock: 50, roster, previous: rough, goals, threats, skillState: state, level });
+  assert.deepEqual(d.goals.map(g => g.id), ['unused_windows'], 'the souls goal is about mastered skills');
+  assert.equal(d.level, 'advanced');
+  assert.match(d.text, /PLAYER LEVEL \(skill tracker: never coach a mastered skill; pitch the talk at this level\)\nLevel: Advanced/);
+  assert.doesNotMatch(d.text, /unspent|Spend at the usual buy/i);
+  assert.ok(d.threats.every(t => t.item == null), 'counter items are a mastered skill');
+  if (d.last?.issue) assert.doesNotMatch(d.last.issue, /souls/);
+  const b = templateBriefing(d);
+  assert.doesNotMatch(b.spoken, /spend your souls|buy at the next safe moment|counter item/i);
+  assert.match(b.plan, /plan objectives a minute ahead/); assert.doesNotMatch(b.plan, /farm from max range/);
+  assert.match(buildPregamePrompt(d).system, /never coach a skill it lists as mastered/);
+  // Without the tracker nothing changes (the default stays pitched at the basics).
+  const plain = buildPregameDigest({ key: 'pregame:9:31', clock: 50, roster, previous: rough, goals, threats });
+  assert.deepEqual(plain.goals.map(g => g.id), ['unspent_souls', 'unused_windows']); assert.equal(plain.level ?? null, null);
+  assert.match(templateBriefing(plain).plan, /max range/);
+});
