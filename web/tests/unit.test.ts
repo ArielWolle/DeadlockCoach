@@ -538,3 +538,4 @@ test('match focus goal: chosen from the last 3 matches, said once at the start, 
   assert.deepEqual(p.nextGoals(),{goals:chooseGoals(p.matches),current:false});
   assert.ok(!chooseGoals(p.matches).some(g=>g.id==='unspent_souls'),JSON.stringify(chooseGoals(p.matches)));
 });
+import './mastery.unit.ts';

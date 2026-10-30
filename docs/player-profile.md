@@ -243,6 +243,137 @@ match start and once per respawn when relevant, learned from completed counted m
 The cues go through the same delivery path as every other cue (mute, freshness and per-key
 cooldowns apply).
 
+## Skills and mastery
+
+User feedback: "you should buy, you are in base / on death" is good advice, but so obvious that a
+player who already does it should not hear it every death. The coach now knows **which skill each
+call coaches**, watches whether you **perform it without being told**, and goes quiet on skills you
+have mastered. Logic: `web/src/mastery.ts` (DOM-free); taxonomy: `data/coaching/skills.json`.
+
+### Taxonomy (26 skills)
+
+Each skill has an id, a plain-words label, a level, `mastered_after {observations, window,
+max_failures}` and a description; the engine maps cues to skills with `cards` (`module.card_id`,
+most specific) and `cues` (key patterns: exact, or a prefix ending in `*`; the longest wins).
+
+| Level | Skills (label) |
+|---|---|
+| basic | Spending souls on the death screen (`shop_on_death`) · Spending souls when you are in base (`shop_in_base`) · Spending souls before they pile up (`dont_die_holding_souls`) · Leaving base at full health (`heal_before_leaving`) · Last hits and farm (`last_hits`) · Backing off at low health (`back_off_low_hp`) · Staying behind your troopers and out of tower range (`stay_behind_wave`) · Backing off to secure haunted souls (`secure_souls`) |
+| intermediate | Walking out with a teammate after respawning · Catching waves before roaming · Farming camps between waves · Pushing when enemies are dead · Respecting missing enemies · Safe zipline travel · Soul Urn plays · Buying counter items · Joining team fights · Not fighting outnumbered · Taking fights you can win · Escaping after a stun or silence |
+| advanced | Planning objectives ahead (plans, timers, Midboss) · Protecting a lead (lead / throw) · Leaving a lost fight early · Tracking the enemy's dangerous heroes (threats) · Resetting after a won fight · Positioning against divers · Defending your base in time |
+
+Basic and intermediate skills need 4 unprompted successes (3 for rarer ones: Urn, zipline,
+counters, windows, secure souls) within the last 3 matches (the match in progress counts) with at
+most 1 failure; advanced ones need 3.
+
+**Every rule cue carries its skill**: `coach_engine::Cue.skill` (`#[serde(default)]`, serialized;
+`Cue::new` maps the key, `Cue::card` the card first). Card coaches (active, positioning, jungle,
+praise, plans) pass their card id (`active:cc` is the stun, silence *or* zipline card), the death
+review passes the skill of the cause it names (`review.<cause>`; a non-hero killer by its
+`death:<tag>` key; a threat as `threat_tracking`), the play-pattern summary the skill of its first
+item. Only the "went well" summary and a death review without a cause have no skill
+(`crates/engine/tests/skills.rs` checks every card and every cue offered on the sample sessions and
+rec8/11/12/13 replays). `web/src/types.ts` `Cue.skill` mirrors it; `skillOfCue()` maps cues recorded
+before the tag (same matcher), profile focus cues (`player:focus:<goal id>`) and AI advice
+(`skillsOfAdvice`: by its text, e.g. "spend ... before you respawn" = death-screen shopping, else
+its focus tag).
+
+### Evidence (what counts as doing it)
+
+`SkillMastery.observe(snapshot, wall)` feeds a private `PlayerProfile` (same match boundaries and
+death records as the profile) and judges:
+
+| Skill | Success (unprompted unless a reminder of the skill was spoken first) | Failure |
+|---|---|---|
+| shop_on_death | 800+ souls spent between the death and the respawn, leaving less than the tier below (or 1,500+ spent); prompted = a death-screen reminder (or a death review's "Spend N souls now") before the souls fell | respawning with the usual buy (`spendTarget`) still unspent (no extra reminder when the same death already counted as dying with the souls) |
+| shop_in_base | a purchase (two reads 500+ under the visit's peak, also on the scoreboard or the first frames out of base) in a base / shop visit that started with at least the tier below | walking out of base (2 located frames out) with the usual buy unspent; less is saving for the next item |
+| dont_die_holding_souls | a purchase at a shop visit; a death after 8:00 with less than the tier below; `praise:spent_tier` | dying holding `max(3,000, spendTarget)` souls ("died holding 6,241 souls at 19:30") |
+| heal_before_leaving | walking back into base hurt (< 90%) and leaving at 90%+ | leaving at < 60%; a death after going back in under 60% (`weakEntry`); the engine's "heading out at N% health" |
+| walk_out_with_team | the first located frame out of base within 60 s of a respawn with a teammate within 0.25; `praise:group` | alone (> 0.3); a death alone within 40 s of a respawn; the engine's "alone after a respawn" |
+| use_enemy_dead_windows / urn_play / back_off_low_hp / join_fights | the profile's window used / Urn delivered / low-health episode survived / fight joined | window unused / died with the Urn / died at low health / fight missed |
+| last_hits | `pace:on-track` / `pace:ahead` | `pace:behind` |
+| others | the engine's praise for the skill | the death review naming it as the cause; `lowAfterWin`, `forwardUnseen`, close-range burst deaths |
+
+Cues are evidence when offered (`offered(cue)`, both analysis paths, before the gate; the same key
+within 30 s counts once). Reminders are what was spoken (`noteSpoken`; praise is no reminder).
+
+### Mastery, decay and level
+
+- **Mastered** when the window has `observations` unprompted successes and at most `max_failures`
+  failures. **Unmastered** after 3 failures in the window or 2 in one match (no time decay: a habit
+  you keep is not forgotten, a habit you lose is).
+- **Level** (`level()`): skill level from mastered skills (≥ 4 skills seen; intermediate from 2
+  basics, advanced from 4 basics and 3 intermediate covering 60% of the intermediate ones seen) and
+  a metric level from the profile (`metricsOf`: time dead ≤ 10% and ≤ 1.5 deaths per 10 min =
+  advanced, ≤ 18% and ≤ 3 = intermediate; (kills + assists) / deaths ≥ 4 one up, < 1 one down),
+  combined 2:1. Without evidence: basic.
+- **Assumed basics**: at intermediate+ a basic skill without failures in its window counts as
+  mastered ("Assumed at your level") until you fail it.
+- **Manual marks** on the Player page win: "I have this" (mastered), "Coach me on this" (never
+  quiet), "Let the coach decide".
+
+### Suppression (`gate()`, main.ts `deliver()` and `deliverAi()`)
+
+1. High safety calls always pass (critical health, outnumbered, fight lost, debuffs, base under
+   attack...). The death-screen shop reminder `unspent-dead` is High but no safety call
+   (`mastery.quiet_high`); a death review keeps its lesson and drops the "Spend N souls now." tail
+   while death-screen shopping is mastered.
+2. Normal / Low cues (and praise) of a mastered or assumed skill are dropped, **except one reminder
+   per failure this match** (within 5 minutes of it): the failure of a skill allows one reminder of
+   it, or of a skill it `allows` (dying holding souls allows one death-screen or base shop reminder,
+   one in total).
+3. A skill in progress gets **one reminder per match after its first unprompted success** (plus the
+   failure reminder).
+4. Skills not yet seen are coached as before. AI advice is judged by the first skill its text touches
+   that is not quiet; quiet AI advice is listed, not spoken.
+
+Profile setting off = no gating. The AI prompts get `promptText()` through
+`setMasteryProvider` (ai-coach.ts): live as "PLAYER LEVEL (do not coach mastered skills unless
+STATE shows the player failing one now; pitch the advice at this level)", and appended to the
+end-of-game review digest ("do not list a mastered skill as an improvement unless this match shows
+it failing"), e.g. "Level: Intermediate (4 basic and 0 intermediate skills mastered; time dead 14%,
+1.6 deaths per 10 min, KDA 4.9). Mastered, do not coach unless failed now: Spending souls on the
+death screen; ... Working on: Leaving base at full health; ... Pitch advice at the intermediate
+level; no generic shopping, healing or last-hit reminders."
+
+### Persistence and the Player page
+
+localStorage `deadlock-coach-skill-mastery-v1` (schema 1: per skill performed / prompted / failed,
+last seen, mastered flag, manual mark, the last 8 matches' tallies; the last 30 match ids; newer
+schemas are refused and left untouched). "Export profile" adds it under `mastery`; "Import profile"
+merges new match tallies once; "Reset profile" clears it. The Player page "Skills" panel shows "Your
+level: Intermediate" with its basis and three lists: **Mastered: the coach stays quiet**, **Working
+on: the coach focuses here**, **Not yet seen**, each skill with its evidence ("Last 3 matches: 5 on
+your own, 1 after a reminder, 1 missed") and the manual buttons.
+
+### Validation: rec8 -> rec11 -> rec12 -> rec13 (live recordings, in sequence)
+
+`node --experimental-strip-types scripts/mastery-validate.ts [--no-ai] <recording.json>...` feeds
+the recorded full-scan frames (with their engine cues) and gates every recorded spoken cue in wall
+order, one store across the four files (`tests/mastery.unit.ts` asserts it when the recordings are
+present).
+
+| Recording | Mastered during it | Spoken cues | Suppressed | Rule shop reminders (unspent*) |
+|---|---|---|---|---|
+| rec8 (nothing known yet) | shop_in_base, dont_die_holding_souls (26:12), last_hits | 139 | 3 (2%) | 6 -> 5 |
+| rec11 | shop_on_death (25:27) | 160 | 22 (14%) | 5 -> 1 |
+| rec12 | - | 115 | 16 (14%) | 5 -> 0 |
+| rec13 | - | 160 | 23 (14%) | 7 -> 0 |
+
+By rec12-13 the player shops on death screens and in base on their own (rec13: 7 base purchases
+unprompted, 0 failed): every rule shop reminder stops. rec13 19:27 (death at 19:30 holding 6,241
+souls, nothing bought until the respawn) is the one failure: it allows one reminder, which the AI
+death call took at 19:51 ("Spend your 6,241 souls on the death screen now"); "You're in base holding
+6,187 souls" (20:18) and the death-screen "You are dead with N souls. Buy now." (43:18) stay quiet. Without the AI
+(`--no-ai`) the reminder is the base call at 20:18 and rec12 / rec13 lose 18 of 82 / 17 of 132
+spoken cues. Most of the rest of the suppressed cues are last-hit and farm-pace calls (mastered) and
+repeats of the Urn and walk-out calls after a success this match. End state: level Intermediate
+(time dead 14%, 1.6 deaths per 10 min, KDA 4.9); mastered: the three shopping skills and last hits;
+assumed: staying behind the wave, securing souls; working on: leaving base at full health, backing
+off at low health, enemy-dead windows, Urn, team fights, walking out with a teammate, missing enemies,
+resetting after a won fight, positioning against divers. Remaining shop advice comes only from AI
+lines that also coach a skill in progress (the prompt now tells the AI what is mastered).
+
 ## API (`PlayerProfile`)
 
 `observe(snapshot, wallMs)`, `endMatch()`, `summary(hero?)` (`strengths` = last-match highlights

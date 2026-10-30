@@ -106,7 +106,7 @@ impl PlanCoach {
         let mut text = c.speech.clone();
         for (k, v) in vars { text = text.replace(&format!("{{{k}}}"), v); }
         let priority = match c.priority.as_str() { "high" => Priority::High, "low" => Priority::Low, _ => Priority::Normal };
-        Cue { key, text, priority, cooldown_secs: c.cooldown_secs }
+        Cue::card(&format!("plans.{id}"), key, text, priority, c.cooldown_secs)
     }
     /// Your hero's role ("long_range" / "default"), by majority over the match.
     fn role(&self, st: &State) -> &str {

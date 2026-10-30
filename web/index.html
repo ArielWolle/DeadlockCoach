@@ -60,6 +60,14 @@
             <div class="replay-actions"><button id="player-add-replay" disabled>Add replay results to my profile</button><button id="player-export">Export profile</button><input id="player-import-file" class="visually-hidden" type="file" accept=".json,application/json"><label class="button-like" for="player-import-file">Import profile</label><button id="player-reset" class="danger">Reset profile</button></div>
             <p id="player-replay-note" class="muted">Run a replay in Replay lab to add it here.</p>
           </article>
+          <!-- Skills and mastery (mastery.ts, player-page.ts skills()) -->
+          <article class="panel padded" aria-labelledby="skills-title"><div class="panel-heading"><h2 id="skills-title">Skills</h2><strong id="player-level" class="tag teal">Your level: Basic</strong></div>
+            <p id="player-level-basis" class="muted">The coach learns which habits you already have and stops reminding you of them.</p>
+            <div class="skill-columns">
+              <section aria-labelledby="skills-mastered-title"><h3 id="skills-mastered-title" class="player-subhead">Mastered: the coach stays quiet</h3><ul id="skills-mastered" class="skill-list"></ul></section>
+              <section aria-labelledby="skills-working-title"><h3 id="skills-working-title" class="player-subhead">Working on: the coach focuses here</h3><ul id="skills-working" class="skill-list"></ul></section>
+              <section aria-labelledby="skills-unseen-title"><h3 id="skills-unseen-title" class="player-subhead">Not yet seen</h3><ul id="skills-unseen" class="skill-list"></ul></section>
+            </div></article>
           <div class="split">
             <article class="panel padded"><h2>Strengths: keep doing this</h2><ul id="player-strengths" class="player-traits"></ul><h3 class="player-subhead">Improved since last time</h3><ul id="player-improved" class="player-traits"></ul></article>
             <article class="panel padded"><h2>Weaknesses to work on</h2><ul id="player-weaknesses" class="player-traits"></ul></article>

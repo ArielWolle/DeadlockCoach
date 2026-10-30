@@ -332,7 +332,7 @@ impl Rule for PositionCoach {
         if repeat { return vec![]; }
         if a.id == "missing" { memo.missing_now = a.tracks.clone(); }
         st.1 = Some((a.id.clone(), clock));
-        vec![Cue { key: format!("pos:{}", a.id), text: a.text, priority: a.priority, cooldown_secs: a.cooldown_secs }]
+        vec![Cue::card(&format!("positioning.{}", a.id), format!("pos:{}", a.id), a.text, a.priority, a.cooldown_secs)]
     }
     fn spoken(&self, cue: &Cue) {
         let mut memo = self.spoken.memo.borrow_mut();

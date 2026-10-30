@@ -29,7 +29,7 @@ impl Rule for Stream {
     fn evaluate(&self, _: &GameSnapshot) -> Vec<Cue> { let mut n = self.1.borrow_mut(); *n += 1; vec![cue(&format!("{}:{n}", self.0), "Say it.", self.2)] }
 }
 fn stream(prefix: &'static str, p: Priority) -> Box<Stream> { Box::new(Stream(prefix, RefCell::new(0), p)) }
-fn cue(key: &str, text: &str, priority: Priority) -> Cue { Cue { key: key.into(), text: text.into(), priority, cooldown_secs: 1 } }
+fn cue(key: &str, text: &str, priority: Priority) -> Cue { Cue { key: key.into(), text: text.into(), priority, cooldown_secs: 1, skill: None } }
 fn spoken(e: &mut Engine, s: &GameSnapshot) -> Vec<String> { e.step(s).into_iter().map(|c| c.key).collect() }
 fn said_at(e: &mut Engine, from: u32, to: u32) -> Vec<u32> { (from..to).step_by(5).filter(|t| !e.step(&alive(*t)).is_empty()).collect() }
 

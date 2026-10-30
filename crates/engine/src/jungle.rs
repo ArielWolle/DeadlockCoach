@@ -82,6 +82,6 @@ impl JungleCoach {
 
 impl Rule for JungleCoach {
     fn evaluate(&self, s: &GameSnapshot) -> Vec<Cue> {
-        self.assess(s).map(|a| vec![Cue { key: format!("jungle:{}", a.id), text: a.text, priority: a.priority, cooldown_secs: a.cooldown_secs }]).unwrap_or_default()
+        self.assess(s).map(|a| vec![Cue::card(&format!("jungle.{}", a.id), format!("jungle:{}", a.id), a.text, a.priority, a.cooldown_secs)]).unwrap_or_default()
     }
 }

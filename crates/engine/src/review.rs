@@ -510,7 +510,7 @@ impl ReviewCoach {
     }
 
     /// The last `pattern_window_secs` of play summarised in a few observations.
-    fn pattern(&self, st: &State, now: u32) -> Option<(String, bool)> {
+    fn pattern(&self, st: &State, now: u32) -> Option<(String, bool, Option<String>)> {
         let t = &self.catalog.thresholds;
         let data = game_data();
         let w: Vec<&Sample> = st.samples.iter().filter(|x| x.clock + t.pattern_window_secs >= now).collect();
@@ -572,6 +572,8 @@ impl ReviewCoach {
         let min = (span + 30) / 60;
         // Reviewed deaths in the window first: repeat killers, crowd control, close range.
         let mut out: Vec<(String, String)> = vec![];
+        // Card id of each item (its skill: data/coaching/skills.json).
+        let mut ids: Vec<&str> = vec![];
         let recent: Vec<&Summary> = st.deaths.iter().filter(|d| d.clock + t.pattern_window_secs >= now).filter_map(|d| d.summary.as_ref()).collect();
         let mut killers: Vec<(&String, usize)> = vec![];
         for s in &recent { if let Some(m) = &s.main { match killers.iter_mut().find(|k| k.0 == m) { Some(k) => k.1 += 1, None => killers.push((m, 1)) } } }
@@ -580,25 +582,25 @@ impl ReviewCoach {
             let (text, generic) = self.fill("pattern_killer", &[("hero", name.clone()), ("count", n.to_string()), ("min", min.to_string())]);
             let need = self.catalog.threats.iter().find(|th| &th.hero == hero && !th.counter.is_empty());
             let lesson = self.counter(need.map(|t| t.counter.as_str()).unwrap_or("spirit"), &name, need.map(|t| t.source.as_str()).unwrap_or("these"), None, st).unwrap_or(generic);
-            out.push((text, lesson));
+            ids.push("pattern_killer"); out.push((text, lesson));
         }
         let with_cc: Vec<&&Summary> = recent.iter().filter(|s| !s.cc.is_empty()).collect();
         if recent.len() >= 2 && with_cc.len() >= 2 {
             let mut effects: Vec<String> = vec![];
             for s in &with_cc { for e in &s.cc { let f = self.card(&format!("cc_{e}")).speech.replace("{times}", ""); if !effects.contains(&f) { effects.push(f); } } }
             let which = match (with_cc.len(), recent.len()) { (2, 2) => "both deaths".to_string(), (a, b) if a == b => format!("all {b} deaths"), (a, b) => format!("{a} of your {b} deaths") };
-            out.push(self.fill("pattern_cc", &[("which", which), ("effects", and_list(&effects))]));
+            ids.push("pattern_cc"); out.push(self.fill("pattern_cc", &[("which", which), ("effects", and_list(&effects))]));
         }
         if self.ranged(st) && recent.len() >= 2 && recent.iter().all(|s| !s.close.is_empty()) {
             let mut srcs: Vec<String> = vec![];
             for s in &recent { for c in &s.close { if !srcs.contains(c) { srcs.push(c.clone()); } } }
             let you = data.hero_name(st.me.as_deref().unwrap_or_default());
             let count = if recent.len() == 2 { "Both".to_string() } else { format!("All {}", recent.len()) };
-            out.push(self.fill("pattern_close", &[("count", count), ("sources", and_list(&srcs)), ("you", you)]));
+            ids.push("pattern_close"); out.push(self.fill("pattern_close", &[("count", count), ("sources", and_list(&srcs)), ("you", you)]));
         }
         let about_deaths = !out.is_empty();
         if deaths >= 2 || dead_secs >= 60 {
-            out.push(self.fill("pattern_deaths", &[("min", min.to_string()), ("deaths", plural(deaths, "time", "times")), ("dead", minutes(dead_secs))]));
+            ids.push("pattern_deaths"); out.push(self.fill("pattern_deaths", &[("min", min.to_string()), ("deaths", plural(deaths, "time", "times")), ("dead", minutes(dead_secs))]));
         }
         // A summary never repeats an item the previous summary already said (rec6 said "held over
         // 6,400 souls" in two summaries in a row; rec5 repeated the same 38:21 window).
@@ -616,17 +618,17 @@ impl ReviewCoach {
         if purchases > 0 && hoard == 0 { good.push(format!("you spent your souls on time ({})", plural(purchases, "purchase", "purchases"))); }
         let hoard = if said_before("souls for") { 0 } else { hoard };
         if let Some((start, secs, n, _, _)) = unused {
-            out.push(self.fill("pattern_window", &[("time", format!("{}:{:02}", start / 60, start % 60)), ("count", plural(n, "enemy", "enemies")), ("secs", secs.to_string())]));
+            ids.push("pattern_window"); out.push(self.fill("pattern_window", &[("time", format!("{}:{:02}", start / 60, start % 60)), ("count", plural(n, "enemy", "enemies")), ("secs", secs.to_string())]));
         }
-        if fights_missed >= 2 { out.push(self.fill("pattern_missed", &[("fights", plural(fights_missed as usize, "time", "times"))])); }
-        if pct(Area::Jungle) >= 50 && known >= 120 { out.push(self.fill("pattern_jungle", &[("jungle", pct(Area::Jungle).to_string()), ("min", min.to_string())])); }
-        if deep_away >= 30 { out.push(self.fill("pattern_waves", &[("secs", deep_away.to_string())])); }
-        if hoard >= 60 { out.push(self.fill("pattern_hoard", &[("hoard", num(hoard_tier)), ("secs", hoard.to_string()), ("peak", num(peak))])); }
+        if fights_missed >= 2 { ids.push("pattern_missed"); out.push(self.fill("pattern_missed", &[("fights", plural(fights_missed as usize, "time", "times"))])); }
+        if pct(Area::Jungle) >= 50 && known >= 120 { ids.push("pattern_jungle"); out.push(self.fill("pattern_jungle", &[("jungle", pct(Area::Jungle).to_string()), ("min", min.to_string())])); }
+        if deep_away >= 30 { ids.push("pattern_waves"); out.push(self.fill("pattern_waves", &[("secs", deep_away.to_string())])); }
+        if hoard >= 60 { ids.push("pattern_hoard"); out.push(self.fill("pattern_hoard", &[("hoard", num(hoard_tier)), ("secs", hoard.to_string()), ("peak", num(peak))])); }
         if out.is_empty() {
             if deaths > 0 || known < 120 { return None; }
             // Lane / jungle split as context after the specific items.
             good.push(format!("a {}/{} split between lanes and jungle", pct(Area::Lane), pct(Area::Jungle)));
-            out.push(self.fill("pattern_good", &[("min", min.to_string()), ("good", and_list(&good))]));
+            ids.push("pattern_good"); out.push(self.fill("pattern_good", &[("min", min.to_string()), ("good", and_list(&good))]));
             good.clear();
         }
         // Two observations and one good thing at most: a summary is a call, not a report.
@@ -635,7 +637,9 @@ impl ReviewCoach {
         // A balanced summary: the criticism, then what went well.
         if !good.is_empty() { picked.push(self.fill("pattern_balance", &[("good", and_list(&good))])); }
         let text = picked.iter().map(|(a, b)| format!("{a} {b}").trim_end().to_string()).collect::<Vec<_>>().join(" ");
-        Some((text, about_deaths))
+        // The summary coaches the skill of its first item.
+        let skill = ids.first().and_then(|id| crate::skills::for_card(&format!("review.{id}")));
+        Some((text, about_deaths, skill))
     }
 }
 
@@ -643,12 +647,12 @@ impl ReviewCoach {
     /// The same summary is never offered under a new key (a new block saying the same thing);
     /// under its own key it is re-offered until the engine speaks it (another cue may have taken
     /// the frame's slot).
-    fn offer_pattern(st: &mut State, key: String, text: String, priority: Priority) -> Option<Cue> {
+    fn offer_pattern(st: &mut State, key: String, text: String, priority: Priority, skill: Option<String>) -> Option<Cue> {
         if st.last_pattern.as_ref().is_some_and(|(k, t)| *t == text && *k != key) { return None; }
         // The previous block's summary (not this one, which may be re-offered) gates repeats.
         if let Some((k, t)) = st.last_pattern.take() { if k != key { st.prev_pattern = Some(t); } }
         st.last_pattern = Some((key.clone(), text.clone()));
-        Some(Cue { key, text, priority, cooldown_secs: 600 })
+        Some(Cue { key, text, priority, cooldown_secs: 600, skill })
     }
 }
 
@@ -711,18 +715,24 @@ impl Rule for ReviewCoach {
             });
             if ready {
                 let death = st.deaths.last().unwrap().clone();
-                let (text, _, summary) = self.death_review(&st, &death, s.souls);
+                let (text, causes, summary) = self.death_review(&st, &death, s.souls);
                 st.reviewed = true;
                 if let Some(d) = st.deaths.last_mut() { d.summary = Some(summary); }
-                cues.push(Cue { key: format!("death:review:{}", death.clock), text, priority: Priority::High, cooldown_secs: 600 });
+                // The skill of the cause the review names (the death is evidence the skill failed).
+                let skill = causes.first().and_then(|id| match id.as_str() {
+                    "cause" => death.cause.as_deref().and_then(|c| crate::skills::for_key(&format!("death:{}", crate::death_cause_advice(c).0))),
+                    t if t.starts_with("threat:") => crate::skills::for_key("threat:"),
+                    id => crate::skills::for_card(&format!("review.{id}")),
+                });
+                cues.push(Cue { key: format!("death:review:{}", death.clock), text, priority: Priority::High, cooldown_secs: 600, skill });
             }
             // Waiting to respawn is the natural moment for the bigger picture.
             // A new repeat killer / crowd-control pattern is worth saying after this death even if
             // this five-minute block already had its summary (rec5: Drifter's second kill came a
             // minute after the block's summary).
-            if st.reviewed { if let Some((text, about_deaths)) = self.pattern(&st, clock) {
+            if st.reviewed { if let Some((text, about_deaths, skill)) = self.pattern(&st, clock) {
                 let key = if about_deaths { format!("review:pattern:death:{}", st.deaths.len()) } else { format!("review:pattern:{}", clock / t.pattern_window_secs) };
-                if let Some(c) = Self::offer_pattern(&mut st, key, text, Priority::Normal) { cues.push(c); }
+                if let Some(c) = Self::offer_pattern(&mut st, key, text, Priority::Normal, skill) { cues.push(c); }
             }}
         } else if s.screen.as_deref() == Some("Gameplay") {
             if st.dead { st.dead = false; st.respawned_at = Some(clock); st.last_respawn = None; st.last_dead_clock = None; }
@@ -747,19 +757,19 @@ impl Rule for ReviewCoach {
                     (_, k) => format!("{} are down", plural(k, "teammate", "teammates")),
                 };
                 let (text, _) = self.fill("live_fight_lost", &[("down", down)]);
-                cues.push(Cue { key: "review:fight-lost".into(), text, priority: Priority::High, cooldown_secs: 30 });
+                cues.push(Cue::card("review.live_fight_lost", "review:fight-lost", text, Priority::High, 30));
             }}
             // Live: leaving base alone right after a respawn with enemies unseen.
             let fresh = st.respawned_at.is_some_and(|r| clock.saturating_sub(r) <= t.respawn_window_secs);
             if fresh && me.is_some_and(|p| p.y < 0.75) && sample.nearest_ally.is_none_or(|d| d > t.missed_fight_distance) && sample.unseen.is_some_and(|u| u >= t.unseen_enemies) {
                 let (text, _) = self.fill("live_respawn_alone", &[("count", plural(sample.unseen.unwrap(), "enemy", "enemies"))]);
-                cues.push(Cue { key: "review:respawn-alone".into(), text, priority: Priority::Normal, cooldown_secs: 60 });
+                cues.push(Cue::card("review.live_respawn_alone", "review:respawn-alone", text, Priority::Normal, 60));
             }
             // Calm moments (healthy, no enemy close) every five minutes: the play pattern.
             // One summary per five-minute block of game time (the key carries the block).
             let calm = sample.hp.is_some_and(|h| h >= 0.6) && !enemy_close;
-            if calm { if let Some((text, _)) = self.pattern(&st, clock) {
-                if let Some(c) = Self::offer_pattern(&mut st, format!("review:pattern:{}", clock / t.pattern_window_secs), text, Priority::Low) { cues.push(c); }
+            if calm { if let Some((text, _, skill)) = self.pattern(&st, clock) {
+                if let Some(c) = Self::offer_pattern(&mut st, format!("review:pattern:{}", clock / t.pattern_window_secs), text, Priority::Low, skill) { cues.push(c); }
             }}
         }
         st.samples.push_back(sample);
