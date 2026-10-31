@@ -94,7 +94,8 @@ gateway that is not running.
   periodic request **and** the last spoken AI advice, and only for an event from the last 40 s:
   a new phase (laning → midgame at 8:00, → lategame at 20:00), a respawn, an enemy-dead window
   (≥ 2 enemies dead), a major objective within 60 s (Powerups at 5:00, Sinner's at 8:00, every
-  Soul Urn, first Rift, Guardians at 12:00, Walkers at 18:00), souls reaching the usual buy, or a
+  Soul Urn, Guardians at 12:00, Walkers at 18:00; an Unstable Rift announced or open as the vision
+  read it, docs/rift.md), souls reaching the usual buy, or a
   big swing in the team souls difference (≥ 4,000 or 5% of the average team souls) since the last
   request, or a good play (see "Reinforcing good plays"). The prompt starts with
   `WHY NOW: <what changed>`.

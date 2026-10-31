@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "threshold_note": "Unstable Rift calls (crates/engine/src/rift.rs, docs/rift.md). Times are wiki facts (docs/strategy/midgame-macro.md section 8: effect -> 60 s -> announcement -> 20 s -> open; first effect 10-12 min, later ones 6-8 min after the previous). Team counts need all twelve top-bar slots read (TeamPicture). 'behind_pct': our team souls this far under theirs (the wiki's comeback bonus is linear up to 15%). 'skip_dead': this many of us dead (you alive), and more of us than of them, skips it. Contest: the wiki's warning shows after 50 s, the draw at 60 s; the coach counts only the contest it saw. Priorities: the announcement call (go / behind / skip), 'stop' and 'draw' are timed (20 s to the opening, a 12 s capture, the 60 s draw) and speak as High (in a fight cut to their first clause); the after-calls are Normal with half the phase gap (lib.rs). No go / stop call under 'min_hp' health; with the lane not read yet the announcement call waits until 'lane_wait_secs' before the opening.",
+  "thresholds": {
+    "soon_ahead_max": 40, "soon_ahead_min": 20, "first_announce_earliest": 660,
+    "next_announce_min_secs": 360, "go_min_secs": 4, "behind_pct": 0.03,
+    "skip_dead": 2, "near_site": 0.12,
+    "stop_min_pct": 5, "stop_max_pct": 92, "draw_warn_secs": 48, "draw_secs": 60, "push_max_secs": 40, "min_hp": 0.4, "lane_wait_secs": 14
+  },
+  "cards": [
+    { "id": "soon", "family": "rift", "priority": "low", "cooldown_secs": 300,
+      "speech": "Rift soon, from {time} on a side-lane bridge: push your wave first.",
+      "rationale": "The Rift is announced at a known window; arriving with your wave pushed means you lose no farm and your lane is not under your Guardian while you fight.",
+      "sources": [
+        { "path": "strategy/midgame-macro.md", "section": "## 8. Unstable Rift decisions", "basis": "WIKI", "excerpt": "meaning the first Rift can spawn at any time between 10 and 12 minutes, and subsequent Rifts can spawn between 6 and 8 minutes after the previous Rift" },
+        { "path": "strategy/midgame-macro.md", "section": "## 5. Rotations and presence", "basis": "COMMUNITY", "excerpt": "Before any group objective: check which teammates are near, ults ready, waves cleared" } ] },
+    { "id": "go", "family": "rift", "priority": "high", "cooldown_secs": 120,
+      "speech": "Rift {where} in {secs} seconds: {up} group {with}on the bridge.",
+      "variants": ["The Rift is open {where}: {up} group {with}on the bridge."],
+      "rationale": "It opens 20 s after the announcement and only a team alone in the point claims it: arriving together is what takes it.",
+      "sources": [
+        { "path": "strategy/midgame-macro.md", "section": "## 8. Unstable Rift decisions", "basis": "WIKI", "excerpt": "20 seconds after the announcement, the Rift opens and creates a capture point with a 20m radius around the bridge" },
+        { "path": "strategy/midgame-macro.md", "section": "## 8. Unstable Rift decisions", "basis": "WIKI", "excerpt": "but the Rift can only be claimed once there's only one team in the point" } ] },
+    { "id": "behind", "family": "rift", "priority": "high", "cooldown_secs": 120,
+      "speech": "We're behind, so we capture the Rift faster: all go {where_short}.",
+      "rationale": "The trailing team captures in as little as 6 s and fights inside a resist aura: the Rift is the comeback objective.",
+      "sources": [
+        { "path": "strategy/midgame-macro.md", "section": "## 8. Unstable Rift decisions", "basis": "WIKI", "excerpt": "Capture time reduced to 6s (50% shorter) for the trailing team, and increased to 18s (50% longer) for the leading team." },
+        { "path": "strategy/midgame-macro.md", "section": "## 8. Unstable Rift decisions", "basis": "WIKI", "excerpt": "Bonus Bullet, Spirit, and Debuff Resist, provided within a 35m radius." } ] },
+    { "id": "skip", "family": "rift", "priority": "high", "cooldown_secs": 120,
+      "speech": "Skip the Rift: {reason}, farm safe.",
+      "rationale": "Both teams progress while both are in the point and only a lone team claims it: with fewer of us alive we cannot hold it, and a lost fight costs more than the bounty.",
+      "sources": [
+        { "path": "strategy/midgame-macro.md", "section": "## 8. Unstable Rift decisions", "basis": "WIKI", "excerpt": "Both teams earn progress as long as they have at least one player in the capture point" },
+        { "path": "jungle/jungle-routes.md", "section": "## Late game (~12:00+)", "basis": "COMMUNITY", "excerpt": "losing a 5v6 costs more than a camp" } ] },
+    { "id": "stop", "family": "rift", "priority": "high", "cooldown_secs": 60,
+      "speech": "They're alone on the Rift: step in to stop the capture.",
+      "rationale": "A single player of ours in the point stops their claim (it needs one team alone), and progress does not depend on how many are in.",
+      "sources": [
+        { "path": "strategy/midgame-macro.md", "section": "## 8. Unstable Rift decisions", "basis": "WIKI", "excerpt": "The progress rate is the same regardless of how many players per team are in the point." },
+        { "path": "strategy/midgame-macro.md", "section": "## 8. Unstable Rift decisions", "basis": "WIKI", "excerpt": "but the Rift can only be claimed once there's only one team in the point" } ] },
+    { "id": "draw", "family": "rift", "priority": "high", "cooldown_secs": 60,
+      "speech": "The Rift draws in {secs} seconds: grab the soul orbs.",
+      "variants": ["The Rift is a draw: grab the soul orbs."],
+      "rationale": "After 60 s contested the souls drop as orbs either team can take; standing on them is the reward.",
+      "sources": [
+        { "path": "strategy/midgame-macro.md", "section": "## 8. Unstable Rift decisions", "basis": "WIKI", "excerpt": "After 60s of being contested, the Rift ends in a draw. No Rift Troopers are spawned, and all souls are released as 13 Soul Orbs to be claimed by either team." } ] },
+    { "id": "ours", "family": "rift", "priority": "normal", "cooldown_secs": 120,
+      "speech": "Rift Troopers {where}: push behind them.",
+      "rationale": "Our Rift Troopers have double health and damage and resist melee: they tank the next structure if heroes walk behind them.",
+      "sources": [
+        { "path": "strategy/midgame-macro.md", "section": "## 8. Unstable Rift decisions", "basis": "WIKI", "excerpt": "Rift Troopers will spawn in that lane for the winning team." },
+        { "path": "strategy/midgame-macro.md", "section": "## 8. Unstable Rift decisions", "basis": "WIKI", "excerpt": "On the first rift, they have +100% health and damage compared to normal troopers" } ] },
+    { "id": "theirs", "family": "rift", "priority": "normal", "cooldown_secs": 120,
+      "speech": "Their Rift Troopers are coming down {where_short}: defend at the Guardian, don't fight them alone.",
+      "rationale": "Their Rift Troopers have double health and damage, resist melee and give no souls: meet them with your wave at the Guardian.",
+      "sources": [
+        { "path": "strategy/midgame-macro.md", "section": "## 8. Unstable Rift decisions", "basis": "WIKI", "excerpt": "They are larger, colored black, and don't drop souls when killed." },
+        { "path": "strategy/midgame-macro.md", "section": "## 8. Unstable Rift decisions", "basis": "WIKI", "excerpt": "On the first rift, they have +100% health and damage compared to normal troopers, as well as 25% Melee Resist, and 30% Spirit Resist." } ] }
+  ]
+}

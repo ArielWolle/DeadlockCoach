@@ -49,7 +49,7 @@ Community:
 
 ## Known wiki inconsistencies (flagged, verify in-game)
 - Strategy page says Midboss spawns at 0:00 and "every 6 minutes"; Midboss page says 7 min after 1st death, 6 after 2nd, 5 after later; and (update 2026-05-22) it now starts spawned at game start.
-- Strategy page says Unstable Rift "every 8 minutes"; Unstable Rift page says first ~11:00 +/-1 min then every 7 +/-1 min.
+- Strategy page says Unstable Rift "every 8 minutes"; Unstable Rift page (re-read 2026-10-30) says first ~11:00 +/-1 min then every 7 +/-1 min: the Unstable Rift page is used.
 - Strategy page: Guardian 1250 / Walker 3500 souls; Souls page table: Guardian 1375 / Walker 3675. Souls page is more recently edited (2026-10-25).
 - Soul Well start: Souls page says 2:30; Cursed Apple page says 3:00 in one place and 2:30/3:00 elsewhere. Treat as ~2:30-3:00.
 - Strategy page says Urn is available at 10:00 then every 5 min; consistent with Soul Urn page.

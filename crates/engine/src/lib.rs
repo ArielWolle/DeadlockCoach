@@ -13,6 +13,7 @@ pub mod active;
 pub mod praise;
 pub mod plans;
 pub mod skills;
+pub mod rift;
 mod counter_explanations;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -402,7 +403,7 @@ pub fn default_rules(cfg: RulesConfig) -> Vec<Box<dyn Rule>> {
     // the lane to push in an enemy-dead window, souls to spend in base) wins the step over the
     // generic one, and the shared keys keep the generic one quiet for its cooldown. Praise comes
     // before the farm-pace compliment, which it outranks for the shared praise budget.
-    vec![Box::new(active::ActiveCoach::default()), Box::new(positioning::PositionCoach::default()), Box::new(jungle::JungleCoach::default()), Box::new(laning::LaneCoach::default()), Box::new(map_rules::MapRule), Box::new(UnspentSoulsRule::new(cfg.clone())), Box::new(review::ReviewCoach::default()), Box::new(NetworthLeadRule::new(cfg)), Box::new(praise::PraiseCoach::default()), Box::new(economy::PaceRule::default()),Box::new(economy::WaveReportRule::default()), Box::new(plans::PlanCoach::default())]
+    vec![Box::new(active::ActiveCoach::default()), Box::new(positioning::PositionCoach::default()), Box::new(jungle::JungleCoach::default()), Box::new(laning::LaneCoach::default()), Box::new(map_rules::MapRule), Box::new(UnspentSoulsRule::new(cfg.clone())), Box::new(review::ReviewCoach::default()), Box::new(NetworthLeadRule::new(cfg)), Box::new(praise::PraiseCoach::default()), Box::new(economy::PaceRule::default()),Box::new(economy::WaveReportRule::default()), Box::new(plans::PlanCoach::default()), Box::new(rift::RiftCoach::default())]
 }
 
 /// One death is one event: from the first death screen to a confirmed respawn. rec13 41:05-42:34
@@ -553,7 +554,7 @@ pub const RETREAT_GAP_SECS: u32 = 20;
 pub fn is_wave_call(key: &str) -> bool { key.starts_with("map:wave:") || key == "wave:overview" }
 /// Calls that send you to an objective, a push or a fight (docs/coach-review-8.md D9).
 pub fn is_go_call(key: &str) -> bool {
-    const PREFIX: [&str; 8] = ["plan:urn", "plan:midboss", "plan:rejuv", "plan:guardian", "plan:walker", "map:urn-ground", "map:urn-ally", "map:midboss"];
+    const PREFIX: [&str; 9] = ["plan:urn", "plan:midboss", "plan:rejuv", "plan:guardian", "plan:walker", "plan:rift", "map:urn-ground", "map:urn-ally", "map:midboss"];
     PREFIX.iter().any(|p| key.starts_with(p))
         || matches!(key, "pos:enemies_down" | "pos:go_in" | "pos:join" | "pos:kill_window" | "pos:help" | "lane:push" | "lane:objective" | "lane:rotate" | "lane:gank" | "active:fight" | "map:farm-window")
 }
@@ -729,7 +730,9 @@ impl Engine {
             // The phase budget for everything that is not a High safety call; a state readout
             // ([`call_value`] 1) needs twice the gap, leaving the slots to time-sensitive calls.
             let gap = Self::phase_gap(now);
-            out.retain(|c| c.priority == Priority::High || self.last_cue_at.is_none_or(|l| now - l >= if call_value(&c.key) <= 1 { 2 * gap } else { gap }));
+            // What a finished Unstable Rift sends down a lane (rift.rs) is news for a short time: half the gap.
+            let rift_after = |k: &str| k.starts_with("plan:rift_push") || k.starts_with("rift:defend");
+            out.retain(|c| c.priority == Priority::High || self.last_cue_at.is_none_or(|l| now - l >= if call_value(&c.key) <= 1 { 2 * gap } else if rift_after(&c.key) { gap / 2 } else { gap }));
         }
         if let Some(l)=self.last_cue_at { if now-l<self.min_gap_secs {
             out.retain(|c| c.priority==Priority::High && (now-l>=3 || c.key=="lane:back_off" || c.key=="lane:critical"));

@@ -86,7 +86,7 @@
     { "id": "objective_timing", "label": "Planning objectives ahead", "level": "advanced",
       "mastered_after": { "observations": 3, "window": 3, "max_failures": 1 },
       "description": "Shove and group 30-45 seconds before the Urn, Midboss and weak structures, with a job for you.",
-      "cues": ["plan:*", "timer:*", "lane:objective", "map:midboss*", "death:midboss"] },
+      "cues": ["plan:*", "rift:*", "timer:*", "lane:objective", "map:midboss*", "death:midboss"] },
     { "id": "throw_awareness", "label": "Protecting a lead", "level": "advanced",
       "mastered_after": { "observations": 3, "window": 3, "max_failures": 1 },
       "description": "Ahead: take objectives and skip risky fights in their base. Behind: farm safe and defend together.",

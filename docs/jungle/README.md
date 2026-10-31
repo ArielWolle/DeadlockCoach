@@ -29,7 +29,7 @@ Small 129 HP / 41 souls / spawn 2:00 / respawn 1:25. Medium 322 / 68 / 5:00 / 4:
 ## Known gaps
 - No fetched source gives a named, current, camp-by-camp route.
 - Camp counts disagree between wiki and API (medium 22 vs 25; large 11 vs 12 on one wiki table).
-- Sinner's Sacrifice soul value: wiki 310 vs API 155; Rift respawn 7 vs 8 min; Midboss timer wording; wiki Map timings page is flagged outdated.
+- Sinner's Sacrifice soul value: wiki 310 vs API 155; Rift respawn 7 +/-1 min (settled: Unstable_Rift page, 2026-10-30); Midboss timer wording; wiki Map timings page is flagged outdated.
 - Which API team (team0) equals Hidden King is inferred, not stated.
 - API `npc-units` has no respawn/camp-composition data; camp composition (which Haunts per camp) not retrieved per camp.
 - Healing snack/crate/statue coordinates exist in the API but are not listed individually here except examples.

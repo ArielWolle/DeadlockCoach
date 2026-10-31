@@ -28,6 +28,8 @@ fn main() {
     // As the web coach registers them: the Urn timer readout is replaced by the Urn plan (plans.rs).
     let mut rules = rules_from_timings(&coach_engine::plans::unplanned_timings(include_str!("../../../data/timings.json"))).expect("timings");
     rules.extend(default_rules(RulesConfig::default()));
+    // COACH_NO_RIFT=1: without the Unstable Rift coach (the last default rule), for before/after counts.
+    if std::env::var("COACH_NO_RIFT").is_ok() { rules.pop(); }
     rules.push(counter_rule_from_json(include_str!("../../../data/counters.json")).expect("counters"));
     let mut engine = Engine::new(rules);
     // COACH_NO_BUDGET=1: without the cadence budget and fight mode (to see what they hold back).

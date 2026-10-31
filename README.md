@@ -34,6 +34,10 @@ worker using the same Rust vision and rule engine as the native app.
 - Jungle calls from verified wiki timings and tactics: small / medium / large + Sinner's Sacrifice
   camp spawns (2:00 / 5:00 / 8:00), and counter-jungling when your wave is on their guardian and
   the enemies are accounted for (otherwise: stay on your side). See `data/coaching/jungle.json`.
+- Unstable Rift: the announcement, the minimap ping on its bridge, the capture panel (both teams'
+  progress, bounty) and "RIFT SECURED!" / "RIFT LOST" are read; calls group you on the bridge 20 s
+  ahead, skip it when we are short-handed, stop a lone enemy capture, and push with (or defend
+  against) the Rift Troopers. See [Unstable Rift](docs/rift.md).
 - Top-bar team state for all twelve heroes: health bars, "not seen recently" (no bar), dead with
   respawn timer. Feeds kill windows, real-vs-false outnumbers and team-wide windows while heroes are dead.
 - Fast perception: detect HUD text once, track exact boxes, and read all fields in one batched

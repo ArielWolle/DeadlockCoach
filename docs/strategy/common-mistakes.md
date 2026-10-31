@@ -95,8 +95,8 @@ Detection signals are [INFERENCE]; none of the sources describe screenshot detec
 - Cue: "Group up before Midboss. Where are the enemies?"
 
 ## 14. Contesting Unstable Rift alone or late
-- Basis: [WIKI] Rift needs a lone team in the 20m circle; 12s capture; both teams earn progress; revealed on minimap.
-- Detection: Rift icon active at spawn; clock ~ announcement + 20s; player not near. Single frame.
+- Basis: [WIKI] "Both teams earn progress as long as they have at least one player in the capture point, but the Rift can only be claimed once there's only one team in the point." 12 s capture (6-18 s with the comeback modifier); "Any players in the rift point are revealed on the Minimap." (Unstable_Rift, re-read 2026-10-30.)
+- Detection (docs/rift.md): the announcement text / minimap ping at the bridge, then the capture panel under the clock (our % and theirs, the bounty); your marker not at the bridge while it is open. Multi-frame.
 - Confidence: medium.
 - Cue: "Rift is open. Group up and take it."
 

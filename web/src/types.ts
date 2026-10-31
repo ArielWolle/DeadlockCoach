@@ -51,7 +51,21 @@ export interface Snapshot {
   /** Own ability bar, slots 1-4 (4 = ultimate). */ abilities?: AbilityState[];
   /** A Rejuvenator revive on this frame: the grey "Respawn in: 1" screen (still `dead`) or the live frame right after it. Not a real death. */
   revived?: boolean;
+  /** Unstable Rift as observed this match (crates/core RiftState; docs/rift.md). Absent = none seen yet. */
+  rift?: RiftState | null;
 }
+/** Phase: 'announced' (text / minimap ping), 'open' (capture panel up), 'contested' (both teams in the point),
+ *  'captured' (RIFT SECURED!), 'lost' (RIFT LOST), 'draw', 'none' (between Rifts). Unread fields are null. */
+export interface RiftState {
+  phase: 'announced' | 'open' | 'contested' | 'captured' | 'lost' | 'draw' | 'none' | string;
+  lane?: 'Green' | 'Blue' | 'Yellow' | null; side?: 'left' | 'right' | string | null;
+  seen_at?: number | null; opened_at?: number | null;
+  ally_progress?: number | null; enemy_progress?: number | null; ally_rising?: boolean; enemy_rising?: boolean;
+  contested_secs?: number | null; bounty?: number | null; captured_by?: 'ally' | 'enemy' | null; ended_at?: number | null;
+  history?: RiftEvent[];
+}
+export interface RiftEvent { opened_at?: number | null; ended_at?: number | null; outcome?: 'captured' | 'lost' | 'draw' | null;
+  bounty?: number | null; lane?: 'Green' | 'Blue' | 'Yellow' | null; side?: string | null; you_there?: boolean | null }
 export interface ObjectiveBanner { name: 'HIDDEN KING' | 'ARCHMOTHER' | string; own?: boolean | null; health_ratio?: number | null }
 export interface DamageRow { source: string; hits?: number | null; damage: number }
 export type DeathPanelState = 'open' | 'reading' | 'unreadable' | 'closed';

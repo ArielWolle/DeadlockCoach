@@ -40,8 +40,8 @@ Source (facts underlying triggers):
 | M02 | "Urn is down. Contest or deny." | Urn icon on minimap, landing, clock 10:00 + n x 5:00 | W urn descends 12.5s | P2 |
 | M03 | "Urn runner exposed. Cover them." | HUD shows urn carried by ally; enemy markers near route | W courier cannot parry/zip; melee/stun forces drop | P1 |
 | M04 | "Deny the urn orbs." | Urn delivery, orbs on screen at drop point, enemy-colored | W urn souls deniable | P2 |
-| M05 | "Rift announced. Group up." | Rift icon on minimap after global announcement; allies not near | W 20s from announcement to opening | P1 |
-| M06 | "Take the Rift alone, not contested." | Rift circle with only allies inside, capture bar rising | W 12s capture, contested otherwise | P3 |
+| M05 | "Rift in Yellow in 20 seconds: group on the bridge." | Announcement text ("AN UNSTABLE RIFT IS OPENING...") or the minimap ping at a side-lane bridge; enough allies alive (data/coaching/rift.json) | W "20 seconds after the announcement, the Rift opens" (Unstable_Rift, 2026-10-30) | P1 |
+| M06 | "They're alone on the Rift: step in to stop the capture." | Capture panel: their % rising, ours not | W "the Rift can only be claimed once there's only one team in the point" | P1 |
 | M07 | "Midboss is up. Don't die alone." | Midboss minimap icon active (or respawn timer < 30s), player at low health/alone | W Strategy caution | P2 |
 | M08 | "Midboss low. Get ready for Rejuv." | Midboss roar / below 50% (announcement) | W roars at 50% | P2 |
 | M09 | "Punch the crystal. Three credits." | Rejuvenator landed (after 6s descent), allies near | W up to 3 credits, heavy melee | P1 |

@@ -18,4 +18,5 @@ pub mod status;
 pub mod structures;
 pub mod objectives;
 pub mod abilities;
+pub mod rift;
 pub use coach_perception::matching::{ColorLibrary, Library, Region, Template, ncc};

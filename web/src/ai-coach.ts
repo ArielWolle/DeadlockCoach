@@ -42,7 +42,7 @@
 // deathless stretches, a low-health reset, a growing team lead). A fresh one is a cadence event
 // and may be praised in one short specific sentence: focus 'reinforce', at most 1 in 4 AI tips.
 import { deathSpend, resultOf, spendTarget } from './player-profile.ts';
-import type { Cue, Knowledge, Priority, Settings, Snapshot } from './types';
+import type { Cue, Knowledge, Priority, RiftState, Settings, Snapshot } from './types';
 
 export type AiProvider = 'openai' | 'anthropic';
 export type AiTrigger = 'periodic' | 'death' | 'manual';
@@ -742,7 +742,7 @@ export const HERO_ROLES: Record<string, string> = {
 };
 export const phaseOf = (clock: number) => clock < 480 ? 'laning' : clock < 1200 ? 'midgame' : 'lategame';
 /** Major objective moments worth a fresh look (rule timers cover the rest). */
-const MAJOR_OBJECTIVES: Array<[number, string]> = [[300, 'Powerups and medium camps spawn'], [480, "Sinner's Sacrifices and hard camps spawn (laning ends)"], [660, 'first Unstable Rift (about)'],
+const MAJOR_OBJECTIVES: Array<[number, string]> = [[300, 'Powerups and medium camps spawn'], [480, "Sinner's Sacrifices and hard camps spawn (laning ends)"],
   [720, 'Guardians reach minimum resist'], [1080, 'Walkers reach minimum resist'], ...Array.from({ length: 11 }, (_, i) => [600 + i * 300, 'Soul Urn spawns'] as [number, string])];
 /** The next major objective within `horizon` seconds, as [time, text]. */
 export function objectiveSoon(clock: number, horizon = 60): [number, string] | null {
@@ -778,6 +778,9 @@ export function liveTriggers(s: AiSnapshot, history: AiHistory, now: number): Ma
   if (near.allies === 0 && near.missing >= 2) out.set('isolated', `no ally near you and ${near.missing} enemies missing`);
   if (near.missing >= 3) out.set('missing', `${near.missing} enemies missing from the minimap`);
   if (clock != null) { const o = objectiveSoon(clock); if (o) out.set(`objective-soon:${o[0]}`, o[1]); }
+  // The Unstable Rift as observed (announcement / capture panel), one episode per Rift.
+  const rift = s.rift, n = rift?.history?.length ?? 0;
+  if (clock != null && rift && (rift.phase === 'announced' || rift.phase === 'open' || rift.phase === 'contested')) out.set(`objective-soon:rift${n}`, riftLine(rift, clock));
   const souls = num(s.souls);
   if (souls != null && souls >= spendTarget(clock)) out.set('souls-tier', `${fmt(souls)} souls reach the usual ${fmt(spendTarget(clock))} buy`);
   // Carrying the urn is a status, not a debuff (rec13 25:31: "Debuff on you: carrying_urn → disengage").
@@ -1234,10 +1237,57 @@ export function weaknessOf(text: string, profile: string | null | undefined): st
   return null;
 }
 
-/** Upcoming objective events (seconds) within `horizon` of `clock`, from docs/timings/match-timeline.md. */
-export function upcomingObjectives(clock: number, horizon = 180): string[] {
+/** The next Unstable Rift's announcement window [earliest, latest] (game seconds), from the wiki
+ *  (docs/strategy/midgame-macro.md section 8): the in-world effect at 10-12 min, then 6-8 min after
+ *  the previous one; the announcement 60 s after the effect, the opening 20 s after that. A later
+ *  Rift is placed from the last one's observed opening (effect = opening - 80 s). Null while one is up. */
+export function nextRiftWindow(rift: RiftState | null | undefined): [number, number] | null {
+  if (rift && rift.phase !== 'none') return null;
+  const last = rift?.history?.at(-1);
+  if (!last) return [660, 780];
+  if (last.opened_at == null) return null;
+  const effect = last.opened_at - 80;
+  return [effect + 360 + 60, effect + 480 + 60];
+}
+const sideLane = (r: { lane?: string | null }) => r.lane ? `${r.lane} lane bridge` : 'a side-lane bridge (lane not read)';
+/** STATE line for the Unstable Rift: what the capture panel / announcement showed, or when the next
+ *  one is due (estimate) and how the earlier ones went. Only observed values; unread = "not read". */
+export function riftLine(rift: RiftState | null | undefined, clock: number | null): string {
+  const hist = rift?.history ?? [];
+  const past = hist.length ? ` · earlier Rifts: ${hist.map(e => `${clockText(e.ended_at ?? e.opened_at ?? 0)} ${e.outcome === 'captured' ? 'taken by us' : e.outcome === 'lost' ? 'taken by them' : e.outcome === 'draw' ? 'draw' : 'outcome not read'}`).join(', ')}` : '';
+  const pct = (v?: number | null, up?: boolean) => v == null ? 'not read' : `${v}%${up ? ' rising' : ''}`;
+  const r = rift;
+  if (!r || r.phase === 'none') {
+    const w = nextRiftWindow(r);
+    const when = w ? `next Unstable Rift announced between ${clockText(w[0])} and ${clockText(w[1])} (estimate: wiki timing${hist.length ? ' from the last opening' : ''}), it opens 20 s after the announcement` : 'next Unstable Rift: not estimated';
+    return `Unstable Rift: ${when}${past}`;
+  }
+  const where = sideLane(r);
+  switch (r.phase) {
+    case 'announced': {
+      const secs = r.opened_at != null && clock != null ? Math.max(0, r.opened_at - clock) : null;
+      return `Unstable Rift ANNOUNCED${r.seen_at != null ? ` at ${clockText(r.seen_at)}` : ''}: opens${secs != null ? ` in ${secs}s` : ''} at ${where}; only a team alone in the point claims it (12 s, 6 s if behind, 18 s if ahead)${past}`;
+    }
+    case 'open': case 'contested': {
+      const alone = r.enemy_rising && !r.ally_rising ? ' · THEY ARE ALONE IN IT: one of us in the point stops their claim' : r.ally_rising && !r.enemy_rising ? ' · we are alone in it: hold the point' : '';
+      const contest = r.phase === 'contested' ? ` · CONTESTED${r.contested_secs != null ? ` for ${r.contested_secs}s` : ''}: a draw at 60 s drops 13 soul orbs for either team` : '';
+      return `Unstable Rift OPEN at ${where}: ours ${pct(r.ally_progress, r.ally_rising)}, theirs ${pct(r.enemy_progress, r.enemy_rising)}${r.bounty != null ? `, bounty ${fmt(r.bounty)} souls` : ''}${alone}${contest}${past}`;
+    }
+    case 'captured': return `Unstable Rift TAKEN BY US${r.ended_at != null ? ` at ${clockText(r.ended_at)}` : ''}: our Rift Troopers (double health and damage) push ${r.lane ? `${r.lane} lane` : 'its lane'}: walk behind them${past}`;
+    case 'lost': return `Unstable Rift TAKEN BY THEM${r.ended_at != null ? ` at ${clockText(r.ended_at)}` : ''}: their Rift Troopers (double health and damage, no souls) come down ${r.lane ? `${r.lane} lane` : 'its lane'}: meet them at the Guardian with the wave, not alone${past}`;
+    case 'draw': return `Unstable Rift DRAW: 13 soul orbs at ${where} for either team${past}`;
+    default: return `Unstable Rift: ${r.phase}${past}`;
+  }
+}
+
+/** Upcoming objective events (seconds) within `horizon` of `clock`, from docs/timings/match-timeline.md;
+ *  the Unstable Rift from what was observed of it (`rift`) or its first window. */
+export function upcomingObjectives(clock: number, horizon = 180, rift?: RiftState | null): string[] {
   const events: Array<[number, string]> = [[120, 'easy camps spawn'], [300, 'medium camps spawn'], [360, 'Zipline Boost unlocks'], [480, "Sinner's Sacrifices and hard camps spawn"],
-    [660, 'first Unstable Rift (about)'], [720, 'Guardians reach minimum resist'], [1080, 'Walkers reach minimum resist']];
+    [720, 'Guardians reach minimum resist'], [1080, 'Walkers reach minimum resist']];
+  const w = nextRiftWindow(rift);
+  if (w) events.push([w[0], `Unstable Rift announced (earliest, until ${clockText(w[1])})`]);
+  if (rift?.phase === 'announced' && rift.opened_at != null) events.push([rift.opened_at, `Unstable Rift opens at ${sideLane(rift)}`]);
   for (let t = 300; t <= 3600; t += 300) events.push([t, 'Powerups spawn']);
   for (let t = 600; t <= 3600; t += 300) events.push([t, 'Soul Urn spawns']);
   return events.filter(([t]) => t > clock && t - clock <= horizon).sort((a, b) => a[0] - b[0] || a[1].localeCompare(b[1]))
@@ -1503,7 +1553,9 @@ export function buildSummary({ snapshot: s, history, now, trigger, name = defaul
     const objs = [midboss, map.urn ? `Soul Urn ${urn[map.urn]}` : null].filter(Boolean);
     if (objs.length) add(6, `Objectives: ${objs.join(' · ')}`);
   }
-  if (clock != null) { const next = upcomingObjectives(clock); if (next.length) add(6, `Upcoming: ${next.slice(0, 3).join('; ')}`); }
+  if (clock != null) { const next = upcomingObjectives(clock, 180, s.rift); if (next.length) add(6, `Upcoming: ${next.slice(0, 3).join('; ')}`); }
+  // The Rift: observed state (announcement, capture panel, outcome) or the next window and earlier results.
+  if (clock != null && (s.rift || clock >= 540)) { const live = s.rift && s.rift.phase !== 'none'; add(live ? 9 : 5, riftLine(s.rift, clock)); }
   // Deaths.
   const deaths = history.deaths;
   const recentDeaths = history.recent(deaths, now, trigger === 'death' ? 600 : HISTORY_WINDOW_SECS);

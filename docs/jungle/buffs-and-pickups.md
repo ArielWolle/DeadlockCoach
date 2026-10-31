@@ -68,7 +68,7 @@ See camp-types.md for HP, souls and jackpot rules. First spawn 8:00, respawn 5:0
 ## Other jungle-adjacent pickups
 - Cockroaches in tunnels: 1 soul each (COMMUNITY: Deadlock Handbook; not on wiki pages fetched).
 - Soul Urn: spawns 10:00 (+12.5 s descent), every 5:00; carrier cannot zipline/teleport; delivers to opposite lane side; rewards haunted souls and 4 permanent buffs (wiki Cursed_Apple). API soul_urn_spawns: 6 positions, pads: (0.194,0.500) and (0.793,0.505).
-- Unstable Rift: spawns ~11:00 +/-1 min, every 7 +/-1 min after event ends (Cursed_Apple); Strategy page says every 8 min - conflict, UNVERIFIED. API rifts at (0.144,0.5) and (0.856,0.5).
+- Unstable Rift: first in-world effect ~11:00 +/-1 min, then 6-8 min after the previous Rift (Unstable_Rift page, re-read 2026-10-30); the Strategy page's 8 min is outdated. API rifts at (0.144,0.5) and (0.856,0.5); on the recorded minimap (335x350 canonical crop) the announcement ping is centred at about (48,178) and (273,178), beside the urn's bridge spawns (68,175) / (259,175).
 - Midboss: 7/6/5 min respawn pattern; spawns Rejuvenator.
 - Map-wide "Permanent Buffs" tiers at 0, 10, 30 min.
 

@@ -384,7 +384,9 @@ const FULL_ONLY=['counter','death','review','lead','behind','unspent-dead','play
   // Praise (crates/engine/src/praise.rs) needs the top bar, status effects and the structure banner.
   'praise',
   // Plans / threats / reset (crates/engine/src/plans.rs) need the top bar ('lead' covers lead:*).
-  'plan','threat','reset'];
+  'plan','threat','reset',
+  // Unstable Rift (crates/engine/src/rift.rs): the capture panel is read by the full scan only ('plan' covers plan:rift*).
+  'rift'];
 
 /** One coach voice across both analysis paths (each engine keeps its own budget): a Normal / Low
  *  rule call waits the phase gap after any rule call (Engine::phase_gap: 60 s before 8:00, then
