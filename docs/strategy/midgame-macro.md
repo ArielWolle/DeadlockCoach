@@ -84,12 +84,24 @@ Note: Strategy page text says Guardian 1250 / Walker 3500 (older). Souls page va
 - [INFERENCE] Decision: take urn when the enemy cannot reach the delivery side; escort if the enemy has "missing" players; deny orbs at the drop point.
 
 ## 8. Unstable Rift decisions
-- [WIKI] Capture takes 12s with at least one player in the circle; both teams earn progress; claim only when alone. Contested for >50s warns; 60s ends in a draw (13 orbs released, unclaimed souls lost).
-- [WIKI] Trooper counters: troopers cannot contest. Players reviving with Rejuvenator or sent away by Doorman do not contest.
-- [WIKI] Trailing team: capture time 6s (50% faster) and leading team 18s; resist aura within 35m.
-- [WIKI] Winning team gets Rift Troopers (min 5, up to 14 for trailing winner). Rift Troopers have +100% health/damage on first rift (+20% each, cap 160%), 25% melee resist, 30%+ spirit resist, no souls.
-- [WIKI] Players in the zone are revealed on the minimap.
-- [INFERENCE] Treat it as a team fight spot: arrive grouped by the 20s window after the announcement.
+Verbatim from https://deadlock.wiki/Unstable_Rift (re-read 2026-10-30, oldid 159557):
+- [WIKI] "When an Unstable Rift spawns, it first appears as an in-world only visual effect on top of a random side lane's bridge. 60 seconds after this effect appears, an announcement is made to all players and the Rift becomes visible on the map. 20 seconds after the announcement, the Rift opens and creates a capture point with a 20m radius around the bridge, indicated by a green circle effect."
+- [WIKI] "Unstable Rifts spawn starting at 11 minutes, and respawn every 7 minutes thereafter. However, this timing is variable by up to one minute, meaning the first Rift can spawn at any time between 10 and 12 minutes, and subsequent Rifts can spawn between 6 and 8 minutes after the previous Rift."
+- [WIKI] "The Rift takes 12s to be captured (not counting comeback modifiers). Both teams earn progress as long as they have at least one player in the capture point, but the Rift can only be claimed once there's only one team in the point. The progress rate is the same regardless of how many players per team are in the point. Any players in the rift point are revealed on the Minimap."
+- [WIKI] "A player does not contest the Rift while sent to the Baroness by The Doorman, or while reviving with the Rejuvenator."
+- [WIKI] "The team that is trailing in souls receives bonuses that scale linearly based on how behind they are, up to a 15% difference in total net worth."
+- [WIKI] "Capture time reduced to 6s (50% shorter) for the trailing team, and increased to 18s (50% longer) for the leading team."
+- [WIKI] "Bonus Bullet, Spirit, and Debuff Resist, provided within a 35m radius. The max resist starts from 10% at minute 0, scaling by +1% per minute, up to 40% at minute 30."
+- [WIKI] "The rift's base soul bounty is 1482 Souls and increases by 222 Souls per minute of game time. However, unlike other objectives, the rift's bounty starts scaling from 13 minutes, instead of from minute 0."
+- [WIKI] "Rift Troopers will spawn in that lane for the winning team. They are larger, colored black, and don't drop souls when killed. They spawn at a minimum of 5 troopers, every 0.5 seconds."
+- [WIKI] "On the first rift, they have +100% health and damage compared to normal troopers, as well as 25% Melee Resist, and 30% Spirit Resist. The bonus health and damage increases by +20% (additively) for each consecutive rift, up to 160%, and the bonus spirit resist increases by +5%, up to 45% (the melee resist does not increase)."
+- [WIKI] "All souls are distributed instantly and equally to all team members."
+- [WIKI] "If the rift has been contested for over 50s, a warning shows up. After 60s of being contested, the Rift ends in a draw. No Rift Troopers are spawned, and all souls are released as 13 Soul Orbs to be claimed by either team. The orbs float for several seconds, and if unclaimed, they disappear and the souls are lost."
+- [WIKI] "If the trailing team wins the rift, they get a soul bonus that scales based on game time and the team's soul deficit. They also get up to +9 Rift Troopers (14 total)."
+- [WIKI] Troopers cannot contest (only players count).
+- [INFERENCE] Treat it as a team fight spot: arrive grouped by the 20s window after the announcement. The team that has fewer players alive cannot hold the point alone, so with several teammates dead the souls are not worth a lost fight; a trailing team captures faster and fights inside its resist aura, so being behind is a reason to go, not to skip.
+- [INFERENCE] Enemy Rift Troopers have double health and damage and resist melee: meet them with the wave at your Guardian rather than alone in the lane. Your own Rift Troopers are a push to walk behind.
+- Seen in the recordings (docs/rift.md): the announcement reads "AN UNSTABLE RIFT IS OPENING..." / "Go to the Rift to claim its power"; the capture panel under the clock shows both teams' percentages and the bounty, then "RIFT SECURED!" or "RIFT LOST".
 
 ## 9. Mid-Boss decisions
 - [WIKI] Stats: 13000 base HP, +195 HP per minute since spawn, 15 HP/s regen, 15% bullet resist, 35% debuff resist, shield starts at 35 HP +5/min. It only damages those inside its pit and only takes damage from players inside it. Laser beam 100 DPS, 38m range, targets the closest player.

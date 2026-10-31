@@ -56,7 +56,7 @@ All items below are minimap/HUD observables; icon shapes come from the wiki Haun
 - Small respawn = 1:25 after full clear; medium 4:50; large 5:35; Sinner's 5:00.
 - Powerup minimap icons show the type (Weapon/Movement/Spirit/Survival) at 5:00, 10:00 ... Both bridges spawn simultaneously. Uncollected powerups get replaced at next interval.
 - Soul Urn: spawns at 10:00 with 12.5 s descent, moves on its own after 3 min, trackable on minimap.
-- Rift: visual spawn indicator -> 40 s -> global announcement -> 20 s -> contest begins (Cursed_Apple timings, flagged outdated).
+- Rift: visual spawn indicator -> 60 s -> global announcement -> 20 s -> contest begins (Unstable_Rift page, re-read 2026-10-30; the Cursed_Apple 40 s is outdated).
 - Midboss respawn 7 / 6 / 5 min after kills.
 - Healing Snacks, crates, Buff Containers are NOT on the minimap (Healing Snack page).
 

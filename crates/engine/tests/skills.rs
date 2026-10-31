@@ -18,13 +18,14 @@ fn all_rules() -> Vec<Box<dyn Rule>> {
 fn every_card_has_a_skill() {
     // Each card of the card-driven coaches maps to a skill by its card id or by the key family the
     // module gives it (laning: lane:<id>, catch -> map:wave:*, jungle -> map:farm-window).
-    let files: [(&str, &str, fn(&str) -> String); 6] = [
+    let files: [(&str, &str, fn(&str) -> String); 7] = [
         ("active", include_str!("../../../data/coaching/active.json"), |id| format!("active:{id}")),
         ("laning", include_str!("../../../data/coaching/laning.json"), |id| match id { "catch" => "map:wave:Green".into(), "jungle" => "map:farm-window".into(), _ => format!("lane:{id}") }),
         ("positioning", include_str!("../../../data/coaching/positioning.json"), |id| format!("pos:{id}")),
         ("jungle", include_str!("../../../data/coaching/jungle.json"), |id| format!("jungle:{id}")),
         ("praise", include_str!("../../../data/coaching/praise.json"), |id| format!("praise:{id}")),
         ("plans", include_str!("../../../data/coaching/plans.json"), |id| match id { i if i.starts_with("urn_") => format!("plan:{i}:400"), "lead_falling" | "lead_midboss" => "lead:x".into(), "lead_fed" | "fed" => "lead:fed:hero_haze".into(), "reset" => "reset:fight".into(), "threat" => "threat:hero_haze".into(), i => format!("plan:{i}") }),
+        ("rift", include_str!("../../../data/coaching/rift.json"), |id| match id { "skip" => "rift:skip:0".into(), "theirs" => "rift:defend:0".into(), i => format!("plan:rift_{i}:0") }),
     ];
     let mut missing = vec![];
     for (module, json, key) in files {

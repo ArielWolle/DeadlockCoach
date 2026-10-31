@@ -10,7 +10,7 @@ import { AiCoach, AiHistory, MAX_INPUT_CHARS, SUMMARY_MAX_CHARS, SYSTEM_PROMPT, 
   configFrom, effectiveMaxTokens, isOpenRouter, liveTriggers, themesIn, usageOf, weaknessOf, reinforceGate, strangerHeroes, damageByHero, isPraise, HERO_NAMES,
   wordBudget, structuresLine, scrubProfile, ruleThemes, ruleCovered, structureProblem, deathCovered,
   deathAfter, DEATH_PRAISE_SECS, DEATH_PANEL_MAX_WAIT_MS, PROFILE_MAX_CHARS, clipAtBoundary, profileForPrompt, profileLabelSkills, setSkillStateProvider, skillQuiet,
-  rejuvenatorState, rejuvenatorLine, REJUVENATOR_SECS, beforeDeathLine,
+  rejuvenatorState, rejuvenatorLine, REJUVENATOR_SECS, beforeDeathLine, riftLine, nextRiftWindow,
   type Advice, type AbilityRow, type AiConfig, type AiSnapshot, type ItemInfo } from '../src/ai-coach.ts';
 import { defaults, normalize } from '../src/settings.ts';
 import type { Knowledge, Settings } from '../src/types.ts';
@@ -1091,4 +1091,30 @@ test('top bar in the prompt (rec16 34:04, 34:56): teammates exclude you, unread 
   assert.match(why, /enemy-dead window: 3 enemies dead/); assert.doesNotMatch(why, /2 enemies dead/);
   now = 9000; coach.observe(team(0), [], true);
   assert.doesNotMatch(coach.pendingReason(now) ?? '', /enemy-dead window/, 'a closed window is no reason');
+});
+
+test('Unstable Rift: STATE line from the observed state, next-window estimates instead of a fixed "about 11:00"', () => {
+  // No Rift seen: the first window (wiki: effect 10-12 min, announced 60 s later).
+  assert.deepEqual(nextRiftWindow(null), [660, 780]);
+  assert.match(riftLine(null, 600), /next Unstable Rift announced between 11:00 and 13:00 \(estimate/);
+  assert.ok(upcomingObjectives(600, 90).some(x => /Unstable Rift announced \(earliest, until 13:00\) at 11:00/.test(x)), upcomingObjectives(600, 90).join('; '));
+  assert.ok(!upcomingObjectives(600, 90).some(x => /about/.test(x)));
+  // Announced: lane and seconds to the opening.
+  const ann = { phase: 'announced', lane: 'Yellow' as const, seen_at: 661, opened_at: 681, history: [] };
+  assert.match(riftLine(ann, 665), /Unstable Rift ANNOUNCED at 11:01: opens in 16s at Yellow lane bridge/);
+  assert.ok(upcomingObjectives(665, 60, ann).some(x => /Unstable Rift opens at Yellow lane bridge at 11:21/.test(x)));
+  // Open, they are alone in it.
+  const open = { phase: 'open', lane: null, opened_at: 1143, ally_progress: 0, enemy_progress: 43, enemy_rising: true, ally_rising: false, bounty: 2592, history: [] };
+  const l = riftLine(open, 1150);
+  assert.match(l, /OPEN at a side-lane bridge \(lane not read\): ours 0%, theirs 43% rising, bounty 2,592 souls · THEY ARE ALONE IN IT/);
+  assert.match(riftLine({ ...open, phase: 'contested', ally_progress: 99, enemy_progress: 99, contested_secs: 30 }, 1180), /CONTESTED for 30s: a draw at 60 s drops 13 soul orbs/);
+  // After: the history decides the next window (6-8 min after the last effect = opening - 80 s).
+  const done = { phase: 'none', history: [{ opened_at: 684, ended_at: 706, outcome: 'captured' as const, lane: 'Green' as const }] };
+  assert.deepEqual(nextRiftWindow(done), [1024, 1144]);
+  assert.match(riftLine(done, 900), /announced between 17:04 and 19:04 .*earlier Rifts: 11:46 taken by us/);
+  assert.match(riftLine({ phase: 'lost', lane: 'Yellow', ended_at: 1180, history: [] }, 1185), /TAKEN BY THEM at 19:40: their Rift Troopers .* come down Yellow lane/);
+  // The live trigger is one episode per Rift.
+  const h = new AiHistory();
+  const keys = [...liveTriggers(snap(665, { rift: ann }), h, Date.now()).keys()];
+  assert.ok(keys.includes('objective-soon:rift0'), keys.join(','));
 });

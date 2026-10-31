@@ -3,7 +3,7 @@
 Sources (all retrieved 2026-10-25; see the topic files for per-page last-modified dates):
 - https://deadlock.wiki/Cursed_Apple (Map; last modified 2026-10-25; page tagged "outdated, timings should be correct but worth double checking")
 - https://deadlock.wiki/Strategy (last modified 2026-09-14, partly outdated)
-- https://deadlock.wiki/Midboss (2026-10-12), /Soul_Urn (2026-10-23), /Unstable_Rift (2026-09-28), /Sinner's_Sacrifice (2026-10-22), /Trooper (2026-10-23), /Powerup (2026-08-24), /Zipline (2026-10-04), /Lane_Guardian (2026-10-04), /Walker (2026-10-13), /Souls (2026-10-25), /Boon (modified date not captured)
+- https://deadlock.wiki/Midboss (2026-10-12), /Soul_Urn (2026-10-23), /Unstable_Rift (re-read 2026-10-30, oldid 159557), /Sinner's_Sacrifice (2026-10-22), /Trooper (2026-10-23), /Powerup (2026-08-24), /Zipline (2026-10-04), /Lane_Guardian (2026-10-04), /Walker (2026-10-13), /Souls (2026-10-25), /Boon (modified date not captured)
 Game patch/date basis: latest wiki-listed gameplay changes through 2026-10-13 (Soul Urn voice filter) / 2026-10-05 (trooper walking bug fix).
 
 Anything marked UNVERIFIED was not found on a fetched page or the pages disagree.
@@ -20,11 +20,11 @@ Anything marked UNVERIFIED was not found on a fetched page or the pages disagree
 | 6:00 | 360 | Zipline Speed Boost unlocks (+80%, 32 s, cooldown 360 s). Lane Guardian resist reaches 0% (50% -> -50% over first 720 s). Enemy kills here let enemies return fast per Strategy page. |
 | 8:00 | 480 | Sinner's Sacrifices (15 at 11 locations) spawn; respawn 300 s. Hard Haunt camps (11) spawn; respawn 335 s. Laning phase ends per catch-up mechanic (lowest two players receive passive souls after 480 s). |
 | 9:00 | 540 | Walker resist reaches 0% (65% -> -65% over 1080 s). |
-| 10:00 | 600 | Soul Urn spawns (Yellow first), lands 612.5 s; every 300 s afterward (900, 1200, ...). Permanent buff Tier 2 begins. Mid boxes (breakables above Midboss) spawn (180 s respawn). Earliest possible Unstable Rift in Cursed Apple model. |
-| 11:00 +/- 60 s | 660 +/- 60 | Unstable Rift in-world visual effect appears on a random side-lane bridge (Unstable Rift page). ~60 s later global announcement; 20 s after that the Rift opens and capture begins (Unstable Rift page). Cursed Apple page says 40 s to announcement: pages disagree - UNVERIFIED. |
+| 10:00 | 600 | Soul Urn spawns (Yellow first), lands 612.5 s; every 300 s afterward (900, 1200, ...). Permanent buff Tier 2 begins. Mid boxes (breakables above Midboss) spawn (180 s respawn). Earliest possible Unstable Rift in-world effect (Unstable Rift page: first spawn 10-12 min). |
+| 11:00 +/- 60 s | 660 +/- 60 | Unstable Rift in-world visual effect appears on a random side-lane bridge (Unstable Rift page). 60 s later global announcement ("AN UNSTABLE RIFT IS OPENING...", minimap ping at the bridge); 20 s after that the Rift opens and capture begins (Unstable Rift page). The Cursed Apple page's 40 s is outdated: the current Unstable Rift page (2026-10-30) says 60 s and the July 9, 2026 update cut the warning from 25 s to 20 s. Recordings: announcement 11:01 -> panel 11:24 (rec17). |
 | 12:00 | 720 | Lane Guardians reach their minimum resist (-50% = take 50% extra). |
 | 13:00 | 780 | Unstable Rift bounty scaling starts (1482 + 222 per min from minute 13). |
-| after rift | +420 +/- 60 | Next Rifts every 7 min (6 to 8 min window). Strategy page still says 8 min: outdated. |
+| after rift | +420 +/- 60 | Next Rifts 6-8 min after the previous one (wiki: "subsequent Rifts can spawn between 6 and 8 minutes after the previous Rift"). Recordings: openings 6-8 min apart (rec13 ~19:30, 25:30, 33:30, 41:15). Strategy page still says 8 min: outdated. |
 | 15:00 | 900 | Soul Urn #2 (Green lane). Powerup respawn interval. |
 | 18:00 | 1080 | Walkers reach -65% resist (take 65% extra). Medic pack pickup range maxes at 30 m. |
 | 20:00 | 1200 | Waves every 25 s. Patron phase 1 max HP starts +250/min. Soul Urn #3. |
@@ -48,7 +48,7 @@ Anything marked UNVERIFIED was not found on a fetched page or the pages disagree
 ## UNVERIFIED / missing
 - First trooper wave spawn second, zipline travel time, minute-by-minute souls/min or net-worth benchmarks, expected item purchase times (see souls-and-power-curve.md).
 - Soul Well start (150 vs 180 s).
-- Rift announcement lead time (40 vs 60 s).
+- Rift announcement lead time: settled at 60 s (current Unstable Rift page; Cursed Apple's 40 s is outdated).
 
 ## Machine-friendly table
 | name | first_spawn_secs | interval_secs | notes |
@@ -64,7 +64,7 @@ Anything marked UNVERIFIED was not found on a fetched page or the pages disagree
 | sinners_sacrifice | 480 | 300 | 15 machines |
 | hard_camps | 480 | 335 | 11 camps |
 | soul_urn | 600 | 300 | lands 612.5 s |
-| unstable_rift | 660 +/- 60 (effect) | 420 +/- 60 | ann. ~60 s later, opens ~20 s after |
+| unstable_rift | 660 +/- 60 (effect) | 420 +/- 60 | ann. 60 s later, opens 20 s after |
 | guardian_resist_min | 720 | n/a | -50% |
 | walker_resist_min | 1080 | n/a | -65% |
 | wave_25s | 1200 | 25 | |

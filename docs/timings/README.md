@@ -22,7 +22,7 @@ Rules used: facts only from fetched pages; conflicts and gaps marked UNVERIFIED.
 - First trooper wave spawn second: not on wiki.
 - Souls-per-minute benchmarks, net-worth by minute, typical item purchase times: not on wiki.
 - Soul Well start: 150 s (Souls page) vs 180 s (Cursed Apple page).
-- Unstable Rift announcement lead: 60 s (Unstable Rift page) vs 40 s (Cursed Apple page).
+- Unstable Rift announcement lead: 60 s (Unstable Rift page, re-read 2026-10-30) - the Cursed Apple page's 40 s is outdated; settled at 60 s.
 - Walker/Guardian soul-split percentages differ between Walker page text and Souls page; Souls page (newer update note 2026-09-16) used.
 - Boon level-to-souls mapping interpreted from a flattened table.
 - Patron/Haunt/Powerups pages: no patch notes from forums.playdeadlock.com or deadlock-api.com were fetched.

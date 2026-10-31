@@ -108,6 +108,8 @@ pub struct Scanner {
     last_alive_ms: Option<u64>,
     /// Rejuvenator charge icons on the top bar (who holds it).
     charges: crate::objectives::ChargeHolder,
+    /// Unstable Rift: announcement, capture panel, outcome (crate::rift).
+    rift: crate::rift::Tracker,
 }
 
 /// What a HUD frame says about the match boundary (see [`match_boundary`]).
@@ -545,6 +547,7 @@ impl Scanner {
             revive: Default::default(),
             last_alive_ms: None,
             charges: Default::default(),
+            rift: Default::default(),
         }
     }
 
@@ -604,6 +607,7 @@ impl Scanner {
         self.revive.reset();
         self.last_alive_ms = None;
         self.charges = Default::default();
+        self.rift.reset();
     }
 
     fn text(&self, img: &image::DynamicImage, r: crate::Region) -> Option<String> {
@@ -816,6 +820,11 @@ impl Scanner {
         };
         // Objective health banner (a Patron under attack), gated by its bar and name pixels.
         let banner_line = crate::status::objective_banner(&view).map(|(c, health)| (batch.add(c), health));
+        // Unstable Rift: the capture panel under the clock and the announcement text, each behind
+        // a cheap pixel gate (icon teal + dark track; large cream text), from 10:00.
+        let rift_time = self.clock_value.value(now_ms).is_some_and(|c| c >= 590);
+        let rift_panel = rift_time.then(|| crate::rift::panel_crops(&view)).flatten().map(|c| (batch.add_all(c), crate::rift::outcome_pixels(&view).0));
+        let rift_announce = (rift_time && rift_panel.is_none()).then(|| crate::rift::announce_crops(&view)).flatten().map(|c| batch.add_all(c));
         // Team banners and earned-souls labels rotate: 3 + 6 of 12 per frame (the 18x14 label
         // crops are cheap; rec5 read 0.5% of slot-frames with 2 per frame and a wide crop).
         let status_slots = self.status_rr.take(12, 3);
@@ -1033,6 +1042,21 @@ impl Scanner {
         // Lane structures: read on frames with the minimap, states held across frames without it.
         if !no_map { let reads = crate::structures::read(map_crop); self.structures.observe(reads.as_ref(), now_ms); }
         snap.structures = self.structures.states(now_ms, self.map_tracker.layout().or(snap.minimap.as_ref().and_then(|m| m.lanes_mirrored)));
+        // Unstable Rift: this frame's evidence into the per-match tracker.
+        if let Some(clock) = snap.game_clock_secs.filter(|_| matches!(scr, Screen::Gameplay | Screen::Dead | Screen::Scoreboard)) {
+            let pings = if no_map || clock < 590 { [0.0; 2] } else { crate::rift::site_pings(map_crop) };
+            let ping = (0..2).filter(|k| pings[*k] >= crate::rift::PING_MIN).max_by(|a, b| pings[*a].total_cmp(&pings[*b]));
+            let frame = crate::rift::Frame {
+                announced: rift_announce.clone().and_then(|r| lines.get(r)).is_some_and(|l| l.len() == 2 && crate::rift::says_rift_opening(&l[0], &l[1])),
+                ping,
+                // A gated frame counts only with a percent, bounty or outcome read (the Midboss
+                // banner can pass the pixel gate; its text reads none of them).
+                panel: rift_panel.clone().and_then(|(r, red)| lines.get(r).map(|l| crate::rift::interpret(l, red)))
+                    .filter(|(a, e, l)| a.is_some() || e.is_some() || *l != crate::rift::Lower::Unread),
+                you: snap.minimap.as_ref().and_then(|m| m.you).filter(|_| scr == Screen::Gameplay),
+            };
+            snap.rift = self.rift.observe(&frame, clock, self.map_tracker.layout().or(snap.minimap.as_ref().and_then(|m| m.lanes_mirrored)));
+        }
         // Ability bar (live HUD only; the death screen shows the spectated hero's).
         if scr == Screen::Gameplay {
             if let Some(s) = ability_slots {

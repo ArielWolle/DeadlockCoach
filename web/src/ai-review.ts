@@ -67,7 +67,11 @@ export interface TimelineData {
   holds?: ReviewCueText[];
   /** Rejuvenator revives in place read by the vision (`revived`), by clock. */
   revives?: Array<number | null>;
+  /** Unstable Rifts read by the vision (snapshot `rift`): opening, outcome (null = not read), lane,
+   *  bounty and whether your marker was at its bridge while it was open. Absent on older timelines. */
+  rifts?: RiftSeen[];
 }
+export interface RiftSeen { opened: number | null; ended: number | null; outcome: 'captured' | 'lost' | 'draw' | null; lane: string | null; bounty: number | null; youThere: boolean | null }
 const REVIEW_CUE = /^(death:review|review:pattern)(:|$)/;
 const HOLD_CUE = /^(active:(hold_base|urn_hold|team_losing|wait_respawn)|pos:outnumbered)(:|$)/;
 const MAX_POINTS = 8000;
@@ -139,12 +143,30 @@ export class MatchTimeline {
     }
     const by = s.midboss_taken_by;
     if ((by === 'ally' || by === 'enemy') && (this.d.midboss ||= []).at(-1)?.by !== by) this.d.midboss!.push({ t, by });
+    this.rift(s);
     if (dead && t != null) this.panel(s, t, prev?.area === 'dead');
     if (t != null) this.fight(s, t, dead, you);
     for (const c of cues) if (REVIEW_CUE.test(c.key) && !this.d.cues.some(x => x.key === c.key) && this.d.cues.length < 80)
       this.d.cues.push({ clock: t, key: c.key, text: c.text.replace(/\s+/g, ' ').trim().slice(0, 600) });
     for (const c of cues) if (HOLD_CUE.test(c.key) && (this.d.holds ||= []).length < 60 && !this.d.holds.some(x => x.key === c.key && x.clock != null && t != null && t - x.clock < 20))
       this.d.holds.push({ clock: t, key: c.key, text: c.text.replace(/\s+/g, ' ').trim().slice(0, 160) });
+  }
+  /** Unstable Rifts: finished ones from the vision's history, and the current one as soon as its
+   *  outcome is read (a match can end before the history closes it). One entry per opening. */
+  private rift(s: Snapshot) {
+    const r = s.rift; if (!r || typeof r !== 'object') return;
+    const outcome = (o: unknown) => o === 'captured' || o === 'lost' || o === 'draw' ? o : null;
+    const lane = (l: unknown) => l === 'Green' || l === 'Blue' || l === 'Yellow' ? l : null;
+    const put = (x: RiftSeen) => {
+      const xs = (this.d.rifts ||= []);
+      const i = xs.findIndex(y => y.opened != null && x.opened != null && Math.abs(y.opened - x.opened) <= 60);
+      if (i < 0) { if (xs.length < 20) xs.push(x); return; }
+      const y = xs[i]; xs[i] = { opened: y.opened, ended: x.ended ?? y.ended, outcome: x.outcome ?? y.outcome, lane: x.lane ?? y.lane, bounty: x.bounty ?? y.bounty, youThere: x.youThere ?? y.youThere };
+    };
+    for (const e of Array.isArray(r.history) ? r.history : []) if (e && finite(e.opened_at))
+      put({ opened: e.opened_at, ended: finite(e.ended_at) ? e.ended_at : null, outcome: outcome(e.outcome), lane: lane(e.lane), bounty: finite(e.bounty) ? e.bounty : null, youThere: typeof e.you_there === 'boolean' ? e.you_there : null });
+    if (finite(r.opened_at) && r.phase !== 'announced' && r.phase !== 'none')
+      put({ opened: r.opened_at, ended: finite(r.ended_at) ? r.ended_at : null, outcome: outcome(r.phase), lane: lane(r.lane), bounty: finite(r.bounty) ? r.bounty : null, youThere: null });
   }
   /** The damage panel of a death (the latest, fullest reading wins). */
   private panel(s: Snapshot, t: number, continuing: boolean) {
@@ -657,6 +679,18 @@ export function buildDigest(input: DigestInput, maxChars = DIGEST_MAX_CHARS): Di
   const takes = tl.midboss || [];
   if (takes.length) ob.push(`Midboss (Rejuvenator) taken by: ${takes.map(x => `${x.by === 'ally' ? 'your team' : 'the enemy'} at about ${clockText(x.t)}${x.t != null ? ` (${x.by === 'ally' ? 'we' : 'they'} held the Rejuvenator until about ${clockText(x.t + REJUVENATOR_SECS + REJUVENATOR_LAND_SECS)})` : ''}`).join('; ')}.`);
   else if (mb.length) ob.push(gone.length ? `Midboss icon disappeared (taken; by which team not read) at ${gone.join(', ')}.` : 'Midboss: no take observed.');
+  {
+    // Unstable Rifts (vision: the capture panel's "RIFT SECURED!" / "RIFT LOST").
+    const rs = tl.rifts || [];
+    if (rs.length) {
+      const n = (o: RiftSeen['outcome']) => rs.filter(r => r.outcome === o).length;
+      const unread = rs.filter(r => r.outcome == null).length;
+      const there = rs.filter(r => r.youThere != null);
+      ob.push(`Unstable Rifts: ${rs.length} seen: taken by your team ${n('captured')}, by the enemy ${n('lost')}, draws ${n('draw')}${unread ? `, outcome not read ${unread}` : ''}.`);
+      ob.push(`Rifts: ${rs.map(r => `${clockText(r.opened)} ${r.lane ? `${r.lane} ` : ''}${r.outcome === 'captured' ? 'taken by us' : r.outcome === 'lost' ? 'taken by them' : r.outcome === 'draw' ? 'draw' : 'outcome not read'}${r.bounty != null ? ` (${grouped(r.bounty)} souls)` : ''}${r.youThere === true ? ', you were at the bridge' : r.youThere === false ? ', you were elsewhere' : ''}`).join('; ')}.`);
+      if (there.length) ob.push(`You were at the Rift's bridge for ${there.filter(r => r.youThere).length} of ${there.length} Rifts whose bridge and your position were read.`);
+    } else ob.push('Unstable Rift: none read.');
+  }
   if (tl.revives?.length) ob.push(`Rejuvenator revives in place read on your screen: ${tl.revives.map(c => clockText(c)).join(', ')} (each spends one team credit).`);
   // Lane structures: destroyed with the clock they were first read gone, and what still stood.
   {
@@ -749,7 +783,7 @@ You get a MATCH DIGEST read from the screen by an automatic coach, not a video. 
 - Praise real progress: when the comparison with earlier matches says improved, say what improved and by how much.
 - FOCUS GOALS: score each goal first (met or missed, with its evidence), in the summary and the spoken text; a missed goal is the first improvement unless a bigger one exists.
 - The result: use it when the digest has it. After a loss with LEAD AND THROW, name the throw and the moment it turned (the fed enemy, the Rejuvenator, a base dive) before anything else.
-- Use structures and the Midboss only as the digest reads them (OBJECTIVES SEEN); never assume a Walker or Shrine fell.
+- Use structures, the Midboss and the Unstable Rifts only as the digest reads them (OBJECTIVES SEEN); never assume a Walker or Shrine fell or who took a Rift whose outcome was not read.
 - One coach voice, the same as during the match: "you" for the player, "we" for the team, teammates and enemies by name, short reasons, the next action. Direct and warm, like a coach right after the game.
 
 Reply with one JSON object only (no markdown, no code fences):

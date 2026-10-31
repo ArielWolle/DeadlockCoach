@@ -56,7 +56,7 @@ Format (left, top). Bottom = team0.
 Three lane slots are labelled 1, 3, 4 in the API (slot 2 absent: 4-lane remnant). Slot 3 is the centre lane (x about 0.45-0.51), slots 1 and 4 are the left and right side lanes. Which of 1/4 is Yellow vs Green is not stated by the API.
 
 Midboss: center, in sewer under Broadway (wiki); mid-room "mid boxes" above it. API has no midboss entry in `entities`; cosmic veils near (0.45-0.55, 0.48-0.52).
-Unstable Rift sites: (0.144, 0.500) and (0.856, 0.500) (side lanes, wiki: Greenwich or Yellow).
+Unstable Rift sites: (0.144, 0.500) and (0.856, 0.500) (side lanes, wiki: "on top of a random side lane's bridge"). On the recorded minimap (canonical 335x350 crop) the announcement ping ring was centred at about (0.14, 0.51) (rec17 11:03) and (0.81, 0.51) (rec16 12:48, rec11 18:38, rec13 33:21).
 Soul Urn pads: (0.194, 0.500) and (0.793, 0.505).
 Powerup/bridge buff sites: (0.317, 0.494) and (0.683, 0.506).
 Shops (API): 9 listed (kind lane/secret/base). Secret shops: (0.318, 0.448) and (0.682, 0.552). Wiki: 10 shops incl. 2 secret, 1 per base, 1 beside each Guardian.

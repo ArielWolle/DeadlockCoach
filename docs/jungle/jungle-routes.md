@@ -84,4 +84,4 @@ Respawn: Small 1:25, Medium 4:50, Large 5:35, Sinner's 5:00 [WIKI]. Timers start
 - Medium camp first-spawn: wiki 5:00 (changed from 6:00 on 2026-05-22). Mobalytics (Aug) still lists 5:00 as spawn but advises ~6:00 for first clear.
 - Large soul value: wiki 181; Mobalytics 196 and medium 71 (older numbers). Use wiki/API (181 and 68).
 - Sinner's jackpot starts at 300 damage (wiki) / 400 (Mobalytics) - wiki says both: 3-or-fewer bulbs picks speed, 1-or-0 bulbs starts Jackpot (400). UNVERIFIED which minigame description is current.
-- Rift respawn: 7 +/-1 min (Cursed_Apple) vs 8 min (Strategy).
+- Rift respawn: 7 +/-1 min (Unstable_Rift page, re-read 2026-10-30: "between 6 and 8 minutes after the previous Rift"); the Strategy page's 8 min is outdated.

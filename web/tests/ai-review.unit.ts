@@ -344,3 +344,22 @@ test('digest deaths (coach-review-8 D12): top bar at the death, the walk-out fro
   for (const f of rev) { const t = f.snapshot.game_clock_secs!; if (t === 500) f.snapshot.midboss_taken_by = 'ally'; if (t === 560) (f.snapshot as Snapshot & { revived?: boolean }).revived = true; }
   assert.match(buildDigest({ match: ended(rev)[0] }).text, /Rejuvenator revives in place read on your screen: 9:20 \(each spends one team credit\)\./);
 });
+
+test('digest: Unstable Rifts taken, lost and unread, and whether you were at the bridge', () => {
+  const frames = match('hero_orion', 30, 1500, [], { postGame: false });
+  for (const f of frames) {
+    const t = f.snapshot.game_clock_secs!;
+    if (t >= 690 && t < 710) f.snapshot.rift = { phase: 'open', opened_at: 684, ally_progress: 50, enemy_progress: 0, bounty: 1482, history: [] };
+    else if (t >= 710 && t < 830) f.snapshot.rift = { phase: 'captured', opened_at: 684, ended_at: 710, lane: 'Green', bounty: 1482, captured_by: 'ally', history: [] };
+    else if (t >= 830 && t < 1150) f.snapshot.rift = { phase: 'none', history: [{ opened_at: 684, ended_at: 710, outcome: 'captured', lane: 'Green', bounty: 1482, you_there: true }] };
+    else if (t >= 1150) f.snapshot.rift = { phase: t < 1185 ? 'contested' : 'lost', opened_at: 1143, ended_at: t < 1185 ? null : 1185, history: [{ opened_at: 684, ended_at: 710, outcome: 'captured', lane: 'Green', bounty: 1482, you_there: true }] };
+  }
+  const m = ended(frames).at(-1)!;
+  assert.equal(m.timeline.rifts?.length, 2);
+  const d = buildDigest({ match: m }).text;
+  assert.match(d, /Unstable Rifts: 2 seen: taken by your team 1, by the enemy 1, draws 0\./);
+  assert.match(d, /Rifts: 11:24 Green taken by us \(1,482 souls\), you were at the bridge; 19:03 taken by them\./);
+  assert.match(d, /You were at the Rift's bridge for 1 of 1 Rifts/);
+  // None read: said so.
+  assert.match(buildDigest({ match: ended(match('hero_orion', 30, 700, []))[0] }).text, /Unstable Rift: none read\./);
+});

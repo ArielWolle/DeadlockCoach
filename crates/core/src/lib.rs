@@ -134,6 +134,62 @@ pub struct GameSnapshot {
     /// the team spent a Rejuvenator charge.
     #[serde(default)]
     pub revived: bool,
+    /// Unstable Rift as observed this match (announcement text / minimap ping, the capture panel
+    /// under the clock, its "RIFT SECURED!" / "RIFT LOST" line). None = no Rift seen yet.
+    #[serde(default)]
+    pub rift: Option<RiftState>,
+}
+
+/// The current Unstable Rift and the ones before it this match. Only observed facts: an unread
+/// field stays None (a lane needs the minimap ping or your marker at a bridge while it is open).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RiftState {
+    /// "announced" (text or minimap ping seen, not open yet), "open" (capture panel up),
+    /// "contested" (both teams in the point: both sides 95%+ or both rising), "captured" (we took
+    /// it: "RIFT SECURED!"), "lost" ("RIFT LOST"), "draw" (a draw read on the panel), "none"
+    /// (between Rifts; `history` says what happened).
+    pub phase: String,
+    /// Lane of the Rift's bridge (your minimap colours), when the ping or your marker placed it.
+    pub lane: Option<Lane>,
+    /// "left" / "right" bridge on your minimap, when known.
+    pub side: Option<String>,
+    /// Game clock when this Rift was first seen (announcement, else the panel).
+    pub seen_at: Option<u32>,
+    /// Game clock it opened (first panel frame; announcement + 20 s while not open yet).
+    pub opened_at: Option<u32>,
+    /// Capture progress on the panel (0-100), ours and theirs; None when not read.
+    pub ally_progress: Option<u8>,
+    pub enemy_progress: Option<u8>,
+    /// Progress grew since the previous read (that team has a player in the point).
+    pub ally_rising: bool,
+    pub enemy_rising: bool,
+    /// Seconds both teams have been in the point (observed), while contested.
+    pub contested_secs: Option<u32>,
+    /// Soul bounty shown on the panel.
+    pub bounty: Option<u32>,
+    /// "ally" / "enemy" once the outcome line was read.
+    pub captured_by: Option<String>,
+    /// Game clock the outcome was read.
+    pub ended_at: Option<u32>,
+    /// Finished Rifts this match, oldest first.
+    pub history: Vec<RiftEvent>,
+}
+
+/// One finished Rift.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RiftEvent {
+    pub opened_at: Option<u32>,
+    pub ended_at: Option<u32>,
+    /// "captured" / "lost" / "draw"; None when the panel went without an outcome read.
+    pub outcome: Option<String>,
+    pub bounty: Option<u32>,
+    pub lane: Option<Lane>,
+    pub side: Option<String>,
+    /// Your marker was at the Rift's bridge while it was open (Some(false): seen elsewhere);
+    /// None when the bridge or your position was not known.
+    pub you_there: Option<bool>,
 }
 
 /// One lane structure's observed state.
