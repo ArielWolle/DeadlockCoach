@@ -49,7 +49,7 @@ thresholds of `data/coaching/review.json`:
 | Deaths | Entering the death screen, or a death screen more than 60 s after the previous one. A single gameplay frame between death screens is merged unless the next timer shows a fresh death. From 10:00 on, a death screen that turns into gameplay within 10 s without a longer timer is the grey "Respawn in: 1" screen, not a death (rec4 26:32, rec8 39:17, rec11 25:17: the scoreboard death count does not change). The damage-panel cause is the latest read. |
 | Death context | From the 15 s before the last alive reading (`death_window_secs`): fall speed from the healthiest reading >= 30% (burst = <= 15 s), souls held, alone (all of the last 4 located allies > 0.25 away), in the enemy half (y < 0.48) with >= 3 enemies without a top-bar health bar, teammates who died in the window, seconds since respawn (<= 90 s = soon), every HP read of the last 30 s under 60% (weak entry). Each is `null` when it could not be observed; a death with no readable frames before it is marked "no evidence". |
 | Killer family | Victor's Aura of Suffering / Still Life, Drifter's Stalker's Mark and melee hits count as melee range; Bebop's Hyper Beam, structures, troopers, gun damage and unknown abilities (grouped by first word, so OCR variants match) are named but range is not claimed. Optional `death_damage` / `death_killing_blow` are used when the reader provides them. |
-| Fights | A minimap cluster of >= 2 allies and >= 2 enemies within 0.13; joined if you were within 0.3 (a third of the map); a cluster absent for less than 10 s is the same fight. |
+| Fights | See [Fights](#fights): hero deaths on the top bar less than 15 s apart, with 2+ deaths or a death in a minimap clash; joined / missed / while dead / healing / unknown from the whole fight. |
 | Enemy-dead windows | >= 2 enemies dead for >= 20 s while you are alive; *used* when you were in their half (y < 0.5, or the zone label says their base) or the front of the lane you were on moved >= 0.15 toward them; the start of each used window and whether it reached their base are kept. Unknown frames keep a window open without adding time. A top-bar portrait read as dead counts only once its respawn countdown was read (`respawn_secs` / `respawn_observations`): rec12 had Infernus "dead" on most frames from 4:40 on. |
 | Soul Urn | Status effect `carrying_urn`: a carry ends when it is gone for > 8 s while alive; *delivered* when no death follows within 10 s, *lost* when you die carrying it. |
 | Death-screen shopping | Per death, souls held just before it minus the lowest souls read until the first alive frame (`spentDead`); unsecured souls lost at the death are included (small next to an item). |
@@ -103,6 +103,101 @@ next matches averaged in (rec9 67%, rec10 64%, rec11 72%, rec12 85%). The fix th
 metric to observed game time was right, but records stored before it kept their old dead time, the
 zone label was not used, and short or menu-only records counted. Now: the zone label locates you,
 only plausible matches count (below), and old-metric records never feed time dead.
+
+## Fights
+
+A team fight is heroes of both teams fighting and dying close together (`FightTracker` in
+`web/src/player-profile.ts`; the review timeline uses the same tracker, so the digest's times and
+the profile's counts agree):
+
+- **Deaths** come from the top bar: a portrait alive on two reads, then dead on two reads in a row
+  with its respawn countdown read (dated at the first dead read). One alive read inside a death is
+  a flicker (rec16 33:04), one dead read alone a misread, and a portrait cannot die twice within
+  20 s. Your own death screen is a death at once; the next ally portrait death within 15 s is that
+  same death (your countdown can be read 10 s late: rec16 32:33 / 32:44).
+- **One fight** = deaths less than 15 s apart. It counts with 2+ deaths, or 1 death with a minimap
+  **clash** (2+ of ours, you included, and 2+ of theirs within 0.13) from 10 s before its first
+  death to 3 s after its last. A clash alone is posturing (laning 2v2s), one death alone a pick;
+  clashes never chain fights (they turned rec16 15:23-17:52 into one 12-death "fight").
+- At most one ally marker within 0.04 of yours is your own icon, not a teammate.
+
+Your status, from 5 s before its first death to 3 s after its last (the whole fight, not its first
+frame):
+
+| Status | When |
+| --- | --- |
+| joined | you died in it; or your marker was within 0.2 of a hero of its clash (±3 s); or an enemy within 0.13 of you; or, for a fight without a clash, 2 allies within 0.13; or your health fell 15%+ and you were not read away from its clash |
+| dead | otherwise: dead during it, or respawned less than 10 s before it began |
+| healing | under 35% health in the 15 s before it began (walking back to heal: rec16 13:53 at 13%, 41% in base at 13:58) |
+| missed | alive, located, and its clash was read away from you (0.2+) |
+| unknown | your marker not read (live full scans, shop screen), or deaths without a clash: where it happened is not known. Never counted as missed |
+
+The matches table shows `joined J of N, missed M (D while dead, H healing, U unknown)` (zeros left
+out; N = every fight; hovering the cell lists each fight with its clock, status and evidence).
+"Misses team fights" / "Shows up for fights" and the review's comparison use missed / (joined +
+missed): fights while dead, healing or unknown are no evidence. Matches stored before this count
+(`fights.v` absent) show "— (older version)" and are left out of traits and comparisons.
+
+### What was wrong (rec13, rec16, rec17 screenshots)
+
+1. Any minimap cluster of 2+ allies and 2+ enemies was a "team fight", with no death needed: lane
+   2v2s and pokes counted (rec17: 23 "fights", most without a kill; rec13 11:11-12:49 four lane
+   clashes counted as missed).
+2. Your own marker was not a member of the cluster, but your own icon read as an ally was: "joined"
+   at 0.01-0.03 from yourself (rec17), while a 2v2 you were in with one teammate was "missed"
+   (rec13 12:20).
+3. Joined = within 0.3 of the cluster (a third of the map: another lane). rec16 13:53 (in base at
+   13%, 0.30) and 20:22 (left lane, 0.28) were "joined".
+4. The verdict was taken at the first frame only: arriving later never counted, retreating did.
+5. Frames without your marker did not extend a fight: one fight became two with opposite verdicts
+   (rec16 20:22 joined + 20:43 missed).
+6. Fights seen only on the top bar (enemies dead are not on the minimap) were never counted: rec16
+   17:46 (three enemies died around you), 23:41-24:31 (seven deaths, you died in it), 32:21, 34:14.
+7. Unread marker = no fight, and dead frames counted as fights "while dead" from the minimap (rec13
+   live: 1 joined / 1 missed / 9 while dead; the digest's own list said 4).
+8. The profile and the review timeline counted separately and disagreed (rec13 live 11 vs 6).
+9. The box showed `13 / 4` under "Fights joined / missed": no total, no dead / unknown.
+
+### Before / after on the recordings
+
+Box text (fresh replays with the fixed top bar; live = the Replay lab's live snapshots):
+
+| Recording | Before | After |
+| --- | --- | --- |
+| rec16 (fresh replay) | 13 / 4 | joined 17 of 23, missed 2 (2 while dead, 1 healing, 1 unknown) |
+| rec17 (fresh replay) | 23 / 0 | joined 14 of 17, missed 1 (1 healing, 1 unknown) |
+| rec13 (replay1) | 18 / 8 | joined 24 of 28, missed 1 (3 unknown) |
+| rec16 live | 4 / 2 | joined 12 of 26, missed 1 (2 while dead, 1 healing, 10 unknown) |
+| rec17 live | 8 / 0 | joined 6 of 18, missed 2 (2 healing, 8 unknown) |
+| rec13 live | 1 / 1 (9 while dead) | joined 13 of 30 (2 while dead, 1 healing, 14 unknown) |
+
+Graded against the screenshots (minimap with the vision's markers drawn on, top bar):
+
+| Fight (rec16) | Before | After | Screenshots |
+| --- | --- | --- | --- |
+| 13:21-13:41 lane fight, e2 dies | joined | joined (13:41) | right: you in the cluster, hp 90 → 25 |
+| 13:53 / 13:58-14:02, three of ours die on the right | joined (0.30) | healing | wrong before: you walked to base at 13% and healed |
+| 14:45, 15:23, 21:07, 21:28 clusters, no death | joined / joined / missed / joined | no fight | no kill, no damage: not fights |
+| 15:33-15:46, e3 + e4 | joined | joined | right: 0.17 away, hp 96 → 77 |
+| 16:23-16:40, a0 / e0 / a1 in mid | missed (16:13) | missed | right: you on the far left |
+| 17:24-17:50, five deaths (three enemies 17:46-17:50) | joined (17:18) | joined | right: you with three allies as they died |
+| 18:48-19:01, 19:19-19:49 | — | joined | right: you at centre, hp to 37%, enemies on you |
+| 20:22-20:43, four of ours die in mid | joined + missed | missed (one fight) | right: you on the left lane at 100% |
+| 23:21, 23:41-24:31 (you die) | — | joined | right |
+| 25:13, 26:07-26:36 (base defence, seven deaths) | joined | joined | right |
+| 27:42 (you die), 32:21 (you die), 36:44 (you die) | — | joined | right |
+| 29:08-29:43, five deaths | missed (29:05) | joined | you fought an enemy at centre (29:16) while allies died around you |
+| 33:07-33:23, 33:41-33:55 | — | while dead (two fights) | right |
+| 34:11 (enemies at our base) | — | no fight (one death, no clash read) | you defended base, hp 98 → 64: missed by the count, not called missed |
+| 34:36-34:44, two enemies die | — | unknown | you in base with allies, no clash read: where they died is not known |
+| 36:10-36:16 | joined (36:19) | joined | right |
+
+rec17: the old 23 "joined" were mostly 2v2 clusters without a kill (16:42, 17:16, 18:08, 21:14,
+23:56, 25:42, 28:59: no fights); the new 17 fights include 12:36 (healing: you at 12% in base while
+three died on the right: right), 26:03 and 32:23 (you died in them: right), 28:10 (one death on the
+left while you were at the right Urn: missed) and 29:23 (unknown: no clash read). rec13: the old
+"missed" 6:54 (you died in it at 7:03) and 11:11-12:49 (lane clashes, no kill; at 12:20 you were in
+the clash) were wrong; 13:38 missed (two of ours died on the left while you were on the right) is right.
 
 ## Which matches count
 
@@ -428,7 +523,7 @@ summary cases.
 | Killers | melee x2, Hyper Beam, Chimera | Victor's aura x2, Drifter, gun damage | rec5: every death in melee range (Victor, Drifter) |
 | Enemy-dead windows unused | 2 (20:28, 32:07) | 1 (38:21) | 20:24, 32:07 / 37:24-38:38 |
 | Jungle (alive) | 15% | 17% | 7-17% / ~11% (not a problem) |
-| Fights joined | 8 of 11 | 11 of 16 | 9 of 14 / 7 of 12 |
+| Fights joined | 13 of 15, missed 1 (1 unknown) | 7 of 9 (1 while dead, 1 unknown) | 9 of 14 / 7 of 12 |
 
 Weaknesses produced: killed at close range (5 of 6), dying too often (21% of 43 observed minutes,
 2.1 per 10 min), dies soon after respawning, enemy-dead windows unused (3 of 3), gets burst down, stays in

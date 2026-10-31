@@ -11,7 +11,7 @@
 //   buildReviewPrompt / parseReview / requestReview   prompt, tolerant JSON parsing, gateway call
 //   ReviewStore     localStorage list of reviews (newest first, cap 20, one per match)
 // Nothing here touches the DOM; tests/ai-review.unit.ts imports it directly.
-import { LIMITS, PlayerProfile, killerFamily, PlayerProfileModel, REVIEW, chooseGoals, deadOf, deathSpend, goalTip, scoreGoals, spanOf, spendTarget, resultOf, type GoalResult, type KeyValueStore, type MatchGoal, type MatchRecord } from './player-profile.ts';
+import { FightTracker, LIMITS, PlayerProfile, killerFamily, PlayerProfileModel, REVIEW, chooseGoals, fightsLegacy, fightsText, type FightStatus, deadOf, deathSpend, goalTip, scoreGoals, spanOf, spendTarget, resultOf, type GoalResult, type KeyValueStore, type MatchGoal, type MatchRecord } from './player-profile.ts';
 import { GatewayError, HERO_ROLES, REJUVENATOR_LAND_SECS, REJUVENATOR_SECS, aiExchanges, heroMatchup, callGateway, clockText, extractText, jsonCandidates, masteryText, retrieve, sections, type AiConfig, type CallOptions } from './ai-coach.ts';
 import type { Cue, Knowledge, Snapshot } from './types';
 
@@ -51,7 +51,9 @@ export const SELF_ECHO = 0.04;
 export interface DeathPanel { t: number; rows: Array<{ source: string; damage: number }>; killingBlow: string | null; total: number | null; effectsBefore: string[];
   /** The vision's `death_panel` state seen on this death screen ('open', 'closed', 'unreadable', 'reading'). */
   state?: string | null }
-export interface FightEpisode { t: number; status: 'joined' | 'missed' | 'dead' }
+/** One team fight (player-profile.ts FightTracker, the same verdicts as the profile's counts).
+ *  `end` / `deaths` / `why` are absent on timelines stored before them. */
+export interface FightEpisode { t: number; status: FightStatus; end?: number; deaths?: number; why?: string }
 export interface ReviewCueText { clock: number | null; key: string; text: string }
 export interface TimelineData {
   points: TimelinePoint[]; panels: DeathPanel[]; fights: FightEpisode[]; cues: ReviewCueText[];
@@ -78,12 +80,12 @@ const MAX_POINTS = 8000;
 
 export class MatchTimeline {
   private d: TimelineData = MatchTimeline.empty();
-  private fightLast: number | null = null;
+  private fightTracker = new FightTracker();
   private lastClock: number | null = null;
   private structState: Record<string, boolean> = {};
   private revivedWas = false;
   static empty(): TimelineData { return { points: [], panels: [], fights: [], cues: [], kda: null, enemies: {}, allies: {}, structures: [], midboss: [], result: null, holds: [], revives: [] }; }
-  reset() { this.d = MatchTimeline.empty(); this.fightLast = null; this.lastClock = null; this.structState = {}; this.revivedWas = false; }
+  reset() { this.d = MatchTimeline.empty(); this.fightTracker = new FightTracker(); this.lastClock = null; this.structState = {}; this.revivedWas = false; }
   get size() { return this.d.points.length; }
   /** One analyzed frame (in order). `cues` = the rule coach's cues of this frame (death reviews and pattern texts are kept). */
   add(s: Snapshot, wall: number | null, cues: Cue[] = []) {
@@ -145,7 +147,7 @@ export class MatchTimeline {
     if ((by === 'ally' || by === 'enemy') && (this.d.midboss ||= []).at(-1)?.by !== by) this.d.midboss!.push({ t, by });
     this.rift(s);
     if (dead && t != null) this.panel(s, t, prev?.area === 'dead');
-    if (t != null) this.fight(s, t, dead, you);
+    this.fightTracker.add(s, t);
     for (const c of cues) if (REVIEW_CUE.test(c.key) && !this.d.cues.some(x => x.key === c.key) && this.d.cues.length < 80)
       this.d.cues.push({ clock: t, key: c.key, text: c.text.replace(/\s+/g, ' ').trim().slice(0, 600) });
     for (const c of cues) if (HOLD_CUE.test(c.key) && (this.d.holds ||= []).length < 60 && !this.d.holds.some(x => x.key === c.key && x.clock != null && t != null && t - x.clock < 20))
@@ -187,24 +189,12 @@ export class MatchTimeline {
     if (finite(s.death_total_damage) && s.death_total_damage > 0) last.total = Math.round(s.death_total_damage);
     if (!last.killingBlow && typeof s.death_cause === 'string' && s.death_cause.trim()) last.killingBlow = s.death_cause.trim().slice(0, 40);
   }
-  /** Fight episodes as the profile counts them (review.rs pattern()): a cluster of >= 2 allies and
-   *  >= 2 enemies near an ally; joined when you were within a third of the map at its start. */
-  private fight(s: Snapshot, t: number, dead: boolean, you: { x: number; y: number } | null) {
-    const live = (s.minimap?.heroes || []).filter(h => h.hits >= 2 && h.unseen_ms <= 3000);
-    let at: number | null = null;
-    for (const a of live.filter(h => h.ally)) {
-      const allies = live.filter(o => o.ally && dist(o.pos, a.pos) <= REVIEW.fight_radius).length;
-      const enemies = live.filter(e => !e.ally && dist(e.pos, a.pos) <= REVIEW.fight_radius).length;
-      if (allies >= 2 && enemies >= 2 && you) { const d = dist(a.pos, you); if (at == null || d < at) at = d; }
-    }
-    if (at == null) return;
-    if (this.fightLast == null || t - this.fightLast > LIMITS.fight_gap_secs) {
-      this.d.fights.push({ t, status: dead ? 'dead' : at > REVIEW.missed_fight_distance ? 'missed' : 'joined' });
-      if (this.d.fights.length > 120) this.d.fights.shift();
-    }
-    this.fightLast = t;
+  /** Team fights as the profile counts them (FightTracker: deaths and clashes, your evidence). */
+  data(): TimelineData {
+    const d = structuredClone(this.d);
+    d.fights = this.fightTracker.episodes().map(e => ({ t: e.t, status: e.s, end: e.end, deaths: e.deaths, why: e.why }));
+    return d;
   }
-  data(): TimelineData { return structuredClone(this.d); }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -287,7 +277,7 @@ export const METRICS: Metric[] = [
   { id: 'alone', label: 'Deaths with no ally nearby', traits: ['alone_deaths'], unit: '%', minAbs: 0.1, f: m => { const d = m.deaths.filter(x => x.alone != null); return d.length ? { num: d.filter(x => x.alone).length, den: d.length } : null; } },
   { id: 'respawn', label: `Deaths within ${REVIEW.respawn_window_secs} s of respawning`, traits: ['respawn_deaths'], unit: '%', minAbs: 0.1, f: m => m.deaths.length ? { num: m.deaths.filter(d => d.afterRespawnSecs != null && d.afterRespawnSecs <= REVIEW.respawn_window_secs).length, den: m.deaths.length } : null },
   { id: 'weak', label: 'Deaths after going back in under 60% health', traits: ['weak_entry'], unit: '%', minAbs: 0.1, f: m => { const d = m.deaths.filter(x => x.weakEntry != null); return d.length ? { num: d.filter(x => x.weakEntry).length, den: d.length } : null; } },
-  { id: 'fights', label: 'Team fights missed', traits: ['missed_fights'], unit: '%', minAbs: 0.1, f: m => m.fights.joined + m.fights.missed ? { num: m.fights.missed, den: m.fights.joined + m.fights.missed } : null },
+  { id: 'fights', label: 'Team fights missed', traits: ['missed_fights'], unit: '%', minAbs: 0.1, f: m => !fightsLegacy(m) && m.fights.joined + m.fights.missed ? { num: m.fights.missed, den: m.fights.joined + m.fights.missed } : null },
   { id: 'windows', label: 'Enemy-dead windows unused', traits: ['unused_windows'], unit: '%', minAbs: 0.15, f: m => m.windows.used + m.windows.unused ? { num: m.windows.unused, den: m.windows.used + m.windows.unused } : null },
   { id: 'jungle', label: 'Alive time in the jungle', traits: ['jungle_heavy'], unit: '%', minAbs: 0.05, f: m => alive(m) >= 300 ? { num: m.time.jungle, den: alive(m) } : null },
   { id: 'lowhp', label: 'Low-health moments that ended in a death', traits: ['low_hp'], unit: '%', minAbs: 0.1, f: m => m.lowHp.died + m.lowHp.survived ? { num: m.lowHp.died, den: m.lowHp.died + m.lowHp.survived } : null },
@@ -513,7 +503,7 @@ export function strengthsOf(match: EndedMatch, comparisons: Comparison[] = []): 
   }
   if (rec.lowHp.episodes >= 2 && rec.lowHp.survived >= rec.lowHp.died * 2 && rec.lowHp.survived >= 2)
     out.push({ id: 'lowhp', text: `Survived ${rec.lowHp.survived} of ${rec.lowHp.episodes} moments under 30% health: you got out and reset instead of dying.` });
-  if (rec.fights.joined >= 1 && rec.fights.missed === 0) out.push({ id: 'fights', text: `Joined every team fight observed (${rec.fights.joined}, none missed).` });
+  if (!fightsLegacy(rec) && rec.fights.joined >= 2 && rec.fights.missed === 0) out.push({ id: 'fights', text: `Joined every team fight observed (${rec.fights.joined}, none missed).` });
   const improved = comparisons.filter(c => c.verdict === 'improved' && c.before && !['dead', 'close'].includes(c.id));
   if (improved.length) out.push({ id: 'improved', text: `Better than your earlier matches: ${improved.map(c => `${c.label.toLowerCase()} ${c.now.replace(/ \(.*\)$/, '')} vs ${c.before!.replace(/ over .*/, '')}`).join('; ')}.` });
   return out;
@@ -667,8 +657,12 @@ export function buildDigest(input: DigestInput, maxChars = DIGEST_MAX_CHARS): Di
   const fl: string[] = [];
   const by = (s: FightEpisode['status']) => tl.fights.filter(f => f.status === s).map(f => clockText(f.t));
   const list = (xs: string[]) => xs.length ? `${xs.slice(0, 12).join(', ')}${xs.length > 12 ? ` and ${xs.length - 12} more` : ''}` : 'none';
-  fl.push(`Team fights (2+ allies vs 2+ enemies on the minimap): joined ${rec.fights.joined}, missed ${rec.fights.missed} (more than a third of the map away), while dead ${rec.fights.whileDead}.`);
-  if (tl.fights.length) fl.push(`Joined at: ${list(by('joined'))}. Missed at: ${list(by('missed'))}. While dead: ${list(by('dead'))}.`);
+  const f = rec.fights;
+  if (fightsLegacy(rec)) fl.push('Team fights: counted by an older version (not comparable).');
+  else {
+    fl.push(`Team fights (2+ hero deaths, or a death in a minimap clash of 2+ vs 2+, within ${LIMITS.fight_gap_secs} s): ${fightsText(f)}. Joined = died in it, within ${LIMITS.fight_join_distance} map of it or lost ${LIMITS.fight_damage * 100}%+ health in it; missed = alive and located elsewhere; unknown = your marker not read.`);
+    if (tl.fights.length) fl.push(`Joined at: ${list(by('joined'))}. Missed at: ${list(by('missed'))}. While dead: ${list(by('dead'))}.${by('healing').length ? ` Healing: ${list(by('healing'))}.` : ''}${by('unknown').length ? ` Unknown: ${list(by('unknown'))}.` : ''}`);
+  }
   fl.push(`Enemy-dead windows (2+ enemies dead for 20+ s while you were alive): used ${rec.windows.used}, unused ${rec.windows.unused}${rec.windows.unusedAt.length ? ` (unused at ${rec.windows.unusedAt.map(c => clockText(c)).join(', ')})` : ''}.`);
   secs.push({ title: 'FIGHTS AND WINDOWS', lines: fl, keep: 3 });
 

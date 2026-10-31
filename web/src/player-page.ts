@@ -85,9 +85,11 @@ export class PlayerPage {
       const date = new Date(r.date);
       const cells = [`${date.toLocaleDateString()} ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}${r.source === 'replay' ? ' · replay' : ''}${r.partial ? ' · partial' : ''}${r.excluded ? ` · not counted: ${r.excluded}` : ''}`,
         `${r.heroName}${r.result ? ` · ${r.result}` : ''}`, `${r.minutes} min`, String(r.deaths), r.deadPct == null ? (r.legacy ? '— (older version)' : '—') : `${r.deadPct}%`,
-        `${r.fightsJoined} / ${r.fightsMissed}`, r.unspentAtDeath, r.topKiller || '—',
+        r.fights, r.unspentAtDeath, r.topKiller || '—',
         r.goals.length ? r.goals.map(g => `${g.met === true ? 'Met' : g.met === false ? 'Missed' : '?'}: ${g.text}`).join(' · ') : '—'];
       for (const c of cells) tr.append(el('td', c));
+      // The fights cell lists every fight (clock, status, evidence) on hover.
+      if (r.fightsDetail) (tr.children[5] as HTMLElement).title = r.fightsDetail;
       body.append(tr);
     }
     $('player-prompt').textContent = p.promptText(select.value || null) || 'Nothing learned yet.';

@@ -47,8 +47,24 @@ export const LIMITS = {
   burst_secs: 15, burst_from: 0.3,
   /** Low health = under 30% while alive (the engine's critical band). */
   low_hp: 0.3, low_hp_safe: 0.5,
-  /** A fight cluster that disappears for less than this is the same fight (minimap flicker). */
-  fight_gap_secs: 10,
+  /** Fights (docs/player-profile.md "Fights"): fight signals (a minimap clash or a hero death on
+   *  the top bar) less than this apart are one fight (rec16 20:22-20:56: four of ours died over 34 s). */
+  fight_gap_secs: 15,
+  /** You joined when you were this close (map units) to a hero of the clash: Grey Talon shot from
+   *  0.17 at 15:39 (rec16); 0.28-0.30 was another lane (rec16 13:53, 20:22). */
+  fight_join_distance: 0.2,
+  /** Your health fell this much (share of max) inside the fight: you were in it. */
+  fight_damage: 0.15,
+  /** Not joined while under this health at its start: walking back to heal (rec16 13:53 at 13%). */
+  fight_heal_hp: 0.35,
+  /** A fight that starts this soon after your respawn could not be reached. */
+  fight_respawn_secs: 10,
+  /** Seconds around the fight's first and last signal that still count as being in it. */
+  fight_pad_secs: 3,
+  /** A teammate marker this close to yours is your own icon read as an ally (ai-review SELF_ECHO). */
+  self_echo: 0.04,
+  /** One top-bar portrait cannot die twice this quickly (a flickering dead read is one death). */
+  death_repeat_secs: 20,
   /** Match boundaries. */
   wall_gap_new_match_ms: 15 * 60_000, wall_gap_check_ms: 3 * 60_000,
   /** A match is kept only with this much readable gameplay (or at least one death). */
@@ -135,7 +151,9 @@ export interface MatchRecord {
   /** Alive gameplay seconds whose location was not read (live full scans rarely locate you). */
   fieldSecs?: number;
   deaths: DeathRecord[];
-  fights: { joined: number; missed: number; whileDead: number };
+  /** Team fights (FightTracker). `v: 2` = counted per fight with deaths and your evidence;
+   *  without it the counts are from the older minimap-only count (fightsLegacy): not used. */
+  fights: FightCounts;
   /** `usedAt` / `base` (windows used inside their base) are absent on older records. */
   windows: { used: number; unused: number; unusedAt: number[]; usedAt?: number[]; base?: number };
   /** Soul Urn carries (status effect "carrying_urn"): delivered = carry ended alive. */
@@ -156,7 +174,7 @@ type SampleArea = Area | 'field';
 interface Sample {
   t: number | null; wall: number | null; area: SampleArea; enemySide: boolean; enemyBase: boolean; urn: boolean; hp: number | null; you: Point | null; nearestAlly: number | null;
   unseen: number | null; alliesDead: number | null; enemiesDead: number | null; souls: number | null;
-  fightAt: number | null; deepWave: boolean; push: [number | null, number | null, number | null]; lane: 0 | 1 | 2 | null;
+  deepWave: boolean; push: [number | null, number | null, number | null]; lane: 0 | 1 | 2 | null;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -239,12 +257,6 @@ function reduce(s: Snapshot, t: number | null, wall: number | null): Sample {
   const urn = Array.isArray(s.status_effects) && s.status_effects.some(e => typeof e === 'string' && /carrying_urn|soul\s*urn/i.test(e));
   const live = (map?.heroes || []).filter(h => h.hits >= 2 && h.unseen_ms <= 3000);
   const nearestAlly = you ? live.filter(h => h.ally).reduce<number | null>((m, h) => { const d = dist(h.pos, you); return m == null || d < m ? d : m; }, null) : null;
-  let fightAt: number | null = null;
-  if (you) for (const a of live.filter(h => h.ally)) {
-    const allies = live.filter(o => o.ally && dist(o.pos, a.pos) <= REVIEW.fight_radius).length;
-    const enemies = live.filter(e => !e.ally && dist(e.pos, a.pos) <= REVIEW.fight_radius).length;
-    if (allies >= 2 && enemies >= 2) { const d = dist(a.pos, you); if (fightAt == null || d < fightAt) fightAt = d; }
-  }
   const team = s.hero_status?.length === 12 ? s.hero_status : null;
   let unseen: number | null = null, alliesDead: number | null = null, enemiesDead: number | null = null;
   if (team) {
@@ -261,7 +273,173 @@ function reduce(s: Snapshot, t: number | null, wall: number | null): Sample {
   const push = (map ? lanes.map(l => l && finite(l.push) ? l.push : null) : [null, null, null]) as Sample['push'];
   const souls = finite(s.souls) && s.souls >= 0 ? s.souls : null;
   const idx = ['Green', 'Blue', 'Yellow'].indexOf(map?.your_lane || '');
-  return { t, wall, area, enemySide, enemyBase: zone === 'EnemyBase', urn, hp, you, nearestAlly, unseen, alliesDead, enemiesDead, souls, fightAt, deepWave, push, lane: idx >= 0 ? idx as 0 | 1 | 2 : null };
+  return { t, wall, area, enemySide, enemyBase: zone === 'EnemyBase', urn, hp, you, nearestAlly, unseen, alliesDead, enemiesDead, souls, deepWave, push, lane: idx >= 0 ? idx as 0 | 1 | 2 : null };
+}
+
+// ---------------------------------------------------------------------------------------------
+// Team fights
+// ---------------------------------------------------------------------------------------------
+/** What you did in one fight: in it, alive and elsewhere, dead (or just respawned), walking back
+ *  to heal, or not observable (your marker unread, shop screen): never guessed as missed. */
+export type FightStatus = 'joined' | 'missed' | 'dead' | 'healing' | 'unknown';
+export interface FightEpisodeRecord {
+  /** First and last fight signal (game clock), hero deaths in it, your status and its evidence. */
+  t: number; end: number; deaths: number; s: FightStatus; why: string;
+}
+export interface FightCounts {
+  joined: number; missed: number; whileDead: number;
+  /** Absent on records from before v2 (see fightsLegacy). */
+  v?: 2; healing?: number; unknown?: number; at?: FightEpisodeRecord[];
+}
+/** Fight counts from before v2 (2+ allies vs 2+ enemies on the minimap, judged at their first
+ *  frame, laning 2v2s and your own icon counted): shown as older, not used for traits. */
+export const fightsLegacy = (m: Pick<MatchRecord, 'fights'>) => m.fights.v !== 2;
+const MAX_FIGHT_EPISODES = 40;
+interface FightFrame { t: number; dead: boolean; you: Point | null; hp: number | null; clash: Point[]; nearEnemy: boolean; nearAllies: number }
+interface OpenFight { start: number; last: number; deaths: number; frames: FightFrame[] }
+/**
+ * Team fights (docs/player-profile.md "Fights"). A fight is heroes of both teams fighting and dying
+ * close together. It is anchored on hero deaths read on the top bar (a portrait alive on two reads,
+ * then dead on two reads in a row; dated at the first dead read): deaths less than
+ * LIMITS.fight_gap_secs apart are one fight. Minimap clashes (2+ of ours, you included, and 2+ of
+ * theirs within REVIEW.fight_radius) from 10 s before its first death to 3 s after its last are its
+ * place on the map; clashes alone never chain or make a fight (rec16 15:23-17:52 chained twelve
+ * deaths of three fights through 2v2 lane clashes). It counts with 2+ deaths, or 1 death in a clash
+ * (one death alone is a pick). Your status over that window:
+ *   joined   you died in it, were within 0.2 of a hero of its clash, had an enemy next to you or
+ *            (fights without a clash) two allies, or lost 15%+ health without being read far from it;
+ *   dead     otherwise dead during it, or respawned less than 10 s before it began;
+ *   healing  under 35% health at its start (walking back to heal: rec16 13:58 at 13%);
+ *   missed   alive and located, never near it;
+ *   unknown  no evidence (marker unread, shop screen): never counted as missed.
+ * Your own icon read as an ally marker (< 0.04 from you) is you, not a teammate.
+ */
+const FIGHT_LEAD_SECS = 10, FIGHT_NEAR_SECS = 5;
+export class FightTracker {
+  private recent: FightFrame[] = [];
+  private slots = new Map<string, { alive: boolean; aliveReads: number; pending: number | null; lastDeath: number | null }>();
+  private open: OpenFight | null = null;
+  private done: FightEpisodeRecord[] = [];
+  private youDied: number[] = []; private youRespawned: number[] = []; private wasDead: boolean | null = null;
+  /** Top-bar deaths counted (clock, team, slot), for the offline replay tool and tests. */
+  readonly deathLog: Array<{ t: number; ally: boolean; slot: number; you?: boolean }> = [];
+  private ownDeath: number | null = null;
+  /** One analyzed frame (in order) at game clock `t`. */
+  add(s: Snapshot, t: number | null) {
+    if (t == null || !s) return;
+    const dead = s.dead === true || s.screen === 'Dead';
+    const deaths: number[] = [];
+    // Your death screen is a death of the fight at once (your portrait's respawn digits can be read
+    // 10 s later: rec16 32:33 / 32:44); the next ally portrait death within 15 s is that same death.
+    if (dead && this.wasDead === false) { this.youDied.push(t); deaths.push(t); this.ownDeath = t; }
+    if (!dead && this.wasDead === true && s.screen === 'Gameplay') this.youRespawned.push(t);
+    if (dead) this.wasDead = true; else if (s.screen === 'Gameplay') this.wasDead = false;
+    const map = s.minimap || null;
+    const you = !dead && map?.you && finite(map.you.x) && finite(map.you.y) ? map.you : null;
+    const hp = !dead && finite(s.hp) && finite(s.max_hp) && s.max_hp >= 100 && s.hp >= 0 && s.hp <= s.max_hp ? s.hp / s.max_hp : null;
+    const seen = (dead ? [] : map?.heroes || []).filter(h => h.hits >= 2 && h.unseen_ms <= 3000 && finite(h.pos?.x) && finite(h.pos?.y));
+    // At most one ally track on top of your marker is your own icon (a teammate beside you stays).
+    const echo = you ? seen.filter(h => h.ally && dist(h.pos, you) < LIMITS.self_echo).sort((a, b) => dist(a.pos, you) - dist(b.pos, you))[0] : undefined;
+    const live = seen.filter(h => h !== echo);
+    const members = [...live.map(h => ({ pos: h.pos as Point, ally: h.ally })), ...(you ? [{ pos: you as Point, ally: true }] : [])];
+    const clash = new Set<Point>();
+    for (const c of members) {
+      const near = members.filter(o => dist(o.pos, c.pos) <= REVIEW.fight_radius);
+      if (near.filter(o => o.ally).length >= 2 && near.filter(o => !o.ally).length >= 2) for (const o of near) clash.add(o.pos);
+    }
+    const frame: FightFrame = { t, dead, you, hp, clash: [...clash],
+      nearEnemy: !!you && live.some(h => !h.ally && dist(h.pos, you) <= REVIEW.fight_radius),
+      nearAllies: you ? live.filter(h => h.ally && dist(h.pos, you) <= REVIEW.fight_radius).length : 0 };
+    this.recent.push(frame);
+    while (this.recent.length && this.recent[0].t < t - 30) this.recent.shift();
+    if (this.open && this.open.frames.length < 600) this.open.frames.push(frame);
+    // Hero deaths on the top bar: alive on two reads, then dead on two reads in a row (dated at the
+    // first). One alive read inside a death is a flicker (rec16 33:04), not a respawn.
+    const team = s.hero_status?.length === 12 ? s.hero_status : null;
+    for (const h of team || []) {
+      if (!h || typeof h.dead !== 'boolean') continue;
+      const key = `${h.ally}:${h.slot}`, isDead = h.dead && (h.respawn_secs != null || typeof h.respawn_observations !== 'number' || h.respawn_observations > 0);
+      const st = this.slots.get(key);
+      if (!st) { this.slots.set(key, { alive: !isDead, aliveReads: isDead ? 0 : 2, pending: null, lastDeath: null }); continue; }
+      if (!h.dead) { st.pending = null; if (++st.aliveReads >= 2) st.alive = true; continue; }
+      st.aliveReads = 0;
+      if (!st.alive) continue;
+      // Dated at the first dead read; confirmed by a later one with its respawn countdown read.
+      if (st.pending == null) { st.pending = t; continue; }
+      if (!isDead) continue;
+      if (st.lastDeath == null || st.pending - st.lastDeath > LIMITS.death_repeat_secs) {
+        const own = h.ally && this.ownDeath != null && st.pending >= this.ownDeath - LIMITS.fight_pad_secs && st.pending <= this.ownDeath + LIMITS.fight_gap_secs;
+        if (own) this.ownDeath = null; else deaths.push(st.pending);
+        st.lastDeath = st.pending;
+        this.deathLog.push({ t: st.pending, ally: h.ally, slot: h.slot, ...(own ? { you: true } : {}) }); if (this.deathLog.length > 300) this.deathLog.shift();
+      }
+      st.alive = false; st.pending = null;
+    }
+    for (const d of deaths.sort((a, b) => a - b)) {
+      if (this.open && d - this.open.last > LIMITS.fight_gap_secs) this.close();
+      if (!this.open) this.open = { start: d, last: d, deaths: 0, frames: this.recent.filter(f => f.t >= d - 15) };
+      this.open.last = Math.max(this.open.last, d); this.open.deaths++;
+    }
+    // Not while a portrait read dead in time for this fight still waits for its countdown (rec16
+    // 33:55: confirmed at 34:03, 22 s after the fight's last death), at most 15 s longer.
+    const o = this.open;
+    if (o && t - o.last > LIMITS.fight_gap_secs && !(t - o.last <= 2 * LIMITS.fight_gap_secs
+      && [...this.slots.values()].some(st => st.pending != null && st.pending - o.last <= LIMITS.fight_gap_secs))) this.close();
+  }
+  private close() { const e = this.open && this.judge(this.open); this.open = null; if (e) { this.done.push(e); if (this.done.length > MAX_FIGHT_EPISODES) this.done.shift(); } }
+  /** The verdict of one fight, or null when it is not a fight. */
+  private judge(o: OpenFight): FightEpisodeRecord | null {
+    const lo = o.start - FIGHT_LEAD_SECS, hi = o.last + LIMITS.fight_pad_secs;
+    const F = o.frames.filter(f => f.t >= lo && f.t <= hi);
+    if (!(o.deaths >= 2 || F.some(f => f.clash.length))) return null;
+    const ep = (s: FightStatus, why: string): FightEpisodeRecord => ({ t: Math.round(o.start), end: Math.round(o.last), deaths: o.deaths, s, why });
+    const pts = F.flatMap(f => f.clash);
+    // Near a hero of its clash at about the same time.
+    const clashAt = (t: number) => F.filter(g => Math.abs(g.t - t) <= LIMITS.fight_pad_secs).flatMap(g => g.clash);
+    const nearClash = (f: FightFrame) => !!f.you && clashAt(f.t).some(p => dist(p, f.you!) <= LIMITS.fight_join_distance);
+    if (this.youDied.some(d => d >= lo - 2 && d <= hi)) {
+      // Your death alone is a fight only when you were at its clash (dying alone while others
+      // posture across the map is a pick).
+      if (o.deaths === 1 && !F.some(f => !f.dead && nearClash(f))) return null;
+      return ep('joined', 'died in it');
+    }
+    // Your evidence: from 5 s before the first death (walking away from the last fight at 13:51 is
+    // not being in the next one at 14:00, rec16); the clash 10 s before only places the fight.
+    const located = F.filter(f => f.you && !f.dead && f.t >= o.start - FIGHT_NEAR_SECS);
+    if (located.some(nearClash)) return ep('joined', 'near on the minimap');
+    if (located.some(f => f.nearEnemy)) return ep('joined', 'an enemy next to you');
+    if (!pts.length && located.some(f => f.nearAllies >= 2)) return ep('joined', 'with your team');
+    // Health lost inside the fight, unless every read put you away from its clash.
+    const far = pts.length > 0 && located.length > 0;
+    let top = -1, fell = false;
+    for (const f of F) if (f.t >= o.start - FIGHT_NEAR_SECS && !f.dead && f.hp != null) { top = Math.max(top, f.hp); if (top - f.hp >= LIMITS.fight_damage) fell = true; }
+    if (fell && !far) return ep('joined', 'took damage');
+    if (F.some(f => f.dead && f.t >= o.start - FIGHT_NEAR_SECS) || this.youRespawned.some(r => r <= o.start && o.start - r <= LIMITS.fight_respawn_secs)) return ep('dead', 'dead or respawning');
+    // Low in the 15 s before it began: walking back to heal (rec16 13:53 at 13%, 41% in base at 13:58).
+    const low = Math.min(...o.frames.filter(f => f.hp != null && f.t >= o.start - 15 && f.t <= o.start + LIMITS.fight_pad_secs).map(f => f.hp!));
+    if (low < LIMITS.fight_heal_hp) return ep('healing', `at ${Math.round(low * 100)}% health`);
+    // Missed only where the fight is known (its clash) and you were read away from it: deaths on the
+    // top bar alone do not say where they happened (rec16 34:36, you in base with the team).
+    if (located.length && pts.length) return ep('missed', 'alive, elsewhere on the map');
+    return ep('unknown', located.length ? 'fight not on the minimap' : 'your marker not read');
+  }
+  /** Fights so far: the closed ones, and the one in progress judged as it stands. */
+  episodes(): FightEpisodeRecord[] {
+    const cur = this.open && this.judge(this.open);
+    return [...this.done, ...(cur ? [cur] : [])].slice(-MAX_FIGHT_EPISODES);
+  }
+  counts(): FightCounts {
+    const at = this.episodes(), n = (s: FightStatus) => at.filter(e => e.s === s).length;
+    return { v: 2, joined: n('joined'), missed: n('missed'), whileDead: n('dead'), healing: n('healing'), unknown: n('unknown'), at };
+  }
+}
+/** "joined 5 of 8, missed 1 (1 while dead, 1 unknown)" for the matches table. */
+export function fightsText(f: FightCounts): string {
+  if (f.v !== 2) return '— (older version)';
+  const total = f.joined + f.missed + f.whileDead + (f.healing ?? 0) + (f.unknown ?? 0);
+  if (!total) return 'none seen';
+  const other = [f.whileDead ? `${f.whileDead} while dead` : '', f.healing ? `${f.healing} healing` : '', f.unknown ? `${f.unknown} unknown` : ''].filter(Boolean);
+  return `joined ${f.joined} of ${total}${f.missed ? `, missed ${f.missed}` : ''}${other.length ? ` (${other.join(', ')})` : ''}`;
 }
 
 /** A death being observed: `ends` = frame clock + respawn timer for each timer read. */
@@ -282,7 +460,7 @@ export class MatchAggregator {
   private span = 0; private spanAtRead = 0; private spanAnchor: { wall: number | null; t: number | null } | null = null;
   private gaps: Array<[number, number]> = [];
   private dead = false; private lastDeadT: number | null = null; private respawnedAt: number | null = null; private prevRespawn: number | null = null;
-  private fights = { joined: 0, missed: 0, whileDead: 0 }; private fight: { lastSeen: number } | null = null;
+  private fights = new FightTracker();
   private windows = { used: 0, unused: 0, unusedAt: [] as number[], usedAt: [] as number[], base: 0 };
   private win: { start: number; secs: number; used: boolean; base: boolean; push: Sample['push'] } | null = null;
   private field = 0;
@@ -336,6 +514,7 @@ export class MatchAggregator {
     if (finite(ext.kills) || finite(ext.deaths) || finite(ext.assists)) this.kda = { kills: finite(ext.kills) ? ext.kills : this.kda?.kills ?? null, deaths: finite(ext.deaths) ? ext.deaths : this.kda?.deaths ?? null, assists: finite(ext.assists) ? ext.assists : this.kda?.assists ?? null };
     if (finite(s.own_networth) && t != null) { const p = { t, v: s.own_networth }; this.worth.first ??= p; if (s.own_networth >= (this.worth.last?.v ?? 0)) this.worth.last = p; }
     const x = reduce(s, t, wall);
+    this.fights.add(s, t);
     // Souls barely change between two reads: a frame without a souls read keeps the last one for
     // up to 10 s (rec4 read the souls box on about half of the frames).
     const p = this.prev;
@@ -410,16 +589,6 @@ export class MatchAggregator {
     if (alive && b.hp != null && b.hp < LIMITS.low_hp && this.lowOpen == null && b.area !== 'dead') { this.lowOpen = b.t ?? 0; this.lowHp.episodes++; }
     else if (this.lowOpen != null && ((b.hp != null && b.hp >= LIMITS.low_hp_safe) || b.area === 'base')) { this.lowHp.survived++; this.lowOpen = null; }
     else if (this.lowOpen != null && b.area === 'dead') { this.lowHp.died++; this.lowOpen = null; }
-    // Fight episodes (review.rs pattern()): a cluster of >= 2 allies and >= 2 enemies; joined when
-    // you were within a third of the map. A cluster absent < 10 s is the same fight.
-    const tb = b.t ?? a.t;
-    if (a.fightAt != null) {
-      if (!this.fight || (tb != null && tb - this.fight.lastSeen > LIMITS.fight_gap_secs)) {
-        if (a.area === 'dead') this.fights.whileDead++;
-        else if (a.fightAt > REVIEW.missed_fight_distance) this.fights.missed++; else this.fights.joined++;
-      }
-      this.fight = { lastSeen: a.t ?? tb ?? 0 };
-    }
     // Enemy-dead windows (review.rs pattern()): >= 2 enemies dead while you are alive. Used when
     // you were in their half or a lane front moved toward them. Unknown frames keep a window
     // open without adding time (no evidence); your death or fewer than 2 dead closes it.
@@ -564,7 +733,7 @@ export class MatchAggregator {
       ...(partial ? { partial: true } : {}),
       time: round(this.time) as Record<Area, number>, spanSecs: Math.round(this.spanSecs), deadSecs: Math.round(Math.min(this.deadSecs, Math.max(this.spanSecs, 0))),
       fieldSecs: Math.round(this.field),
-      deaths, fights: { ...this.fights }, windows,
+      deaths, fights: this.fights.counts(), windows,
       urn: { ...this.urn, at: this.urn.at.map(a => [...a] as [number, number]) },
       ...(tm.reads ? { team: { reads: tm.reads, leadFrom: tm.leadFrom, maxLead: Math.round(tm.maxLead), lastLead: tm.lastLead } } : {}),
       souls: round(this.souls) as MatchRecord['souls'], lowHp: round(this.lowHp) as MatchRecord['lowHp'], deepAwaySecs: Math.round(this.deepAwaySecs),
@@ -586,7 +755,10 @@ export interface Trait {
 }
 export interface MatchRow {
   id: string; date: number; hero: string | null; heroName: string; source: MatchRecord['source']; result: MatchRecord['result'];
-  minutes: number; deaths: number; deadPct: number | null; fightsJoined: number; fightsMissed: number;
+  minutes: number; deaths: number; deadPct: number | null;
+  /** Fights joined / missed (null on records from before v2), the table text ("joined 5 of 8,
+   *  missed 1 (2 unknown)") and every fight with its clock, status and evidence. */
+  fightsJoined: number | null; fightsMissed: number | null; fights: string; fightsDetail: string;
   unspentAtDeath: string; topKiller: string | null; partial: boolean;
   /** The match focus goals and whether they were met (absent before goals existed). */
   goals: GoalResult[];
@@ -813,11 +985,12 @@ export class PlayerProfileModel {
         matches: win.n, trend: trend(ms, winF, true), events: win.raw.den, needed: 4, tip: 'Keep converting kills into objectives.', focus: 'Keep it up: you turn enemy deaths into pushes and objectives.' });
     }
 
-    // 6. Fight attendance (review.json pattern_missed: > a third of the map away; #25).
-    const fightF = (m: MatchRecord): Ratio | null => m.fights.joined + m.fights.missed ? { num: m.fights.missed, den: m.fights.joined + m.fights.missed } : null;
+    // 6. Fight attendance (#25): joined vs missed (alive and elsewhere); fights while dead, healing
+    //    or unobserved are left out, as are counts from before v2 (fightsLegacy).
+    const fightF = (m: MatchRecord): Ratio | null => !fightsLegacy(m) && m.fights.joined + m.fights.missed ? { num: m.fights.missed, den: m.fights.joined + m.fights.missed } : null;
     const fights = ratio(ms, fightF);
     if (fights && fights.raw.den >= 4 && fights.value > 0.5) {
-      push({ id: 'missed_fights', kind: 'weakness', label: 'Misses team fights', evidence: `Joined ${fights.raw.den - fights.raw.num} of ${fights.raw.den} team fights; ${fights.raw.num} were more than a third of the map away.`,
+      push({ id: 'missed_fights', kind: 'weakness', label: 'Misses team fights', evidence: `Joined ${fights.raw.den - fights.raw.num} of ${fights.raw.den} team fights you could reach; in ${fights.raw.num} you were alive elsewhere on the map.`,
         severity: severity(fights.value, 0.5), value: Math.round(fights.value * 100), threshold: 50, matches: fights.n, trend: trend(ms, fightF, true), events: fights.raw.den, needed: 10,
         tip: 'When your team groups, shove your wave and go help.', focus: 'Profile focus: when your team groups, shove your wave and join them.' });
     } else if (fights && fights.raw.den >= 5 && fights.value <= 0.25) {
@@ -993,7 +1166,9 @@ export class PlayerProfileModel {
     const killer = fam ? (() => { const h = m.deaths.find(d => d.family === fam)?.killer; const n = m.deaths.filter(d => d.family === fam).length; return `${h ? this.heroName(h) : fam} x${n}`; })() : null;
     const legacy = legacyMetric(m);
     return { id: m.id, date: m.startedAt, hero: m.hero, heroName: this.heroName(m.hero), source: m.source, result: m.result, minutes: Math.round(spanOf(m) / 6) / 10,
-      deaths: m.deaths.length, deadPct: !legacy && spanOf(m) >= 60 ? pct(deadOf(m), spanOf(m)) : null, fightsJoined: m.fights.joined, fightsMissed: m.fights.missed,
+      deaths: m.deaths.length, deadPct: !legacy && spanOf(m) >= 60 ? pct(deadOf(m), spanOf(m)) : null,
+      fightsJoined: fightsLegacy(m) ? null : m.fights.joined, fightsMissed: fightsLegacy(m) ? null : m.fights.missed, fights: fightsText(m.fights),
+      fightsDetail: (m.fights.at || []).map(e => `${clockText(e.t)} ${e.s} (${e.why}, ${e.deaths} death${e.deaths === 1 ? '' : 's'})`).join(' · '),
       unspentAtDeath: withSouls.length ? `${withSouls.filter(d => d.souls! >= deathSpend(d.clock)).length}/${withSouls.length} · avg ${k(sum(withSouls.map(d => d.souls!)) / withSouls.length)}` : '—',
       topKiller: killer, partial: m.partial === true, goals: m.goals ?? [], excluded: excludedReason(m) ?? (legacy ? 'time dead from an older version: not used' : null), legacy };
   }
@@ -1180,6 +1355,16 @@ const num = (v: unknown, fallback = 0) => finite(v) ? v : fallback;
 const numOrNull = (v: unknown) => finite(v) ? v : null;
 const bool = (v: unknown) => typeof v === 'boolean' ? v : null;
 const str = (v: unknown, n = 60) => typeof v === 'string' ? v.slice(0, n) : null;
+const FIGHT_STATUS: FightStatus[] = ['joined', 'missed', 'dead', 'healing', 'unknown'];
+/** Stored fights: v2 counts and episodes kept; older counts kept as they were (fightsLegacy). */
+function sanitizeFights(f: Record<string, unknown>): FightCounts {
+  const base = { joined: num(f.joined), missed: num(f.missed), whileDead: num(f.whileDead) };
+  if (f.v !== 2) return base;
+  const at = (Array.isArray(f.at) ? f.at : []).filter((e): e is Record<string, unknown> => !!e && typeof e === 'object'
+    && finite((e as FightEpisodeRecord).t) && FIGHT_STATUS.includes((e as FightEpisodeRecord).s)).slice(-MAX_FIGHT_EPISODES)
+    .map(e => ({ t: num(e.t), end: num(e.end, num(e.t)), deaths: num(e.deaths), s: e.s as FightStatus, why: str(e.why, 40) || '' }));
+  return { v: 2, ...base, healing: num(f.healing), unknown: num(f.unknown), at };
+}
 /** Validate one stored/imported match; drops it when the shape is unusable. */
 export function sanitizeMatch(raw: unknown): MatchRecord | null {
   if (!raw || typeof raw !== 'object') return null;
@@ -1205,7 +1390,7 @@ export function sanitizeMatch(raw: unknown): MatchRecord | null {
     result: m.result === 'win' || m.result === 'loss' ? m.result : null, ...(m.partial === true ? { partial: true } : {}), ...(typeof m.fingerprint === 'string' ? { fingerprint: m.fingerprint.slice(0, 80) } : {}),
     time, ...(finite(m.spanSecs) && m.spanSecs >= 0 && finite(m.deadSecs) && m.deadSecs >= 0 ? { spanSecs: m.spanSecs, deadSecs: Math.min(m.deadSecs, m.spanSecs) } : {}),
     ...(finite(m.fieldSecs) && m.fieldSecs >= 0 ? { fieldSecs: m.fieldSecs } : {}),
-    deaths, fights: { joined: num(f.joined), missed: num(f.missed), whileDead: num(f.whileDead) },
+    deaths, fights: sanitizeFights(f),
     windows: { used: num(w.used), unused: num(w.unused), unusedAt: Array.isArray(w.unusedAt) ? w.unusedAt.filter(finite).slice(0, 20) : [],
       ...(Array.isArray(w.usedAt) ? { usedAt: w.usedAt.filter(finite).slice(0, 20) } : {}), ...(finite(w.base) ? { base: w.base } : {}) },
     ...(m.urn && typeof m.urn === 'object' ? { urn: { carried: num(u.carried), delivered: num(u.delivered), lost: num(u.lost), at: pairs(u.at) } } : {}),
