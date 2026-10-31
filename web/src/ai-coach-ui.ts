@@ -29,6 +29,7 @@ export function mountAiCoach(deps: AiUiDeps): AiUi {
   const describe = (m: AdviceMeta) => `${m.trigger === 'manual' ? 'On demand' : m.trigger === 'death' ? 'Death review' : 'Periodic'} · ${clockText(m.clock)} · ${m.ms} ms · ${m.model} · ~${m.tokens} input tokens${m.reasoningTokens ? ` · ${m.reasoningTokens} reasoning tokens` : ''}${m.reason ? ` · why now: ${m.reason.slice(0, 120)}` : ''}`;
   function render(s: AiStatus) {
     const tag = el('ai-state'); tag.textContent = states[s.state]; tag.classList.toggle('teal', s.state === 'idle' || s.state === 'thinking');
+    el('ai-panel')?.setAttribute('data-state', s.state); // style.css hides the action buttons while off
     if (s.last) {
       const a: Advice = s.last.advice;
       setText('ai-advice', a.speak || 'PASS · nothing more important than the current calls.');

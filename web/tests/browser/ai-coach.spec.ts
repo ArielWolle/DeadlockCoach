@@ -109,10 +109,12 @@ test('settings save the AI gateway, test connection reports HTTP errors without 
   await page.getByLabel('Base URL').fill('https://gateway.test/v1');
   await page.getByLabel('Model', { exact: true }).fill('mock-model');
   await page.getByLabel('API key').fill(KEY);
+  await page.locator('#ai-advanced > summary').click(); // More AI options
   await page.getByLabel('Advice interval when quiet (seconds)').fill('20');
   await page.getByRole('button', { name: 'Save settings' }).click();
   await page.reload();
   await expect(page.getByLabel('Enable the AI coach')).toBeChecked();
+  await page.locator('#ai-advanced > summary').click(); // More AI options
   await expect(page.getByLabel('Advice interval when quiet (seconds)')).toHaveValue('20');
   await expect(page.getByLabel('API key')).toHaveValue('');
   await expect(page.getByLabel('API key')).toHaveAttribute('placeholder', /key is saved/);
@@ -121,6 +123,7 @@ test('settings save the AI gateway, test connection reports HTTP errors without 
   await page.getByLabel('Model reasoning').selectOption('off');
   await page.getByRole('button', { name: 'Save settings' }).click();
   await page.reload();
+  await page.locator('#ai-advanced > summary').click(); // More AI options
   await expect(page.getByLabel('Model reasoning')).toHaveValue('off');
   await page.getByRole('button', { name: 'Test connection' }).click();
   await expect(page.locator('#ai-test-result')).toContainText('Gateway error: HTTP 401');

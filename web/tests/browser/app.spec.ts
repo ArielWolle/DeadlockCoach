@@ -6,7 +6,7 @@ const root = fileURLToPath(new URL('../../', import.meta.url));
 
 test('dashboard navigation, mobile layout, knowledge search and keyboard landmarks', async ({ page }) => {
   await page.goto('./');
-  await expect(page.getByRole('heading', { name: /Read the game/ })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Coach', exact: true })).toBeVisible();
   await page.keyboard.press('Tab'); await expect(page.getByRole('link', { name: 'Skip to content' })).toBeFocused();
   await page.keyboard.press('Enter'); await expect(page.locator('#main')).toBeFocused();
   await page.getByRole('link', { name: 'Field guide' }).click();
@@ -33,13 +33,13 @@ test('settings persist, mute works and empty recording export is handled', async
   await expect(page.locator('#notice')).toBeHidden({ timeout: 12000 });
 });
 
-test('real WASM initializes cross-origin isolated and replays recorded snapshots', async ({ page }) => {
+test('the analysis engine initializes cross-origin isolated and replays recorded snapshots', async ({ page }) => {
   const errors: string[] = []; page.on('pageerror', e => errors.push(e.message));
   await page.goto('./#replay');
   expect(await page.evaluate(() => window.crossOriginIsolated)).toBe(true);
   await page.getByRole('button', { name: 'Load included match' }).click();
   await expect(page.locator('#replay-status')).toContainText('Included match replay complete', { timeout: 110000 });
-  await expect(page.locator('#engine-state')).toHaveText('LOCAL ENGINE READY');
+  await expect(page.locator('#engine-state')).toHaveText('Ready');
   await expect(page.locator('.replay-result').first()).toContainText('19:13');
   await expect(page.locator('#cue-list')).toContainText(/Midboss|Green lane/);
   expect(errors).toEqual([]);
@@ -63,7 +63,7 @@ test('offline shell and cached models can reopen and replay without an applicati
 test('browser OCR matches native clock, souls and inventory on real screenshots', async ({ page }, testInfo) => {
   await page.goto('./#replay');
   const fixture = path.join(root, 'public/assets/fixtures/00059_1792966931596.jpg');
-  await page.getByLabel('Bring your gameplay into the lab.').setInputFiles([fixture, fixture]);
+  await page.getByLabel('Choose screenshots or a recording').setInputFiles([fixture, fixture]);
   await page.getByRole('button', { name: 'Analyze selected files' }).click();
   await expect(page.locator('#replay-status')).toContainText('Replay complete.', { timeout: 110000 });
   await expect(page.locator('#metric-clock')).toHaveText('5:13');
@@ -85,7 +85,7 @@ test('browser OCR matches native clock, souls and inventory on real screenshots'
 test('browser reads top-bar health, unseen and dead heroes like native', async ({ page }) => {
   await page.goto('./#replay');
   const fixture = path.join(root, 'public/assets/fixtures/00401_health-mixed.jpg');
-  await page.getByLabel('Bring your gameplay into the lab.').setInputFiles([fixture, fixture]);
+  await page.getByLabel('Choose screenshots or a recording').setInputFiles([fixture, fixture]);
   await page.getByRole('button', { name: 'Analyze selected files' }).click();
   await expect(page.locator('#replay-status')).toContainText('Replay complete.', { timeout: 110000 });
   await expect(page.locator('#metric-clock')).toHaveText('4:53');
@@ -97,7 +97,7 @@ test('browser reads top-bar health, unseen and dead heroes like native', async (
   expect(t[11].dead).toBe(true);
   // The same still frame twice: the 2 s timer must count down, so it is 2, 1 or expired, never more.
   expect(t[11].respawn_secs == null || t[11].respawn_secs <= 2).toBe(true);
-  // The Match state roster lists all six heroes per team with their observed state.
+  // The Live match roster lists all six heroes per team with their observed state.
   await page.locator('[data-page="match"]').click();
   const enemies = page.locator('#roster > div').nth(1).locator('.roster-row');
   await expect(enemies).toHaveCount(6);
@@ -141,7 +141,7 @@ test.describe('without cross-origin isolation', () => {
     await page.goto('./#replay');
     expect(await page.evaluate(() => window.crossOriginIsolated)).toBe(false);
     const fixture = path.join(root, 'public/assets/fixtures/00059_1792966931596.jpg');
-    await page.getByLabel('Bring your gameplay into the lab.').setInputFiles([fixture, fixture]);
+    await page.getByLabel('Choose screenshots or a recording').setInputFiles([fixture, fixture]);
     await page.getByRole('button', { name: 'Analyze selected files' }).click();
     await expect(page.locator('#replay-status')).toContainText('Replay complete.', { timeout: 110000 });
     await expect(page.locator('#metric-clock')).toHaveText('5:13');
@@ -157,7 +157,7 @@ test('model failures are visible and can be retried rather than silently disabli
   await page.route('**/assets/manifest.json', route => route.fulfill({ status: 503, body: 'Unavailable' }));
   await page.goto('./#replay'); await page.getByRole('button', { name: 'Load included match' }).click();
   await expect(page.locator('#notice')).toContainText('HTTP 503');
-  await expect(page.locator('#engine-state')).toHaveText('ENGINE ERROR');
+  await expect(page.locator('#engine-state')).toHaveText('Error');
   await expect(page.getByRole('button', { name: 'Analyze selected files' })).toBeEnabled();
 });
 });
@@ -199,7 +199,7 @@ test('recording archives export, import images and snapshots, and delete locally
   const downloading = page.waitForEvent('download');
   await page.getByRole('button', { name: 'Export frames + snapshots' }).click();
   const download = await downloading, exported = testInfo.outputPath('recording.json'); await download.saveAs(exported);
-  await page.getByLabel('Bring your gameplay into the lab.').setInputFiles(exported);
+  await page.getByLabel('Choose screenshots or a recording').setInputFiles(exported);
   await page.getByRole('button', { name: 'Analyze selected files' }).click();
   await expect(page.locator('#replay-status')).toContainText('Replay complete.', { timeout: 110000 });
   await expect(page.locator('.replay-result').first()).toContainText('Recording frame 1');
@@ -236,9 +236,28 @@ test('voice test invokes browser speech and mute cancels the queue', async ({ pa
 
 test('all dashboard routes pass automated accessibility checks', async ({ page }) => {
   await page.goto('./');
-  for (const route of ['coach', 'map', 'match', 'player', 'replay', 'pipeline', 'knowledge', 'settings']) {
+  for (const route of ['coach', 'match', 'player', 'replay', 'knowledge', 'settings']) {
     await page.goto(`./#${route}`);
     const results = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21aa', 'wcag22aa']).analyze();
     expect(results.violations, `${route}: ${results.violations.map(v => `${v.id}: ${v.nodes.map(n => n.target).join(', ')}`).join('; ')}`).toEqual([]);
   }
+  // The collapsed Settings sections (More AI options, Advanced, Diagnostics) too.
+  await page.goto('./#settings');
+  await page.evaluate(() => document.querySelectorAll('#page-settings details').forEach(d => { (d as HTMLDetailsElement).open = true; }));
+  const open = await new AxeBuilder({ page }).include('#page-settings').withTags(['wcag2a', 'wcag2aa', 'wcag21aa', 'wcag22aa']).analyze();
+  expect(open.violations, open.violations.map(v => `${v.id}: ${v.nodes.map(n => n.target).join(', ')}`).join('; ')).toEqual([]);
+});
+
+test('one Live match page replaces Map intelligence and Match state; the Matching lab is gone', async ({ page }) => {
+  await page.goto('./#map');
+  await expect(page.getByRole('heading', { name: 'Live match' })).toBeVisible();
+  await expect(page.locator('#minimap')).toBeVisible(); await expect(page.locator('#roster')).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Live match' })).toHaveAttribute('aria-current', 'page');
+  const nav = await page.getByRole('navigation', { name: 'Main navigation' }).getByRole('link').allTextContents();
+  expect(nav.map(n => n.trim())).toEqual(['◈ Coach', '⌖ Live match', '◆ Player', '▷ Replay lab', '▤ Field guide', '⚙ Settings']);
+  await page.goto('./#pipeline');
+  await expect(page.getByRole('heading', { name: 'Coach', exact: true })).toBeVisible();
+  // No implementation wording on the Coach page.
+  const coach = await page.locator('#page-coach').innerText();
+  expect(coach).not.toMatch(/\b(Rust|WASM|WebAssembly|engine|pipeline|worker|OCR|perception)\b/i);
 });

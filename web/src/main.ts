@@ -5,8 +5,7 @@ import { Speaker } from './speech';
 import { CropEditor } from './crop-editor';
 import { ViewportError, viewport, type Crop } from './crop';
 import { sampleBorders } from './borders';
-import { loadProfile, saveProfile, isDeadlock, type GameProfile } from './profiles';
-import { ProfilePanel } from './profile-panel';
+import { loadProfile, saveProfile, isDeadlock, defaultProfile, type GameProfile } from './profiles';
 import {regionsFromReport,drawRegions} from './region-overlays';
 import {QuickMonitor} from './quick';
 import {freshCue} from './live-cues';
@@ -32,9 +31,6 @@ export const clock = (n?: number | null) => n == null ? '—:—' : `${Math.floo
 const base = new URL(import.meta.env.BASE_URL, location.origin).href;
 const fastMetric=document.createElement('span');fastMetric.id='fast-analysis-time';fastMetric.textContent='Fast HP/map: waiting for registered gameplay';$('analysis-time').before(fastMetric);
 text('analysis-time','Full scene analysis: waiting');
-input('interval').min='1';
-document.querySelector('label[for="interval"]')!.textContent='Screenshot interval (seconds)';
-input('interval').nextElementSibling!.textContent='One-second screenshots are supported. The fast health/map worker is independent; full scans skip busy frames instead of queueing old images.';
 let settings = loadSettings();
 let activeProfile = loadProfile();
 const capture = new Capture(), speaker = new Speaker(settings);
@@ -44,7 +40,7 @@ const spokenAt=new Map<string,number>();
 let ai: AiUi | undefined;
 capture.configure(activeProfile);
 const cropEditor = new CropEditor();
-let profilePanel: ProfilePanel | undefined, profileChanging = false, referenceTimestamp = 0;
+let profileChanging = false;
 let latestReport: PerceptionReport | undefined;
 let pendingProfile: { id: number; resolve: () => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> } | undefined;
 let worker: Worker | undefined, ready = false, initializing: Promise<void> | undefined;
@@ -136,8 +132,10 @@ function status(value: string, source?: string) {
   button('edit-viewport').disabled = replaying || profileChanging;
   button('edit-viewport-settings').disabled = replaying || profileChanging;
 }
+/** The idle session status (top bar), shared by every place that resets it. */
+const IDLE = 'Ready', IDLE_SOURCE = 'Start coaching and choose your Deadlock window';
 function diagnostics() {
-  const values = { 'Engine': ready ? 'Local WASM · single-thread worker' : 'Not initialized', 'Asset version': assetVersion,
+  const values = { 'Engine': ready ? 'Local WASM · single-thread worker' : 'Not initialized', 'Detection profile': activeProfile.name, 'Asset version': assetVersion,
     'Secure context': String(window.isSecureContext), 'Screen capture': typeof navigator.mediaDevices?.getDisplayMedia === 'function' ? 'Available' : 'Unavailable',
     'Voice API': window.speechSynthesis ? 'Available' : 'Unavailable', 'Cross-origin isolation': String(window.crossOriginIsolated),
     'Full scene analysis': lastElapsed ? `${Math.round(lastElapsed)} ms` : '—', 'Slowest scene phases': lastPhases || '—',
@@ -154,8 +152,8 @@ function failWorker(message: string) {
   clearTimeout(initTimer); initReject?.(new Error(message)); initResolve = undefined; initReject = undefined;
   if (pending) { clearTimeout(pending.timer); pending.reject(new Error(message)); pending = undefined; }
   if (pendingProfile) { clearTimeout(pendingProfile.timer); pendingProfile.reject(new Error(message)); pendingProfile = undefined; }
-  busy = false; text('engine-state', 'ENGINE ERROR'); $('load-panel').hidden = true;
-  if (running) { paused = true; speaker.cancel(); status('Analysis paused', 'Restart the engine in Settings, then resume.'); }
+  busy = false; text('engine-state', 'Error'); $('load-panel').hidden = true;
+  if (running) { paused = true; speaker.cancel(); status('Analysis paused', 'Restart analysis in Settings › Advanced, then resume.'); }
   diagnostics(); notice(message, true);
 }
 function analysisFailure(message:string){
@@ -167,15 +165,15 @@ function analysisFailure(message:string){
   if(pending){clearTimeout(pending.timer);pending.reject(error);pending=undefined;}
   if(pendingProfile){clearTimeout(pendingProfile.timer);pendingProfile.reject(error);pendingProfile=undefined;}
   busy=false;recoveringFull=true;recoveryAttempts++;clearTimeout(recoveryTimer);
-  text('engine-state','FULL SCAN RECOVERY · CAPTURE ACTIVE');text('analysis-time','Full scene: failed · capture retained');$('load-panel').hidden=true;
-  status('Full scene analysis recovering','Screenshots continue. Fast monitoring continues while its HUD context is fresh.');
-  notice(`${message} ${recoveryAttempts<=2?'Rebuilding the full worker automatically.':'Automatic retries exhausted; use Restart analysis engine in Settings for full scans.'}`,true);
+  text('engine-state','Recovering · capture active');text('analysis-time','Full scene: failed · capture retained');$('load-panel').hidden=true;
+  status('Recovering','Health and minimap calls continue meanwhile.');
+  notice(`${message} ${recoveryAttempts<=2?'Recovering automatically.':'Automatic retries used up: use Restart analysis in Settings › Advanced.'}`,true);
   window.dispatchEvent(new CustomEvent('coach:recovery',{detail:{attempt:recoveryAttempts,captureRetained:capture.active}}));
   if(recoveryAttempts>2)return;
   const current=generation;
   recoveryTimer=setTimeout(async()=>{
     if(current!==generation||!running||!capture.active)return;
-    try{await initialize();if(current===generation&&running){recoveringFull=false;status(paused?'Coaching paused':'Coaching live','Full worker rebuilt; waiting for a fresh scene.');}}
+    try{await initialize();if(current===generation&&running){recoveringFull=false;status(paused?'Coaching paused':'Coaching live','Recovered; waiting for the next screenshot.');}}
     catch{/* The failed initializer's error handler schedules the next bounded retry. */}
   },recoveryAttempts*2000);
 }
@@ -183,7 +181,7 @@ function analysisFailure(message:string){
 async function initialize(profile = activeProfile) {
   if (ready) return;
   if (initializing) return initializing;
-  $('load-panel').hidden = false; text('engine-state', 'ENGINE LOADING');
+  $('load-panel').hidden = false; text('engine-state', 'Loading');
   initializing = new Promise<void>((resolve, reject) => { initResolve = resolve; initReject = reject; });
   worker = new Worker(new URL('./coach.worker.ts', import.meta.url), { type: 'module' });
   worker.onerror = event => { event.preventDefault(); analysisFailure(`Analysis worker failed: ${event.message || 'unknown worker error'}`); };
@@ -200,7 +198,7 @@ async function initialize(profile = activeProfile) {
       text('load-text', reply.message); $<HTMLProgressElement>('load-progress').value = reply.fraction;
     } else if (reply.type === 'ready') {
       clearTimeout(initTimer); ready = true; assetVersion = reply.version; $('load-panel').hidden = true;
-      text('engine-state', 'LOCAL ENGINE READY'); configureOptions();
+      text('engine-state', 'Ready'); configureOptions();
       if(isDeadlock(profile))quick.start(base,engineOptions());else quick.stop();
       initResolve?.(); initResolve = undefined; initReject = undefined; diagnostics();
     } else if (reply.type === 'error') {
@@ -244,13 +242,13 @@ function cancelMode() {
     if (pendingProfile) { clearTimeout(pendingProfile.timer); pendingProfile.reject(canceled); pendingProfile = undefined; }
     clearTimeout(initTimer); initReject?.(canceled); initReject = undefined; initResolve = undefined;
     worker?.terminate(); worker = undefined; ready = false; initializing = undefined; busy = false;
-    $('load-panel').hidden = true; text('engine-state', 'ENGINE OFFLINE');
+    $('load-panel').hidden = true; text('engine-state', 'Not loaded');
   }
-  text('feed-badge', 'CAPTURE STOPPED'); status('Ready to connect', 'Choose the Deadlock game window to begin');
+  status(IDLE, IDLE_SOURCE);
 }
 function resetEngine() {
   worker?.postMessage({ type: 'reset' }); latest = {}; lastResultAt = 0;
-  latestReport = undefined; profilePanel?.clear();
+  latestReport = undefined;
   quick.reset();spokenAt.clear();ai?.reset();
   text('fast-analysis-time','Fast HP/map: waiting for registered gameplay');text('quick-time','Fast monitor waiting for located HUD');
   renderTactics(null,{});
@@ -281,18 +279,18 @@ async function editLiveViewport(required = needsViewport, invalidate = true): Pr
   if (running) paused = true;
   clearTimeout(timer); speaker.cancel();
   needsViewport = required; button('fix-viewport').hidden = !required;
-  status('Inspecting captured frames', 'Frame acquisition and analysis are paused.');
+  status('Adjusting viewport', 'Coaching is paused while the editor is open.');
   const frames=await capture.freeze(settings.crop);
   if(current!==generation||!capture.active)return false;
   const newest=frames.at(-1);if(!newest){
     await capture.resume();paused=wasPaused;
-    status(running?(paused?'Coaching paused':'Coaching live'):'Ready to connect');
+    status(running?(paused?'Coaching paused':'Coaching live'):IDLE);
     if(running&&!paused)schedule(0);
-    notice('No source frame is available for inspection yet.',true);return false;
+    notice('No frame from your game yet. Try again in a moment.',true);return false;
   }
   const inspection=activeProfile.viewport.auto_crop===false;
   const crop = await cropEditor.open({ image:newest.image,width:newest.width,height:newest.height,frames,
-    initial: settings.crop, description: inspection?'Inspect the last five source frames and their locator results. Automatic HUD discovery does not require a crop; export samples to improve locators.':'Select a frozen source frame. Frame sampling remains paused until this editor closes.',
+    initial: settings.crop, description: inspection?'The coach finds the HUD by itself, so nothing needs adjusting. Check what it sees in your last few frames, or export a sample to report a misread.':'Pick one of your last frames and frame the game. Coaching resumes when you close the editor.',
     aspect: activeProfile.viewport.aspect_ratio,
     purpose:inspection?'region':'viewport',minimum:inspection?{width:1,height:1}:undefined,
     applyLabel:inspection?'Close inspection and resume':required ? (running ? 'Apply and resume coaching' : 'Apply and start coaching') : 'Apply viewport' });
@@ -337,7 +335,7 @@ async function start(forceEditor = false) {
     if (current !== generation) { capture.stop(); return; }
     manualViewport = false; automaticViewport = false; sourceGeometry = `${source.width}x${source.height}`;
     if(activeProfile.viewport.auto_crop===false){settings.crop={x:0,y:0,w:1,h:1};saveSettings(settings);populateSettings();}
-    status('Checking capture borders…', source.label);
+    status('Checking the window…', source.label);
     await autoCropSource(current);
     if (current !== generation) return;
     let invalid = false;
@@ -347,14 +345,14 @@ async function start(forceEditor = false) {
       if (current !== generation) return;
       if (!applied) { cancelMode(); notice('Capture stopped. Select a source again when you are ready to calibrate.'); return; }
     }
-    status('Loading analysis…', source.label); await initialize();
+    status('Loading the coach…', source.label); await initialize();
     if (current !== generation) { capture.stop(); return; }
     resetEngine(); running = true; paused = false;
-    status('Coaching live', `${source.label} · ${source.width}×${source.height}`);
-    text('feed-badge', 'LIVE · LOCAL ANALYSIS'); $('preview-empty').hidden = true;
+    status('Coaching live', source.label);
+    $('preview-empty').hidden = true;
     if (!window.speechSynthesis) notice('Speech is unavailable in this browser. Advice will still appear on screen.');
     schedule(0);
-  } catch (e) { capture.stop(); status('Ready to connect'); notice(String(e instanceof Error ? e.message : e), true); }
+  } catch (e) { capture.stop(); status(IDLE); notice(String(e instanceof Error ? e.message : e), true); }
 }
 function schedule(delay = settings.interval * 1000) { clearTimeout(timer); if (running) timer = setTimeout(() => { void tick(); }, delay); }
 /** Every spoken cue from either analysis path, kept for recording exports (the fast path speaks
@@ -422,7 +420,7 @@ function deliver(analysis:Analysis,timestamp:number,fast=false){
   }
   return {...analysis,cues:delivered};
 }
-quick.onError=message=>{text('fast-analysis-time','Fast HP/map: unavailable · full analysis only');notice(`Fast monitor unavailable: ${message}. Full analysis continues.`,true);};
+quick.onError=message=>{text('fast-analysis-time','Fast HP/map: unavailable · full analysis only');notice(`Quick health and minimap checks are unavailable (${message}). Coaching continues.`,true);};
 quick.onResult=(analysis,current,timestamp,elapsed,sourceId,context)=>{
   if(current!==generation||!running||paused||Date.now()-timestamp>2500)return;
   const result=deliver(analysis,timestamp,true);latest=result.snapshot;ai?.observe(latest,result.cues,true);renderSnapshot(latest);renderTactics(result.tactics||null,latest);
@@ -432,8 +430,8 @@ quick.onResult=(analysis,current,timestamp,elapsed,sourceId,context)=>{
   }));
   text('quick-time',`${Math.round(elapsed)} ms fast monitor`);
   text('fast-analysis-time',`Fast HP/map: ${Math.round(elapsed)} ms`);
-  if(recoveringFull)text('engine-state','FAST MONITOR · FULL SCAN RECOVERING');
-  for(const cue of result.cues){cues.unshift({...cue,at:latest.game_clock_secs});text('current-advice',cue.text);text('advice-context',`Live health/map evidence · ${clock(latest.game_clock_secs)}`);}
+  if(recoveringFull)text('engine-state','Recovering · quick monitor active');
+  for(const cue of result.cues){cues.unshift({...cue,at:latest.game_clock_secs});text('current-advice',cue.text);text('advice-context',`${clock(latest.game_clock_secs)} · ${cue.priority.toUpperCase()}`);}
   cues=cues.slice(0,60);renderCues();diagnostics();
   window.dispatchEvent(new CustomEvent('coach:quick',{detail:{timestamp,elapsed,snapshot:structuredClone(latest),cues:result.cues}}));
 };
@@ -527,7 +525,7 @@ function drawMap(s: Snapshot) {
   } else {
     ctx.strokeStyle = '#354a48'; ctx.lineWidth = 2;
     for (const x of [130, 335, 540]) { ctx.beginPath(); ctx.moveTo(335, 650); ctx.quadraticCurveTo(x, 370, 335, 70); ctx.stroke(); }
-    ctx.fillStyle = '#b5c8c0'; ctx.font = '18px system-ui'; ctx.fillText('Snapshot positions · no captured image', 50, 35);
+    ctx.fillStyle = '#b5c8c0'; ctx.font = '18px system-ui'; ctx.fillText('No minimap image · positions from the snapshot', 50, 35);
   }
   const map = s.minimap;
   if (map) {
@@ -567,26 +565,25 @@ function apply(analysis: Analysis, elapsed: number) {
   lastPhases = phaseSummary(analysis.perception) || lastPhases; $('analysis-time').title = lastPhases;
   renderTactics(analysis.tactics || null,latest);
   if (analysis.perception) {
-    latestReport = analysis.perception; profilePanel?.render(analysis.perception); drawPreview();
+    latestReport = analysis.perception; drawPreview();
     window.dispatchEvent(new CustomEvent('coach:perception', { detail: structuredClone(analysis.perception) }));
   }
   for (const cue of analysis.cues) {
     cues.unshift({ ...cue, at: latest.game_clock_secs }); cues = cues.slice(0, 60);
-    text('current-advice', cue.text); text('advice-context', analysis.tactics?.cue_key===cue.key
-      ? `${cue.priority.toUpperCase()} · ${clock(latest.game_clock_secs)} · ${analysis.tactics.rationale}`
-      : `${cue.priority.toUpperCase()} PRIORITY · ${clock(latest.game_clock_secs)} · ${cue.key.startsWith('map:') ? 'Minimap evidence' : 'Screen and rule evidence'}`);
+    // The reason for a lane call is shown once, under Next best move.
+    text('current-advice', cue.text); text('advice-context', `${clock(latest.game_clock_secs)} · ${cue.priority.toUpperCase()}`);
   }
   renderCues(); diagnostics();
 }
 
 function renderTactics(decision:TacticalDecision|null,s:Snapshot) {
   const labels:Record<string,string>={last_hit:'Secure lane income',catch_wave:'Catch the wave',hold_wave:'Hold your side',back_off:'Back off',push_wave:'Push the wave',poke:'Short poke window',jungle:'One-camp window',gank:'Check a gank window',shop:'Shop and return',prepare_objective:'Prepare your rotation',need_evidence:'Need more evidence'};
-  text('lane-action',decision ? labels[decision.action] || decision.action : 'WAITING FOR GAMEPLAY');
-  text('lane-call',decision?.text || (settings.options.laning?(s.screen==='Unknown'&&s.game_clock_secs!=null?'HUD elements found; waiting for game-state evidence.':'Waiting for a readable gameplay clock and lane evidence.'):'Active lane coaching is disabled in Settings.'));
-  text('lane-reason',decision ? `${decision.rationale} ${decision.conditional?'This is a conditional plan, not a claim that the area is safe.':''}` : 'Recommendations use strategy guidance plus current observations.');
-  const health=s.hp!=null&&s.max_hp ? `${s.hp}/${s.max_hp} HP (${Math.round(s.hp/s.max_hp*100)}%, ${s.health_observations||0} reads)` : 'HP unconfirmed';
-  const lane=s.minimap?.your_lane ? `${s.minimap.your_lane} lane estimate` : 'Player lane unconfirmed';
-  text('player-readings',`${health} · ${lane}${decision?.lane?` · Coaching ${decision.lane} (${decision.lane_source})`:''}`);
+  text('lane-action',decision ? labels[decision.action] || decision.action : 'WAITING');
+  text('lane-call',decision?.text || (settings.options.laning?(s.screen==='Unknown'&&s.game_clock_secs!=null?'Reading the game…':'Waiting for gameplay.'):'Lane coaching is disabled in Settings.'));
+  text('lane-reason',decision ? `${decision.rationale}${decision.conditional?' Only if the area is clear: unseen is not safe.':''}` : '');
+  // Only what was read: unread health or lane is left out rather than listed as "unconfirmed".
+  const read=[s.hp!=null&&s.max_hp?`${s.hp}/${s.max_hp} HP (${Math.round(s.hp/s.max_hp*100)}%)`:'',s.minimap?.your_lane?`${s.minimap.your_lane} lane`:'',decision?.lane?`Coaching ${decision.lane} (${decision.lane_source})`:''].filter(Boolean);
+  text('player-readings',read.join(' · '));
   for (const [id,values] of [['lane-evidence',decision?.evidence||[]],['lane-missing',decision?.missing||[]]] as const) {
     $(id).replaceChildren(); for (const value of values.length?values:['No additional observations.']) {const li=document.createElement('li');li.textContent=value;$(id).append(li);}
   }
@@ -599,7 +596,7 @@ function renderTactics(decision:TacticalDecision|null,s:Snapshot) {
 }
 function renderCues() {
   const list = $('cue-list'); list.replaceChildren();
-  if (!cues.length) { const li = document.createElement('li'); li.className = 'empty-row'; li.textContent = 'No calls yet. Good advice is worth waiting for.'; list.append(li); }
+  if (!cues.length) { const li = document.createElement('li'); li.className = 'empty-row'; li.textContent = 'No calls yet.'; list.append(li); }
   for (const cue of cues.slice(0, 15)) {
     const li = document.createElement('li'), time = document.createElement('time'), priority = document.createElement('span'), body = document.createElement('span');
     time.textContent = clock(cue.at); priority.textContent = cue.priority.toUpperCase(); priority.className = `priority ${cue.priority.toLowerCase()}`;
@@ -610,7 +607,7 @@ function renderCues() {
 function label(className: string, dict: Record<string, string>) { return dict[className] || className.replace(/^(upgrade_|hero_)/, '').replaceAll('_', ' '); }
 function renderItems(id: string, items: string[] = []) {
   const list = $(id); list.replaceChildren();
-  for (const item of items.length ? items : ['Nothing confidently observed.']) { const li = document.createElement('li'); li.textContent = label(item, itemNames); list.append(li); }
+  for (const item of items.length ? items : ['Nothing read yet.']) { const li = document.createElement('li'); li.textContent = label(item, itemNames); list.append(li); }
 }
 /** One top-bar slot: hero (when identified) and its observed state from the health bar. */
 function heroState(p: HeroStatus): { text: string; ratio: number | null; kind: 'dead' | 'unseen' | 'critical' | 'hp' | 'unknown' } {
@@ -631,19 +628,18 @@ function rosterRow(p: HeroStatus, fallbackHero?: string): HTMLElement {
 }
 function renderSnapshot(s: Snapshot) {
   const knownWorth=(s.hero_status||[]).filter(p=>p.networth!=null&&p.networth_observations>=2).map(p=>p.networth!).sort((a,b)=>a-b);
-  text('earned-pace',s.own_networth!=null?`Earned souls: ${format(s.own_networth)} · ${s.game_clock_secs?Math.round(s.own_networth*60/s.game_clock_secs).toLocaleString():'—'} per minute over the match${knownWorth.length>=6?` · observed lobby median ${format(knownWorth[Math.floor(knownWorth.length/2)])}`:' · waiting for stable comparison reads'}.`
-    :'Earned souls need a confirmed own hero and readable top-bar label. Unspent balance is not earned income.');
-  $('team-health').replaceChildren(...(s.hero_status||[]).map(p=>{const el=document.createElement('p');el.textContent=`${p.ally?'Ally':'Enemy'} ${p.slot+1} · ${p.hero?label(p.hero,heroNames):'identity unknown'} · ${p.dead===true?`dead${p.respawn_secs!=null?` · respawn ${p.respawn_secs}s`:''}`:p.bar_visible===false?'not seen recently (no health bar)':p.health_ratio!=null?`health ${Math.round(p.health_ratio*100)}%`:'health unknown'}${p.critical===true?' · CRITICAL':''} · ${p.position?'located':'position unknown'} · ${format(p.networth)} earned souls`;return el;}));
+  text('earned-pace',s.own_networth!=null?`Your earned souls: ${format(s.own_networth)} · ${s.game_clock_secs?Math.round(s.own_networth*60/s.game_clock_secs).toLocaleString():'—'} per minute${knownWorth.length>=6?` · lobby median ${format(knownWorth[Math.floor(knownWorth.length/2)])}`:''}.`
+    :'Your farming pace appears once your hero and its souls are read.');
   text('metric-clock', clock(s.game_clock_secs)); text('metric-souls', format(s.souls));
   text('metric-screen', s.dead ? `Dead · respawn ${s.respawn_secs ?? '?'}s` : s.screen || 'Waiting for gameplay');
   const a = s.ally_networth, e = s.enemy_networth;
   text('metric-lead', a != null && e != null ? `${a >= e ? '+' : ''}${format(a - e)}` : '—');
   text('metric-totals', `${format(a)} / ${format(e)} souls`);
-  const map = s.minimap; text('metric-map', map ? `${map.observations}/3 reads` : '—');
-  text('map-evidence', map ? `${map.observations} RECENT OBSERVATIONS` : 'NO OBSERVATIONS');
-  text('boss-status', map?.midboss_up ? 'Gold icon confirmed' : 'Not confirmed (not necessarily dead)');
+  const map = s.minimap;
+  text('map-evidence', map ? `${map.observations} RECENT READS` : 'NO READS YET');
+  text('boss-status', map?.midboss_up ? 'Up (icon seen)' : 'Not seen (may still be up)');
   const urnNames = { Visible: 'Marker seen · possession unknown', Ground: 'Stationary marker at bridge', CarriedByYou: 'You are carrying', CarriedByAlly: 'Moving with ally · inferred', CarriedByEnemy: 'Moving with enemy · inferred' };
-  text('urn-status', map?.urn ? urnNames[map.urn] : 'Not confirmed'); const tracked=(ally:boolean)=>{const h=(map?.heroes||[]).filter(t=>t.ally===ally&&t.hits>=2);const seen=h.filter(t=>t.unseen_ms===0).length;
+  text('urn-status', map?.urn ? urnNames[map.urn] : 'Not seen'); const tracked=(ally:boolean)=>{const h=(map?.heroes||[]).filter(t=>t.ally===ally&&t.hits>=2);const seen=h.filter(t=>t.unseen_ms===0).length;
     return `${seen} visible${h.length>seen?` · ${h.length-seen} missing`:''}`;};
   text('enemy-count', map ? (map.heroes ? tracked(false) : String(map.enemy_count)) : '—'); text('ally-count', map?.heroes ? tracked(true) : '—');
   $('lane-cards').replaceChildren();
@@ -652,7 +648,7 @@ function renderSnapshot(s: Snapshot) {
     const heading = document.createElement('h2'); heading.textContent = `${name[0].toUpperCase() + name.slice(1)} lane`;
     const front = document.createElement('div'); front.className = 'lane-front'; const fill = document.createElement('span');
     fill.style.width = `${Math.min(100, Math.max(0, (l?.push ?? 0) * 100))}%`; front.append(fill);
-    const p = document.createElement('p'); p.textContent = l ? `Front estimate: ${l.push == null ? 'not stable' : `${Math.round(l.push * 100)}% up lane`} · Allied dots ${l.ally_troopers} · Enemy dots ${l.enemy_troopers}` : 'Waiting for minimap observations';
+    const p = document.createElement('p'); p.textContent = l ? `Front estimate: ${l.push == null ? 'not stable' : `${Math.round(l.push * 100)}% up lane`} · Allied dots ${l.ally_troopers} · Enemy dots ${l.enemy_troopers}` : 'No minimap reads yet';
     card.append(heading, front, p); $('lane-cards').append(card);
   }
   renderItems('own-items', s.items); renderItems('enemy-items', s.enemy_items);
@@ -661,7 +657,7 @@ function renderSnapshot(s: Snapshot) {
   for (const [team, ally, heroes] of [['Your team', true, s.ally_heroes], ['Enemy team', false, s.enemy_heroes]] as const) {
     const div = document.createElement('div'), heading = document.createElement('h3'); heading.textContent = team; div.append(heading);
     if (!slots) {
-      for (const h of heroes?.length ? heroes : ['No confident hero observations yet.']) { const p = document.createElement('p'); p.textContent = label(h, heroNames); div.append(p); }
+      for (const h of heroes?.length ? heroes : ['Not read yet.']) { const p = document.createElement('p'); p.textContent = label(h, heroNames); div.append(p); }
     } else for (const p of slots.filter(h => h.ally === ally)) div.append(rosterRow(p, heroes?.[p.slot]));
     $('roster').append(div);
   }
@@ -685,7 +681,7 @@ async function beginReplay() {
   if (replaying) throw new Error('A replay is already running');
   cancelMode(); notice(''); generation++; replaying = true; button('cancel-replay').disabled = false;
   for (const key of ['demo', 'demo-replay', 'replay-import']) button(key).disabled = true;
-  button('start').disabled = true; text('feed-badge', 'REPLAY · SILENT'); status('Replay lab', 'Local playback · speech is disabled');
+  button('start').disabled = true; status('Replaying', 'Replays are silent');
   await initialize(); if (!replaying) throw new Error('Replay canceled');
   resetEngine(); cues = []; renderCues(); $('replay-results').replaceChildren(); latestFrame = undefined; latestMap = undefined; drawPreview();
   replayCollect = []; reviews?.replayStart(); // end-of-game review
@@ -722,14 +718,14 @@ async function demo() {
     current = await beginReplay();
     const response = await fetch(`${base}assets/demo.jsonl`); if (!response.ok) throw new Error(`Demo: HTTP ${response.status}`);
     await replaySnapshots(snapshotLines(await response.text()), current);
-    if (current === generation) { text('replay-status', 'Included match replay complete. Select a row to inspect its snapshot.'); notice('Recorded match replayed locally. Switch to Map intelligence to inspect its final observations.'); }
+    if (current === generation) { text('replay-status', 'Included match replay complete. Select a row to inspect its snapshot.'); notice('Recorded match replayed. Live match shows what the coach read.'); }
   } catch (e) { if (replaying) notice(String(e), true); }
   finally { if (current === generation || (current === -1 && replaying)) endReplay(); }
 }
 function endReplay() {
   replaying = false; button('cancel-replay').disabled = true; button('start').disabled = running;
   for (const key of ['demo', 'demo-replay', 'replay-import']) button(key).disabled = false;
-  if (!running) status('Replay complete', 'Start coaching to capture your game, or import more frames');
+  if (!running) status('Replay complete', IDLE_SOURCE);
   // Offer a completed replay to the player profile (Replay lab and Player page buttons).
   if (replayCollect?.length && /complete/i.test($('replay-status').textContent || '')) {
     const names = [...input('replay-files').files || []].map(f => f.name).join(', ');
@@ -809,7 +805,7 @@ const mb = (bytes: number) => `${(bytes / 1048576).toFixed(1)} MB`;
 async function recordings() {
   try {
     const frames = await listFrames();
-    text('recording-stats', `${frames.length} frames · ${mb(frames.reduce((n, f) => n + f.image.size, 0))} · stored in this browser`);
+    text('recording-stats', `${frames.length} frames · ${mb(frames.reduce((n, f) => n + f.image.size, 0))} · stored in this browser${frames.length || settings.record ? '' : ' · turn on recording in Settings'}`);
     renderRecordedGames(frames); return frames;
   }
   catch (e) { text('recording-stats', `Local storage unavailable: ${String(e)}`); return []; }
@@ -932,44 +928,49 @@ function saveForm() {
 }
 function route() {
   let page = location.hash.slice(1) || 'coach';
-  if (!['coach', 'map', 'match', 'player', 'replay', 'pipeline', 'knowledge', 'settings'].includes(page)) page = 'coach';
-  if (!isDeadlock(activeProfile) && ['map', 'match', 'player', 'knowledge'].includes(page)) page = 'coach';
+  if (page === 'map') page = 'match'; // Map intelligence and Match state are one Live match page
+  if (!['coach', 'match', 'player', 'replay', 'knowledge', 'settings'].includes(page)) page = 'coach';
+  if (!isDeadlock(activeProfile) && ['match', 'player', 'knowledge'].includes(page)) page = 'coach';
   document.querySelectorAll<HTMLElement>('.page').forEach(el => { el.hidden = el.id !== `page-${page}`; });
   document.querySelectorAll<HTMLAnchorElement>('[data-page]').forEach(a => { if (a.dataset.page === page) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
   if (page === 'knowledge') void loadKnowledge(); if (page === 'replay') void recordings(); if (page === 'settings') diagnostics();
   if (page === 'player') playerPage?.render();
 }
 
+/** Shows Deadlock-only panels for the Deadlock adapter. A stored non-default detection profile
+ *  (an older Matching lab draft, or a test fixture) is named in Diagnostics with a way back. */
 function refreshGameLayout() {
   const legacy = isDeadlock(activeProfile);
-  for (const page of ['map', 'match', 'player', 'knowledge']) document.querySelector<HTMLElement>(`[data-page="${page}"]`)!.hidden = !legacy;
+  for (const page of ['match', 'player', 'knowledge']) document.querySelector<HTMLElement>(`[data-page="${page}"]`)!.hidden = !legacy;
   document.querySelector<HTMLElement>('.metrics')!.hidden = !legacy;
-  $('generic-observations').hidden = legacy;
   $('lane-plan').hidden=!legacy;
-  $('live-observations').hidden=!legacy;
   $('ai-panel').hidden=!legacy; // AI coach is Deadlock-specific
   if(!legacy)ai?.cancel();
   $('fast-analysis-time').hidden=!legacy;
-  text('active-game-profile', `${activeProfile.name} · game-independent perception outputs`);
-  document.querySelector('.visual-calibration-controls p')!.textContent = activeProfile.viewport.auto_crop===false
-    ?'Automatic element discovery scans the full source. The frozen-frame inspector is optional for reviewing locator results and exporting samples.'
-    :`Optional compatibility/authoring controls. Borders follow this profile: ${activeProfile.viewport.aspect_ratio === null ? 'any aspect ratio' : 'fixed aspect ratio'}.`;
-  input('auto-crop').disabled=activeProfile.viewport.auto_crop===false;
-  for(const key of ['x','y','w','h'])input(`crop-${key}`).disabled=activeProfile.viewport.auto_crop===false;
+  const automatic = activeProfile.viewport.auto_crop===false;
+  text('viewport-help', automatic
+    ? 'The coach finds the HUD by itself. Open the viewport editor to check what it sees, or to export a sample for a bug report.'
+    : 'Frame the game inside the shared window. Black borders are detected automatically when a stable game area is found.');
+  $('manual-crop').hidden = automatic;
+  input('auto-crop').disabled=automatic;
+  for(const key of ['x','y','w','h'])input(`crop-${key}`).disabled=automatic;
   for (const key of ['timers', 'map', 'economy', 'counters', 'deaths','laning']) input(`opt-${key}`).disabled = !legacy;
   if (!legacy) {
-    text('current-advice', 'Reading your configured UI.');
-    text('advice-context', 'Generic perception profile: observations are published without Deadlock-specific coaching.');
+    text('current-advice', 'This detection profile reads the screen without Deadlock coaching.');
+    text('advice-context', '');
   }
-  profilePanel?.updateActive(); route();
+  const custom = activeProfile.id !== defaultProfile().id;
+  $('detection-profile').hidden = !custom;
+  text('detection-profile-name', `Detection profile: ${activeProfile.name}.`);
+  route();
 }
 
 async function applyGameProfile(profile: GameProfile) {
-  if (profileChanging || replaying || cropEditor.active) throw new Error('Finish the current replay/editor operation before changing profiles');
+  if (profileChanging || replaying || cropEditor.active) throw new Error('Finish the current replay or viewport edit first');
   const wasRunning = running, wasPaused = paused;
   profileChanging = true; generation++; const current = generation;
   if (running) paused = true;
-  clearTimeout(timer); speaker.cancel(); status('Preparing game profile…');
+  clearTimeout(timer); speaker.cancel(); status('Switching detection…');
   $('load-panel').hidden = false;
   try {
     // If a previous initialization was already in progress, finish it before replacing it.
@@ -995,61 +996,17 @@ async function applyGameProfile(profile: GameProfile) {
       catch { valid = false; }
       if (!valid) await editLiveViewport(true);
       else { status(paused ? 'Coaching paused' : 'Coaching live'); if (!paused) schedule(0); }
-    } else if (!running) status('Profile ready', `${profile.name} · select a source or load a reference image`);
-    notice(saved ? `Active perception profile: ${profile.name}` : 'Profile active for this session. Browser storage is full; export the profile to keep it.');
+    } else if (!running) status(IDLE, IDLE_SOURCE);
+    notice(saved ? `Detection: ${profile.name}.` : `Detection: ${profile.name}, for this session only (browser storage is full).`);
   } catch (e) {
     if (current === generation && wasRunning && capture.active) {
       paused = ready ? wasPaused : true; status(paused ? 'Analysis paused' : 'Coaching live'); if (!paused) schedule(0);
-    } else if (!running) status('Profile unchanged', activeProfile.name);
+    } else if (!running) status(IDLE);
     throw e;
   } finally {
     profileChanging = false; $('load-panel').hidden = true;
-    status($('session-state').textContent || 'Ready to connect');
+    status($('session-state').textContent || IDLE);
   }
-}
-
-async function loadReferenceImage(file: File) {
-  if (file.size > 20 * 1024 * 1024) throw new Error('Reference image exceeds 20 MB');
-  if (running && !paused) { generation++; paused = true; clearTimeout(timer); speaker.cancel(); status('Coaching paused', 'Reference image loaded for pipeline authoring.'); }
-  const bitmap = await createImageBitmap(file);
-  try {
-    const scale = Math.min(1, activeProfile.viewport.max_width / bitmap.width, 2304 / bitmap.height);
-    const canvas = document.createElement('canvas'); canvas.width = Math.max(1,Math.round(bitmap.width * scale)); canvas.height = Math.max(1,Math.round(bitmap.height * scale));
-    const ctx = canvas.getContext('2d')!; ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
-    resetEngine();
-    latestFrame = ctx.getImageData(0, 0, canvas.width, canvas.height); latestReport = undefined; referenceTimestamp = 0;
-    $('preview-empty').hidden = true; text('feed-badge', 'REFERENCE · LOCAL'); drawPreview();
-  } finally { bitmap.close(); }
-}
-
-async function pickFieldRegion(initial: Crop) {
-  if (!latestFrame) throw new Error('Load a reference screenshot or capture a frame first');
-  if (cropEditor.active || profileChanging) throw new Error('Another editor operation is active');
-  const wasPaused = paused; generation++; const current = generation;
-  if (running) paused = true;
-  clearTimeout(timer); speaker.cancel();
-  const bitmap = await createImageBitmap(latestFrame);
-  try {
-    return await cropEditor.open({ image: bitmap, width: bitmap.width, height: bitmap.height, initial,
-      aspect: null, minimum: { width: 1, height: 1 }, purpose: 'region',
-      description: 'Select the UI element or text field on this analyzed/reference frame. This edits the draft crop stage; apply the profile afterward.',
-      applyLabel: 'Use this region' });
-  } finally {
-    bitmap.close();
-    if (current === generation && running && capture.active) { paused = wasPaused; status(paused ? 'Coaching paused' : 'Coaching live'); if (!paused) schedule(0); }
-  }
-}
-
-async function runReference() {
-  if (!latestFrame) throw new Error('Load a reference screenshot or capture a frame first');
-  if (pending || profileChanging || replaying || cropEditor.active) throw new Error('Wait for the current analysis/editor operation to finish');
-  if (running) { generation++; paused = true; clearTimeout(timer); speaker.cancel(); status('Coaching paused', 'Running a reference frame.'); }
-  await initialize();
-  const rgba = new ImageData(new Uint8ClampedArray(latestFrame.data), latestFrame.width, latestFrame.height);
-  viewport({ x: 0, y: 0, w: 1, h: 1 }, { width: rgba.width, height: rgba.height }, activeProfile.viewport.aspect_ratio,activeProfile.viewport.auto_crop===false?1:320,activeProfile.viewport.auto_crop===false?1:180);
-  referenceTimestamp += 5000;
-  const result = await analyzePixels({ rgba, map: new ImageData(1, 1), timestamp: referenceTimestamp, preview: null });
-  apply(result.analysis, result.elapsed);
 }
 
 button('start').onclick = () => { void start(); };
@@ -1057,7 +1014,7 @@ for (const key of ['edit-viewport', 'fix-viewport']) button(key).onclick = () =>
 /** Live capture ended (Stop, or the shared window closed): a match observed for 10+ minutes is
  *  over (closed in the Player profile and reviewed; ai-review-ui.ts). Not for replays. */
 function endLiveSession() { const live = (running || capture.active) && !replaying; cancelMode(); if (live && isDeadlock(activeProfile)) reviews?.stopped(); }
-button('stop').onclick = () => { endLiveSession(); status('Capture stopped', 'No further frames are being captured.'); };
+button('stop').onclick = () => { endLiveSession(); status('Stopped', IDLE_SOURCE); };
 button('pause').onclick = async () => {
   if (!running) return;
   paused = !paused; generation++; speaker.cancel(); ai?.cancel();
@@ -1071,12 +1028,12 @@ $<HTMLSelectElement>('lane-focus').onchange=()=>{
   settings.laneFocus=$<HTMLSelectElement>('lane-focus').value as Settings['laneFocus'];saveSettings(settings);
   if(!replaying)generation++;speaker.cancel();configureOptions();renderTactics(null,latest);
   if(running&&!paused)schedule(0);
-  notice(`Lane focus: ${settings.laneFocus==='auto'?'minimap estimate':settings.laneFocus}. New calls will use the next analyzed frame.`);
+  notice(`Lane focus: ${settings.laneFocus==='auto'?'automatic':settings.laneFocus}.`);
 };
 $<HTMLSelectElement>('hero-focus').onchange=()=>{
   settings.heroFocus=$<HTMLSelectElement>('hero-focus').value;saveSettings(settings);generation++;speaker.cancel();configureOptions();
   if(running&&!paused)schedule(0);
-  notice(settings.heroFocus?'Own hero confirmed for earned-souls comparisons.':'Using confirmed minimap identity for earned-souls comparisons.');
+  notice(`Your hero: ${settings.heroFocus?heroNames[settings.heroFocus]||label(settings.heroFocus,{}):'detected automatically'}.`);
 };
 speaker.onStatus = s => text('voice-state', s);
 button('test-voice').onclick = () => speaker.say({ key: 'test', text: 'Coach audio test. Your next move starts here.', priority: 'High', cooldown_secs: 0 }, true);
@@ -1113,9 +1070,9 @@ button('reset-settings').onclick = () => { settings = structuredClone(defaults);
 button('reload-engine').onclick = async () => {
   cancelMode(); ready = false; initializing = undefined; worker?.terminate(); worker = undefined;
   if (pending) { clearTimeout(pending.timer); pending.reject(new Error('Engine restarted')); pending = undefined; }
-  try { await initialize(); notice('Analysis engine restarted.'); } catch (e) { notice(String(e), true); }
+  try { await initialize(); notice('Analysis restarted.'); } catch (e) { notice(String(e), true); }
 };
-button('clear-cache').onclick = async () => { try { for (const key of await caches.keys()) if (key.startsWith('deadlock-assets-')) await caches.delete(key); notice('Model cache cleared. The next initialization will download models again.'); } catch (e) { notice(String(e), true); } };
+button('clear-cache').onclick = async () => { try { for (const key of await caches.keys()) if (key.startsWith('deadlock-assets-')) await caches.delete(key); notice('Downloaded data cleared. It is downloaded again the next time the coach starts.'); } catch (e) { notice(String(e), true); } };
 window.addEventListener('hashchange', () => { route(); $('main').focus(); });
 window.addEventListener('beforeunload', () => { capture.stop(); speaker.cancel();quick.stop(); playerProfile.save(); });
 window.speechSynthesis?.addEventListener('voiceschanged', voices);
@@ -1125,17 +1082,8 @@ setInterval(() => {
     speaker.cancel(); text('session-state', 'Analysis delayed — check capture');
   }
 }, 5000);
-// Keep the existing percentage inputs as an advanced option; the visual editor is primary.
-const calibration = input('crop-x').closest('fieldset')!;
-const advanced = document.createElement('details'), advancedTitle = document.createElement('summary');
-advancedTitle.textContent = 'Advanced percentage controls'; advanced.append(advancedTitle);
-advanced.append(...Array.from(calibration.children).filter(el => el.tagName !== 'LEGEND'));
-calibration.append(advanced);
-calibration.querySelector('legend')!.after(($<HTMLTemplateElement>('visual-calibration-controls').content.cloneNode(true)));
-for (const key of ['x', 'y', 'w', 'h']) { input(`crop-${key}`).min = key === 'x' || key === 'y' ? '0' : '0.01'; input(`crop-${key}`).max = '100'; input(`crop-${key}`).step = 'any'; }
-// Settings editor controls were cloned after event setup.
 button('edit-viewport-settings').onclick = () => { void editLiveViewport(); };
-input('opt-timers').closest('fieldset')!.querySelector('legend')!.after($<HTMLTemplateElement>('lane-settings-control').content.cloneNode(true));
+button('detection-profile-reset').onclick = async () => { try { await applyGameProfile(defaultProfile()); } catch (e) { notice(e instanceof Error ? e.message : String(e), true); } };
 // --- AI coach hooks: advice is spoken only while live (never in replays) and always listed as AI. ---
 function deliverAi(cue: Cue, live: boolean) {
   const now = Date.now();
@@ -1151,8 +1099,6 @@ ai = mountAiCoach({ settings: () => settings, save: s => { settings = normalize(
   isLive: () => running && !paused && !replaying, generation: () => generation,
   knowledge: async () => { await loadKnowledge(); return knowledge; }, name: id => heroNames[id] || itemNames[id] || label(id, {}),
   deliver: deliverAi, changed: () => { if (location.hash === '#settings') diagnostics(); } });
-profilePanel = new ProfilePanel({ current: () => activeProfile, apply: applyGameProfile, pick: pickFieldRegion,
-  reference: loadReferenceImage, runReference });
 playerPage = new PlayerPage({ profile: playerProfile, mastery, notice, download, replay: () => lastReplay });
 // --- End-of-game AI review hooks (logic: ai-review.ts, UI: ai-review-ui.ts) ---
 reviews = mountMatchReviews({ settings: () => settings, save: s => { settings = normalize(s); saveSettings(settings); }, previous: () => playerProfile.matches,

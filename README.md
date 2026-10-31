@@ -4,15 +4,16 @@ A local-first Deadlock coach: screenshot → local OCR/vision → structured mat
 
 ## Flexible UI-matching engine
 
-**Matching lab** now exposes a game-independent perception pipeline: crop/anchor → preprocess
+The engine runs a game-independent perception pipeline: crop/anchor → preprocess
 → OCR/template/color detector → parse → gate → confirm → named observations. Profiles are
-portable JSON with embedded template assets, visual region authoring and per-stage diagnostics.
-Generic profiles support arbitrary aspect ratios and run without Deadlock-specific advice;
-non-OCR profiles also avoid loading neural models. Deadlock remains a specialized adapter.
+portable JSON with embedded template assets and per-stage diagnostics. Generic profiles support
+arbitrary aspect ratios and run without Deadlock-specific advice; non-OCR profiles also avoid
+loading neural models. Deadlock remains a specialized adapter.
 
 The reusable `coach-perception` Rust crate runs natively and in WASM. Its `coach-perceive`
 CLI accepts JSONL image paths/base64 and emits JSONL observations; the browser also publishes
-`coach:perception` events and exports observations. See [profile authoring and extension points](docs/perception/README.md).
+`coach:perception` events. The browser profile-authoring page (Matching lab) was removed from the
+web app to keep it focused on Deadlock ([docs/ui](docs/ui/README.md)). See [profile authoring and extension points](docs/perception/README.md).
 
 ## Browser app (no application backend)
 
