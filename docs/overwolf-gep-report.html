@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Overwolf Electron + Game Events for Deadlock Coach — feasibility report</title>
+<style>
+  :root { --bg:#14110f; --panel:#1e1a17; --line:#3a332d; --text:#ece4d8; --muted:#a89c8c; --gold:#d9a650; --green:#6fbf73; --red:#e06c5a; --amber:#e0b04a; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:15px/1.55 system-ui, Segoe UI, sans-serif; }
+  main { max-width: 1040px; margin: 0 auto; padding: 32px 20px 60px; }
+  h1 { font-size: 28px; margin: 0 0 4px; } h2 { font-size: 20px; margin: 36px 0 10px; color: var(--gold); } h3 { font-size: 16px; margin: 20px 0 6px; }
+  p, li { color: var(--text); } .muted { color: var(--muted); }
+  .verdict { background: var(--panel); border: 1px solid var(--line); border-left: 4px solid var(--amber); border-radius: 8px; padding: 16px 18px; margin: 18px 0; }
+  .verdict strong { color: var(--amber); }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px; }
+  .card b { display: block; font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; margin-bottom: 4px; }
+  table { width: 100%; border-collapse: collapse; margin: 8px 0 4px; font-size: 14px; }
+  th, td { border-bottom: 1px solid var(--line); padding: 7px 8px; text-align: left; vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; background: #191512; }
+  .good { color: var(--green); font-weight: 600; } .bad { color: var(--red); font-weight: 600; } .mid { color: var(--amber); font-weight: 600; }
+  code { background: #2a241f; padding: 1px 5px; border-radius: 4px; font-size: 13px; }
+  a { color: var(--gold); }
+  .diagram { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px; font: 13px/1.5 ui-monospace, Consolas, monospace; white-space: pre; overflow-x: auto; }
+</style>
+</head>
+<body>
+<main>
+<h1>Overwolf Electron + Game Events (GEP) for Deadlock Coach</h1>
+<p class="muted">Feasibility report · researched 31 Oct 2026 · no code was changed. Sources are linked at the end; everything marked <span class="mid">unverified</span> needs a test with the real SDK.</p>
+
+<div class="verdict">
+  <p><strong>Verdict: technically a strong fit, commercially a hard constraint.</strong></p>
+  <p>Overwolf's Game Events Provider supports Deadlock in production today, and it supplies exactly the data our screenshot vision struggles with most. That includes every player's health, deaths, souls, level, items and ultimate state, an exact match clock, match start, end and result, and your incoming-damage breakdown. It would fix most of the alive/dead, clock, hero identity, item and end-of-game errors we spent the last reviews on.</p>
+  <p>It does <em>not</em> give map positions, the Rift, Urn, Midboss, Rejuvenator, structures by lane or respawn timers, so the screenshot vision stays necessary for macro coaching.</p>
+  <p>The catch is distribution. As of <b>1 November 2026</b>, Overwolf only approves apps that integrate <b>Overwolf ads or Tebex subscriptions</b>. Apps must be listed and distributed through the <b>Overwolf Appstore</b>, and private personal-use apps are not approved. That conflicts with the current "free, local, GitHub Pages" model.</p>
+</div>
+
+<h2>1. What GEP gives us for Deadlock</h2>
+<p>Deadlock (game id <code>24482</code>) is listed as supported for Overwolf Electron. Overwolf's public status endpoint reports the game as <span class="good">published, enabled for Electron, all features healthy</span>, with minimum GEP version <code>314.2.4</code>.</p>
+<table>
+  <tr><th>Feature / key</th><th>What it contains</th><th>Kind</th></tr>
+  <tr><td><code>game_info.phase</code></td><td>Init → WaitingForPlayersToJoin → PreGameWait → GameInProgress → PostGame</td><td>info</td></tr>
+  <tr><td><code>game_info.game_mode</code></td><td>match_mode (e.g. Unranked) + game_mode</td><td>info</td></tr>
+  <tr><td><code>game_info.match_history</code></td><td>your previous matches: match_id, hero, K/D/A</td><td>info</td></tr>
+  <tr><td><code>game_info.steam_id</code></td><td>local player's Steam ID</td><td>info</td></tr>
+  <tr><td><code>match_info.roster_N</code></td><td><b>all 12 players</b>: name, team, is_local, hero, level, kills, deaths, assists, hero/object damage, healing, assigned lane (1 left / 4 mid / 6 right), ultimate trained/ready, <b>health</b>, <b>souls</b></td><td>info</td></tr>
+  <tr><td><code>match_info.items_N</code></td><td>every player's purchased items (class_name, name, enhanced)</td><td>info</td></tr>
+  <tr><td><code>match_info.incoming_damage</code></td><td>damage you took per enemy hero + neutrals, total, time filter. <span class="mid">Only while the damage panel is open.</span></td><td>info</td></tr>
+  <tr><td><code>match_info.team_score</code>, <code>match_id</code>, <code>match_outcome</code></td><td>score per team, match id, winning team</td><td>info</td></tr>
+  <tr><td><code>match_start</code>, <code>match_end</code>, <code>kill</code>, <code>death</code>, <code>assist</code></td><td>your own kill / death / assist moments; match boundaries</td><td>event</td></tr>
+  <tr><td><code>match_clock</code></td><td>exact match time, every second</td><td>event</td></tr>
+  <tr><td><code>game_paused</code>, <code>tower_destroyed</code></td><td>pause state; a tower fell (team only, not which)</td><td>event</td></tr>
+</table>
+
+<h2>2. Against the problems we actually had</h2>
+<table>
+  <tr><th>Recent problem (reviews 8, 13, 16-17)</th><th>With GEP</th></tr>
+  <tr><td>Teammates/enemies wrongly read as dead (rec16/17: 39–44% of frames had a wrong count before the fix)</td><td class="good">Mostly solved. Per-player health and death counters for all 12 players. <span class="mid">Unverified</span>: whether health reads 0 while dead and how often roster updates arrive.</td></tr>
+  <tr><td>Respawn timers ("first back in about N seconds")</td><td class="bad">Not provided. Keep reading the top bar, or estimate from the death time.</td></tr>
+  <tr><td>Clock misreads (rec13 5:52 read as 6:52, minute jumps)</td><td class="good">Solved: <code>match_clock</code> every second.</td></tr>
+  <tr><td>Match start/end, Victory/Defeat, splitting recordings by game</td><td class="good">Solved: <code>phase</code>, <code>match_start/end</code>, <code>match_outcome</code>, <code>match_id</code>.</td></tr>
+  <tr><td>Hero identity (rec12 read as Mirage for 5 min)</td><td class="good">Solved: roster hero for every slot, including yours.</td></tr>
+  <tr><td>Enemy items only after pressing Tab</td><td class="good">Solved: items for all players, live.</td></tr>
+  <tr><td>Net-worth lead / falling lead</td><td class="good">Mostly solved: sum roster souls per team. <span class="mid">Unverified</span> whether "souls" is net worth or unspent.</td></tr>
+  <tr><td>Damage panel after death misread / collapsed</td><td class="mid">Exact numbers per enemy hero, but only while the panel is open (same limitation), and per hero, not per ability.</td></tr>
+  <tr><td>Ultimate up/down calls</td><td class="good">Ultimate ready for every player, including enemies, which screenshots can't see.</td></tr>
+  <tr><td>Lane assignment</td><td class="good">Assigned lane for every player.</td></tr>
+  <tr><td>Your position, who is missing, ganks, "deep in their half"</td><td class="bad">Not provided. The minimap vision stays.</td></tr>
+  <tr><td>Rift, Urn, Midboss, Rejuvenator, which Guardian/Walker fell</td><td class="bad">Not provided (<code>tower_destroyed</code> gives only the team). Vision stays.</td></tr>
+  <tr><td>Your own HP and souls each second</td><td class="good">In your roster entry (is_local). Update rate <span class="mid">unverified</span>.</td></tr>
+</table>
+
+<h2>3. What it would look like</h2>
+<div class="diagram">ow-electron app (Windows)
+ ├─ main process: app.overwolf.packages.gep
+ │     setRequiredFeatures(['game_info','match_info'])
+ │     on('new-info-update' | 'new-game-event') ──► normalise to GameSnapshot fields
+ │                                                  (hero_status, clock, items, result…)
+ ├─ renderer: the existing web app (web/dist) unchanged in spirit
+ │     screen capture (desktopCapturer) ─► WASM vision ─► minimap, Rift, Urn, Midboss…
+ │     merge: GEP fields win where present ("observed"), vision fills the rest
+ └─ optional: Overwolf overlay window (in-game), owadview ad slot (required for approval)</div>
+<p>Most of the codebase carries over. The Rust engine, the rules and the snapshot schema stay as they are, with GEP becoming a second, more reliable evidence source. That matches our rule "never claim unobserved evidence": GEP fields would carry their own provenance.</p>
+
+<h2>4. Constraints and risks</h2>
+<div class="grid">
+  <div class="card"><b>Monetization (hard)</b>From 1 Nov 2026 apps must integrate Overwolf ads and/or Tebex subscriptions. Third-party monetization isn't allowed. Payouts are NET 60 with a $200 minimum.</div>
+  <div class="card"><b>Distribution (hard)</b>Apps must be listed and distributed through the Overwolf Appstore. Private apps for personal use are not approved, and public distribution outside Overwolf isn't permitted. An older FAQ entry says you can host anywhere; the newer monetization page overrides it.</div>
+  <div class="card"><b>Windows only</b>Game events, overlay and recording are Windows-only for now. Mac/Linux get ads only.</div>
+  <div class="card"><b>Closed source runtime</b>ow-electron is a closed-source Electron fork that updates its packages every few hours; a package update needs an app restart.</div>
+  <div class="card"><b>Code signing</b>You need your own code-signing certificate from a commercial CA (DigiCert, Sectigo…).</div>
+  <div class="card"><b>Data can go down</b>Features can be disabled after a game patch or at the studio's request. Apps must check the status endpoint and fall back. We already have that fallback: vision.</div>
+  <div class="card"><b>Start order</b>GEP must register as the game launches. Starting mid-match can lose events, so the app should say so.</div>
+  <div class="card"><b>Privacy / analytics</b>Usage analytics are on by default (can be reduced to a minimum). With ads come a consent manager and Overwolf's privacy policy. The "nothing leaves your browser" promise would change.</div>
+  <div class="card"><b>Valve's stance</b><span class="mid">Unverified</span>: how GEP reads Deadlock and whether Valve has commented on it. Overwolf lists the game in production, but check this before shipping to players.</div>
+</div>
+
+<h2>5. Options</h2>
+<table>
+  <tr><th>Option</th><th>Effort</th><th>Pros</th><th>Cons</th></tr>
+  <tr><td><b>A. Stay screenshot-only</b> (today)</td><td>none</td><td>Free, private, any OS with a browser, no approval.</td><td>Keep fighting OCR errors; no enemy ult/items without Tab.</td></tr>
+  <tr><td><b>B. Overwolf Electron app on the Appstore</b></td><td>high: Electron shell, GEP adapter, ads/Tebex, signing, review</td><td>Best data; in-game overlay; reach to Overwolf users.</td><td>Ads or subscription required; Overwolf-only distribution; Windows only; privacy story changes.</td></tr>
+  <tr><td><b>C. Personal dev-mode build</b></td><td>medium: ow-electron + GEP adapter, no store</td><td>Lets you measure GEP accuracy against our recordings.</td><td>Only for development/testing. Overwolf won't approve it as a private app, so it isn't a product path. Check the developer terms before relying on it.</td></tr>
+</table>
+
+<h2>6. Recommendation</h2>
+<ol>
+  <li><b>Don't switch platforms now.</b> The approval rules (ads/subscriptions, Appstore-only) are a product decision for you, not a technical one.</li>
+  <li><b>If you want to explore it, do a time-boxed spike first (option C, about 1–2 days).</b> Run the official sample app on the GEP dev channel and log the Deadlock feed for two matches next to a screenshot recording. Check: update rate of <code>roster</code>, health while dead, whether souls is net worth, and <code>incoming_damage</code> when the panel is open.</li>
+  <li><b>Design for it either way.</b> Keep the snapshot "evidence source" idea so a GEP adapter could fill <code>hero_status</code>, <code>game_clock_secs</code>, <code>items</code>, <code>match_result</code> without touching the rules.</li>
+  <li>Decide on option B only after the spike, and with the monetization model chosen.</li>
+</ol>
+
+<h2>Sources</h2>
+<ul class="muted">
+  <li><a href="https://dev.overwolf.com/ow-electron/live-game-data-gep/supported-games/deadlock">Overwolf Electron — Deadlock game events</a> (features, keys, sample data)</li>
+  <li><a href="https://game-events-status.overwolf.com/24482_prod.json">Deadlock GEP status endpoint (prod)</a>: state 1, disabled_electron false, min_gep_version_electron 314.2.4</li>
+  <li><a href="https://dev.overwolf.com/ow-electron/live-game-data-gep/live-game-data-gep-intro">GEP overview</a> (setRequiredFeatures, info updates vs events, dev/prod channels, event status)</li>
+  <li><a href="https://dev.overwolf.com/ow-electron/monetization/overview">Electron monetization</a> (ads/Tebex required, Appstore-only, no private apps, payment terms)</li>
+  <li><a href="https://dev.overwolf.com/ow-electron/getting-started/onboarding-resources/ow-electron-technical-overview">ow-electron technical overview</a> (packages, analytics, CMP, code signing)</li>
+  <li><a href="https://dev.overwolf.com/ow-electron/getting-started/onboarding-resources/ow-electron-faq">ow-electron FAQ</a> (Windows-only GEP, closed source, package updates)</li>
+  <li><a href="https://github.com/overwolf/events-sample-app">overwolf/events-sample-app</a> (the sample listed for Deadlock)</li>
+</ul>
+</main>
+</body>
+</html>
